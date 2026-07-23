@@ -70,6 +70,13 @@ function renderSettings() {
     </div>
   `;
 
+  // La distribución de APK no forma parte de la interfaz operativa del
+  // dashboard. Las apps verifican su build al abrirse y obligan a actualizar
+  // cuando Firebase publica uno mayor.
+  Array.from(settingsViewEl.querySelectorAll('.settings-card'))
+    .find((card) => card.querySelector('h3')?.textContent.includes('Actualizaciones'))
+    ?.remove();
+
   document.getElementById('support-phone-form').addEventListener('submit', (e) => {
     e.preventDefault();
     let value = document.getElementById('support-phone-input').value.trim();

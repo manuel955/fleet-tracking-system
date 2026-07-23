@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import '../services/passenger_service.dart';
 
 /// Pestaña "Cuenta": datos del perfil del pasajero.
@@ -13,11 +14,13 @@ class AccountTabScreen extends StatefulWidget {
 
 class _AccountTabScreenState extends State<AccountTabScreen> {
   Map<String, String>? _profile;
+  String _versionLabel = '';
 
   @override
   void initState() {
     super.initState();
     _load();
+    _loadAppVersion();
   }
 
   Future<void> _load() async {
@@ -25,12 +28,23 @@ class _AccountTabScreenState extends State<AccountTabScreen> {
     if (mounted) setState(() => _profile = profile);
   }
 
+  Future<void> _loadAppVersion() async {
+    final info = await PackageInfo.fromPlatform();
+    if (mounted) {
+      setState(
+        () => _versionLabel = 'Versión ${info.version} (${info.buildNumber})',
+      );
+    }
+  }
+
   Future<void> _logout() async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Cerrar sesión'),
-        content: const Text('¿Seguro que quieres cerrar sesión? Vas a tener que registrarte de nuevo.'),
+        content: const Text(
+          '¿Seguro que quieres cerrar sesión? Vas a tener que registrarte de nuevo.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -38,7 +52,10 @@ class _AccountTabScreenState extends State<AccountTabScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Cerrar sesión', style: TextStyle(color: Colors.red)),
+            child: const Text(
+              'Cerrar sesión',
+              style: TextStyle(color: Colors.red),
+            ),
           ),
         ],
       ),
@@ -59,7 +76,10 @@ class _AccountTabScreenState extends State<AccountTabScreen> {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
         children: [
-          const Text('Cuenta', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
+          const Text(
+            'Cuenta',
+            style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
+          ),
           const SizedBox(height: 24),
           Row(
             children: [
@@ -68,7 +88,11 @@ class _AccountTabScreenState extends State<AccountTabScreen> {
                 backgroundColor: Colors.black,
                 child: Text(
                   initial,
-                  style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
               const SizedBox(width: 16),
@@ -76,9 +100,21 @@ class _AccountTabScreenState extends State<AccountTabScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+                    Text(
+                      name,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                     const SizedBox(height: 4),
-                    Text(phone, style: TextStyle(fontSize: 14, color: Colors.grey.shade600)),
+                    Text(
+                      phone,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -103,9 +139,21 @@ class _AccountTabScreenState extends State<AccountTabScreen> {
           ListTile(
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.logout, color: Colors.red),
-            title: const Text('Cerrar sesión', style: TextStyle(color: Colors.red)),
+            title: const Text(
+              'Cerrar sesión',
+              style: TextStyle(color: Colors.red),
+            ),
             onTap: _logout,
           ),
+          if (_versionLabel.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                _versionLabel,
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+              ),
+            ),
         ],
       ),
     );

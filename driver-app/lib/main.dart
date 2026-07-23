@@ -7,6 +7,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:google_maps_flutter_android/google_maps_flutter_android.dart';
 import 'package:google_maps_flutter_platform_interface/google_maps_flutter_platform_interface.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'config.dart';
 import 'screens/active_trip_screen.dart';
 import 'screens/driver_registration_screen.dart';
@@ -19,6 +20,7 @@ import 'services/notification_service.dart';
 import 'services/push_service.dart';
 import 'services/session_service.dart';
 import 'services/trip_service.dart';
+import 'services/update_service.dart';
 import 'widgets/support_button.dart';
 
 Future<void> main() async {
@@ -69,14 +71,16 @@ class FleetDriverApp extends StatelessWidget {
             backgroundColor: Colors.black,
             foregroundColor: Colors.white,
             elevation: 0,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           ),
         ),
         outlinedButtonTheme: OutlinedButtonThemeData(
           style: OutlinedButton.styleFrom(
             foregroundColor: Colors.black,
             side: const BorderSide(color: Colors.black26),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           ),
         ),
         progressIndicatorTheme: const ProgressIndicatorThemeData(
@@ -86,7 +90,8 @@ class FleetDriverApp extends StatelessWidget {
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: Colors.grey.shade50,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           labelStyle: TextStyle(color: Colors.grey.shade600),
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
@@ -110,7 +115,84 @@ class FleetDriverApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const DriverHomePage(),
+      home: const _UpdateGate(
+        appName: 'la app de conductores',
+        child: DriverHomePage(),
+      ),
+    );
+  }
+}
+
+class _UpdateGate extends StatefulWidget {
+  const _UpdateGate({required this.appName, required this.child});
+
+  final String appName;
+  final Widget child;
+
+  @override
+  State<_UpdateGate> createState() => _UpdateGateState();
+}
+
+class _UpdateGateState extends State<_UpdateGate> {
+  bool _checking = true;
+  bool _updateRequired = false;
+  bool _openingDownload = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkForUpdate();
+  }
+
+  Future<void> _checkForUpdate() async {
+    final updateRequired = await UpdateService.isUpdateRequired();
+    if (mounted) {
+      setState(() {
+        _checking = false;
+        _updateRequired = updateRequired;
+      });
+    }
+  }
+
+  Future<void> _downloadUpdate() async {
+    setState(() => _openingDownload = true);
+    await UpdateService.downloadUpdate();
+    if (mounted) setState(() => _openingDownload = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_checking) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    if (!_updateRequired) return widget.child;
+
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.system_update, size: 56),
+              const SizedBox(height: 20),
+              Text('Actualización obligatoria',
+                  style: Theme.of(context).textTheme.headlineSmall),
+              const SizedBox(height: 12),
+              Text(
+                  'Hay una nueva versión de ${widget.appName}. Descárgala e instálala para continuar.',
+                  textAlign: TextAlign.center),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: _openingDownload ? null : _downloadUpdate,
+                child: Text(_openingDownload
+                    ? 'Abriendo descarga…'
+                    : 'Actualizar ahora'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -149,6 +231,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
 
   bool _editingProfile = false;
   bool _savingProfile = false;
+  String _versionLabel = '';
 
   final _profileFormKey = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController();
@@ -173,6 +256,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
   void initState() {
     super.initState();
     _bootstrap();
+    _loadAppVersion();
 
     FlutterBackgroundService().on('debug_log').listen((event) {
       if (event == null) return;
@@ -199,6 +283,14 @@ class _DriverHomePageState extends State<DriverHomePage> {
     });
   }
 
+  Future<void> _loadAppVersion() async {
+    final info = await PackageInfo.fromPlatform();
+    if (mounted) {
+      setState(() =>
+          _versionLabel = 'Versión ${info.version} (${info.buildNumber})');
+    }
+  }
+
   // Misma condicion que build() usa para decidir si se muestra la
   // pantalla principal de rastreo (con su GoogleMap) en vez de las
   // pantallas de viaje entrante/activo.
@@ -206,7 +298,9 @@ class _DriverHomePageState extends State<DriverHomePage> {
     final tripStatus = _tripData?['status'] as String?;
     if (_tripId != null &&
         _tripData != null &&
-        (tripStatus == 'accepted' || tripStatus == 'arrived_at_pickup' || tripStatus == 'in_progress')) {
+        (tripStatus == 'accepted' ||
+            tripStatus == 'arrived_at_pickup' ||
+            tripStatus == 'in_progress')) {
       return false;
     }
     return true;
@@ -304,7 +398,9 @@ class _DriverHomePageState extends State<DriverHomePage> {
       // poll periodico de abajo.
       if (!claimSession) {
         final remoteSessionId = profile['activeSessionId'] as String?;
-        if (remoteSessionId != null && sessionId != null && remoteSessionId != sessionId) {
+        if (remoteSessionId != null &&
+            sessionId != null &&
+            remoteSessionId != sessionId) {
           await AuthService.logout();
           await SessionService.clear();
           setState(() {
@@ -328,11 +424,13 @@ class _DriverHomePageState extends State<DriverHomePage> {
       });
 
       _sessionCheckTimer?.cancel();
-      _sessionCheckTimer = Timer.periodic(const Duration(seconds: 20), (_) => _checkSessionStillActive());
+      _sessionCheckTimer = Timer.periodic(
+          const Duration(seconds: 20), (_) => _checkSessionStillActive());
 
       if (profile['approvalStatus'] == 'approved') {
         _tripPollTimer?.cancel();
-        _tripPollTimer = Timer.periodic(const Duration(seconds: 5), (_) => _pollForTrip());
+        _tripPollTimer =
+            Timer.periodic(const Duration(seconds: 5), (_) => _pollForTrip());
         _pollForTrip();
         PushService.registerToken();
         _startShift();
@@ -357,9 +455,12 @@ class _DriverHomePageState extends State<DriverHomePage> {
       final profile = await DriverProfileService.fetchProfile(_driverId!);
       final remoteSessionId = profile?['activeSessionId'] as String?;
       final localSessionId = await SessionService.localSessionId();
-      if (remoteSessionId != null && localSessionId != null && remoteSessionId != localSessionId) {
+      if (remoteSessionId != null &&
+          localSessionId != null &&
+          remoteSessionId != localSessionId) {
         await _clearSessionAndReturnToLogin(
-          message: 'Tu sesión se cerró porque iniciaste sesión en otro dispositivo.',
+          message:
+              'Tu sesión se cerró porque iniciaste sesión en otro dispositivo.',
         );
       }
     } catch (_) {
@@ -374,13 +475,21 @@ class _DriverHomePageState extends State<DriverHomePage> {
       final tripId = driverNode?['currentTripId'] as String?;
 
       if (tripId == null) {
-        if (_tripId != null) setState(() { _tripId = null; _tripData = null; });
+        if (_tripId != null)
+          setState(() {
+            _tripId = null;
+            _tripData = null;
+          });
         return;
       }
 
       final trip = await TripService.getTrip(tripId);
       if (trip == null) {
-        if (_tripId != null) setState(() { _tripId = null; _tripData = null; });
+        if (_tripId != null)
+          setState(() {
+            _tripId = null;
+            _tripData = null;
+          });
         return;
       }
 
@@ -460,10 +569,12 @@ class _DriverHomePageState extends State<DriverHomePage> {
     final notification = await Permission.notification.request();
     if (!notification.isGranted) {
       if (notification.isPermanentlyDenied) {
-        _addLog('Permiso de notificaciones bloqueado permanentemente. Abre Ajustes de la app y actívalo a mano.');
+        _addLog(
+            'Permiso de notificaciones bloqueado permanentemente. Abre Ajustes de la app y actívalo a mano.');
         await openAppSettings();
       } else {
-        _addLog('Permiso de notificaciones denegado. Es obligatorio: sin el, Android cierra la app al iniciar el rastreo.');
+        _addLog(
+            'Permiso de notificaciones denegado. Es obligatorio: sin el, Android cierra la app al iniciar el rastreo.');
       }
       await _refreshPermissionStatus();
       return false;
@@ -473,7 +584,8 @@ class _DriverHomePageState extends State<DriverHomePage> {
     await _refreshPermissionStatus();
 
     if (!always.isGranted) {
-      _addLog('Permiso "todo el tiempo" no otorgado. El rastreo en segundo plano puede detenerse al minimizar la app.');
+      _addLog(
+          'Permiso "todo el tiempo" no otorgado. El rastreo en segundo plano puede detenerse al minimizar la app.');
     }
 
     return true;
@@ -517,9 +629,12 @@ class _DriverHomePageState extends State<DriverHomePage> {
   Future<void> _endShift() async {
     final activeStatus = _tripData?['status'] as String?;
     if (_tripId != null &&
-        (activeStatus == 'accepted' || activeStatus == 'arrived_at_pickup' || activeStatus == 'in_progress')) {
+        (activeStatus == 'accepted' ||
+            activeStatus == 'arrived_at_pickup' ||
+            activeStatus == 'in_progress')) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No puedes terminar el turno con un viaje activo.')),
+        const SnackBar(
+            content: Text('No puedes terminar el turno con un viaje activo.')),
       );
       return;
     }
@@ -546,9 +661,12 @@ class _DriverHomePageState extends State<DriverHomePage> {
   Future<void> _logout() async {
     final activeStatus = _tripData?['status'] as String?;
     if (_tripId != null &&
-        (activeStatus == 'accepted' || activeStatus == 'arrived_at_pickup' || activeStatus == 'in_progress')) {
+        (activeStatus == 'accepted' ||
+            activeStatus == 'arrived_at_pickup' ||
+            activeStatus == 'in_progress')) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No puedes cerrar sesión con un viaje activo.')),
+        const SnackBar(
+            content: Text('No puedes cerrar sesión con un viaje activo.')),
       );
       return;
     }
@@ -561,8 +679,12 @@ class _DriverHomePageState extends State<DriverHomePage> {
           'Se detendrá el rastreo y las notificaciones, y no recibirás más viajes hasta que vuelvas a iniciar sesión.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
-          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Cerrar sesión')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancelar')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Cerrar sesión')),
         ],
       ),
     );
@@ -673,17 +795,31 @@ class _DriverHomePageState extends State<DriverHomePage> {
               top: false,
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _logout,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red.shade600,
-                      foregroundColor: Colors.white,
-                      minimumSize: const Size.fromHeight(48),
+                child: Column(
+                  children: [
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: _logout,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red.shade600,
+                          foregroundColor: Colors.white,
+                          minimumSize: const Size.fromHeight(48),
+                        ),
+                        child: const Text('Cerrar sesión',
+                            style: TextStyle(fontWeight: FontWeight.w600)),
+                      ),
                     ),
-                    child: const Text('Cerrar sesión', style: TextStyle(fontWeight: FontWeight.w600)),
-                  ),
+                    if (_versionLabel.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        _versionLabel,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            fontSize: 12, color: Colors.grey.shade600),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ),
@@ -697,7 +833,10 @@ class _DriverHomePageState extends State<DriverHomePage> {
         trip: _tripData!,
         tripId: _tripId!,
         currentLatLng: _currentLatLng,
-        onFinished: () => setState(() { _tripId = null; _tripData = null; }),
+        onFinished: () => setState(() {
+          _tripId = null;
+          _tripData = null;
+        }),
       );
     }
 
@@ -771,7 +910,10 @@ class _DriverHomePageState extends State<DriverHomePage> {
     );
   }
 
-  Widget _circleIconButton({required IconData icon, required String tooltip, required VoidCallback onTap}) {
+  Widget _circleIconButton(
+      {required IconData icon,
+      required String tooltip,
+      required VoidCallback onTap}) {
     return Material(
       color: Colors.white,
       shape: const CircleBorder(),
@@ -791,7 +933,9 @@ class _DriverHomePageState extends State<DriverHomePage> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(999),
-        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 2))],
+        boxShadow: const [
+          BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 2))
+        ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -840,10 +984,13 @@ class _DriverHomePageState extends State<DriverHomePage> {
         ),
         child: Row(
           children: [
-            Icon(Icons.warning_amber_rounded, color: Colors.amber.shade800, size: 20),
+            Icon(Icons.warning_amber_rounded,
+                color: Colors.amber.shade800, size: 20),
             const SizedBox(width: 10),
             Expanded(
-              child: Text(message, style: TextStyle(color: Colors.amber.shade900, fontSize: 12.5)),
+              child: Text(message,
+                  style:
+                      TextStyle(color: Colors.amber.shade900, fontSize: 12.5)),
             ),
           ],
         ),
@@ -858,12 +1005,14 @@ class _DriverHomePageState extends State<DriverHomePage> {
         child: ElevatedButton.icon(
           onPressed: _endShift,
           icon: const Icon(Icons.pause_circle_filled),
-          label: const Text('Terminar turno', style: TextStyle(fontWeight: FontWeight.w600)),
+          label: const Text('Terminar turno',
+              style: TextStyle(fontWeight: FontWeight.w600)),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.black,
             foregroundColor: Colors.white,
             minimumSize: const Size.fromHeight(56),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
             elevation: 4,
           ),
         ),
@@ -874,12 +1023,14 @@ class _DriverHomePageState extends State<DriverHomePage> {
       child: ElevatedButton.icon(
         onPressed: _startShift,
         icon: const Icon(Icons.play_circle_fill),
-        label: const Text('Reintentar inicio de turno', style: TextStyle(fontWeight: FontWeight.w600)),
+        label: const Text('Reintentar inicio de turno',
+            style: TextStyle(fontWeight: FontWeight.w600)),
         style: ElevatedButton.styleFrom(
           backgroundColor: Colors.orange.shade800,
           foregroundColor: Colors.white,
           minimumSize: const Size.fromHeight(56),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
           elevation: 4,
         ),
       ),
@@ -891,7 +1042,8 @@ class _DriverHomePageState extends State<DriverHomePage> {
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.only(topLeft: Radius.circular(20), topRight: Radius.circular(20)),
+        borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(20), topRight: Radius.circular(20)),
       ),
       builder: (context) {
         return SizedBox(
@@ -900,7 +1052,9 @@ class _DriverHomePageState extends State<DriverHomePage> {
             children: [
               const Padding(
                 padding: EdgeInsets.all(16),
-                child: Text('Registro de actividad', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                child: Text('Registro de actividad',
+                    style:
+                        TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
               ),
               _buildStatusChips(),
               const Divider(height: 1),
@@ -930,12 +1084,14 @@ class _DriverHomePageState extends State<DriverHomePage> {
           const SizedBox(height: 20),
           ElevatedButton(
             onPressed: _savingProfile ? null : _saveProfile,
-            style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            style: ElevatedButton.styleFrom(
+                minimumSize: const Size.fromHeight(48)),
             child: _savingProfile
                 ? const SizedBox(
                     height: 20,
                     width: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white),
                   )
                 : const Text('Guardar cambios'),
           ),
@@ -944,7 +1100,8 @@ class _DriverHomePageState extends State<DriverHomePage> {
     );
   }
 
-  Widget _profileField(TextEditingController ctrl, String label, {bool isNumber = false, bool editable = true}) {
+  Widget _profileField(TextEditingController ctrl, String label,
+      {bool isNumber = false, bool editable = true}) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: TextFormField(
@@ -958,7 +1115,8 @@ class _DriverHomePageState extends State<DriverHomePage> {
         ),
         validator: (v) {
           if (v == null || v.trim().isEmpty) return 'Requerido';
-          if (isNumber && int.tryParse(v.trim()) == null) return 'Debe ser un número';
+          if (isNumber && int.tryParse(v.trim()) == null)
+            return 'Debe ser un número';
           return null;
         },
       ),
@@ -974,7 +1132,8 @@ class _DriverHomePageState extends State<DriverHomePage> {
         spacing: 8,
         runSpacing: 6,
         children: [
-          _chip('DNI: ${_driverProfile?['dni'] ?? '-'}', Colors.blueGrey, onTap: _copyDni),
+          _chip('DNI: ${_driverProfile?['dni'] ?? '-'}', Colors.blueGrey,
+              onTap: _copyDni),
           _chip(
             'Ubicación: ${_permissionLabel()}',
             _alwaysStatus?.isGranted == true ? Colors.green : Colors.orange,
@@ -983,7 +1142,8 @@ class _DriverHomePageState extends State<DriverHomePage> {
             'Notificaciones: ${_notificationStatus?.isGranted == true ? 'OK' : 'Falta'}',
             _notificationStatus?.isGranted == true ? Colors.green : Colors.red,
           ),
-          _chip(_tracking ? 'En turno' : 'Fuera de turno', _tracking ? Colors.green : Colors.grey),
+          _chip(_tracking ? 'En turno' : 'Fuera de turno',
+              _tracking ? Colors.green : Colors.grey),
         ],
       ),
     );
@@ -999,7 +1159,8 @@ class _DriverHomePageState extends State<DriverHomePage> {
     return GestureDetector(
       onTap: onTap,
       child: Chip(
-        label: Text(label, style: const TextStyle(color: Colors.white, fontSize: 12)),
+        label: Text(label,
+            style: const TextStyle(color: Colors.white, fontSize: 12)),
         backgroundColor: color,
       ),
     );
@@ -1041,7 +1202,8 @@ class _DriverHomePageState extends State<DriverHomePage> {
             '${entry.time.second.toString().padLeft(2, '0')}';
         return ListTile(
           dense: true,
-          leading: Text(time, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          leading: Text(time,
+              style: const TextStyle(fontSize: 12, color: Colors.grey)),
           title: Text(entry.message, style: const TextStyle(fontSize: 13)),
         );
       },

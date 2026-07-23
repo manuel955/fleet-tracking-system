@@ -9,6 +9,7 @@ import 'screens/registration_screen.dart';
 import 'screens/searching_screen.dart';
 import 'services/passenger_service.dart';
 import 'services/trip_service.dart';
+import 'services/update_service.dart';
 
 void main() {
   // La app crea varios GoogleMap distintos a lo largo de una sesion
@@ -49,14 +50,18 @@ class FleetPassengerApp extends StatelessWidget {
             backgroundColor: Colors.black,
             foregroundColor: Colors.white,
             elevation: 0,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
           ),
         ),
         outlinedButtonTheme: OutlinedButtonThemeData(
           style: OutlinedButton.styleFrom(
             foregroundColor: Colors.black,
             side: const BorderSide(color: Colors.black26),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
           ),
         ),
         // Sin esto, ProgressIndicator usa el "track" rosado que genera
@@ -69,7 +74,10 @@ class FleetPassengerApp extends StatelessWidget {
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: Colors.grey.shade50,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 14,
+          ),
           labelStyle: TextStyle(color: Colors.grey.shade600),
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
@@ -106,11 +114,93 @@ class FleetPassengerApp extends StatelessWidget {
           }),
           iconTheme: WidgetStateProperty.resolveWith((states) {
             final selected = states.contains(WidgetState.selected);
-            return IconThemeData(color: selected ? Colors.black : Colors.grey.shade600);
+            return IconThemeData(
+              color: selected ? Colors.black : Colors.grey.shade600,
+            );
           }),
         ),
       ),
-      home: const PassengerHomePage(),
+      home: const _UpdateGate(
+        appName: 'la app de pasajeros',
+        child: PassengerHomePage(),
+      ),
+    );
+  }
+}
+
+class _UpdateGate extends StatefulWidget {
+  const _UpdateGate({required this.appName, required this.child});
+
+  final String appName;
+  final Widget child;
+
+  @override
+  State<_UpdateGate> createState() => _UpdateGateState();
+}
+
+class _UpdateGateState extends State<_UpdateGate> {
+  bool _checking = true;
+  bool _updateRequired = false;
+  bool _openingDownload = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkForUpdate();
+  }
+
+  Future<void> _checkForUpdate() async {
+    final updateRequired = await UpdateService.isUpdateRequired();
+    if (mounted) {
+      setState(() {
+        _checking = false;
+        _updateRequired = updateRequired;
+      });
+    }
+  }
+
+  Future<void> _downloadUpdate() async {
+    setState(() => _openingDownload = true);
+    await UpdateService.downloadUpdate();
+    if (mounted) setState(() => _openingDownload = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_checking) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    if (!_updateRequired) return widget.child;
+
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.system_update, size: 56),
+              const SizedBox(height: 20),
+              Text(
+                'Actualización obligatoria',
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Hay una nueva versión de ${widget.appName}. Descárgala e instálala para continuar.',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: _openingDownload ? null : _downloadUpdate,
+                child: Text(
+                  _openingDownload ? 'Abriendo descarga…' : 'Actualizar ahora',
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -143,7 +233,9 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
     if (activeTripId != null) {
       try {
         trip = await TripService.getTrip(activeTripId);
-        if (trip == null || trip['status'] == 'completed' || trip['status'] == 'cancelled') {
+        if (trip == null ||
+            trip['status'] == 'completed' ||
+            trip['status'] == 'cancelled') {
           await TripService.clearActiveTrip();
           trip = null;
         }
@@ -202,7 +294,9 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
 
     if (_activeTripId != null && _activeTrip != null) {
       final status = _activeTrip!['status'] as String?;
-      if (status == 'accepted' || status == 'arrived_at_pickup' || status == 'in_progress') {
+      if (status == 'accepted' ||
+          status == 'arrived_at_pickup' ||
+          status == 'in_progress') {
         return ActiveTripTrackingScreen(
           tripId: _activeTripId!,
           trip: _activeTrip!,
@@ -229,9 +323,21 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
         selectedIndex: _tabIndex,
         onDestinationSelected: (index) => setState(() => _tabIndex = index),
         destinations: const [
-          NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: 'Inicio'),
-          NavigationDestination(icon: Icon(Icons.receipt_long_outlined), selectedIcon: Icon(Icons.receipt_long), label: 'Actividad'),
-          NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: 'Cuenta'),
+          NavigationDestination(
+            icon: Icon(Icons.home_outlined),
+            selectedIcon: Icon(Icons.home),
+            label: 'Inicio',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.receipt_long_outlined),
+            selectedIcon: Icon(Icons.receipt_long),
+            label: 'Actividad',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.person_outline),
+            selectedIcon: Icon(Icons.person),
+            label: 'Cuenta',
+          ),
         ],
       ),
     );
