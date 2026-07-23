@@ -1,0 +1,43 @@
+name: fleet_driver_app
+description: App del conductor - envia ubicacion GPS en segundo plano cada 30s
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.1
+  geolocator: ^12.0.0
+  permission_handler: ^11.3.1
+  flutter_background_service: ^5.0.10
+  shared_preferences: ^2.2.3
+  google_maps_flutter: ^2.9.0
+  google_maps_flutter_android: ^2.14.10
+  google_maps_flutter_platform_interface: ^2.9.0
+  flutter_local_notifications: ^17.2.3
+  image_picker: ^1.1.2
+  file_picker: ^9.0.2
+  url_launcher: ^6.3.0
+  flutter_tts: ^4.0.2
+  firebase_core: ^4.12.1
+  firebase_messaging: ^16.4.3
+  package_info_plus: ^8.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+# file_picker hardcodea compileSdk 34 en su propio modulo Android; versiones
+# recientes de flutter_plugin_android_lifecycle (transitiva, via
+# flutter.compileSdkVersion) exigen compileSdk >= 36 a quien la consuma,
+# rompiendo el build de release. Se fija a una version anterior que tambien
+# hardcodea compileSdk 34, compatible con file_picker e image_picker.
+dependency_overrides:
+  flutter_plugin_android_lifecycle: 2.0.24
+
+flutter:
+  uses-material-design: true

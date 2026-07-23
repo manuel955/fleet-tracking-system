@@ -1,0 +1,23 @@
+# Node / Cloud Functions
+functions/node_modules/
+npm-debug.log*
+
+# Flutter (driver-app, passenger-app)
+**/.dart_tool/
+**/.flutter-plugins-dependencies
+**/build/
+**/.metadata
+
+# Android
+**/android/.gradle/
+**/android/.kotlin/
+**/android/local.properties
+**/android/app/google-services.json
+
+# IDE
+**/.idea/
+*.iml
+
+# Logs / misc
+database-debug.log
+*.log

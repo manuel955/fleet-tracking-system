@@ -1,0 +1,239 @@
+import 'package:flutter/material.dart';
+import 'package:google_maps_flutter_android/google_maps_flutter_android.dart';
+import 'package:google_maps_flutter_platform_interface/google_maps_flutter_platform_interface.dart';
+import 'screens/account_tab_screen.dart';
+import 'screens/active_trip_tracking_screen.dart';
+import 'screens/activity_tab_screen.dart';
+import 'screens/home_tab_screen.dart';
+import 'screens/registration_screen.dart';
+import 'screens/searching_screen.dart';
+import 'services/passenger_service.dart';
+import 'services/trip_service.dart';
+
+void main() {
+  // La app crea varios GoogleMap distintos a lo largo de una sesion
+  // (pedir viaje, seguimiento del viaje activo). El modo de renderizado por
+  // defecto (virtual display) puede dejar el segundo/tercer mapa en blanco
+  // en algunos dispositivos (visto en un Huawei P30 Pro); "hybrid
+  // composition" es la alternativa oficialmente recomendada para esto.
+  final mapsImplementation = GoogleMapsFlutterPlatform.instance;
+  if (mapsImplementation is GoogleMapsFlutterAndroid) {
+    mapsImplementation.useAndroidViewSurface = true;
+  }
+  runApp(const FleetPassengerApp());
+}
+
+class FleetPassengerApp extends StatelessWidget {
+  const FleetPassengerApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Fleet Passenger App',
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.black,
+          primary: Colors.black,
+          brightness: Brightness.light,
+        ),
+        scaffoldBackgroundColor: Colors.white,
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Colors.white,
+          foregroundColor: Colors.black,
+          elevation: 0,
+          surfaceTintColor: Colors.transparent,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.black,
+            foregroundColor: Colors.white,
+            elevation: 0,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
+        outlinedButtonTheme: OutlinedButtonThemeData(
+          style: OutlinedButton.styleFrom(
+            foregroundColor: Colors.black,
+            side: const BorderSide(color: Colors.black26),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
+        // Sin esto, ProgressIndicator usa el "track" rosado que genera
+        // Material 3 a partir de un seedColor negro (mismo problema que
+        // tenia NavigationBar mas abajo).
+        progressIndicatorTheme: const ProgressIndicatorThemeData(
+          color: Colors.black,
+          linearTrackColor: Colors.black12,
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: Colors.grey.shade50,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          labelStyle: TextStyle(color: Colors.grey.shade600),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: Colors.grey.shade300),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: Colors.grey.shade300),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: Colors.black, width: 1.6),
+          ),
+          errorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: Colors.red.shade400, width: 1.3),
+          ),
+          focusedErrorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: Colors.red.shade600, width: 1.6),
+          ),
+        ),
+        navigationBarTheme: NavigationBarThemeData(
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
+          indicatorColor: Colors.grey.shade200,
+          labelTextStyle: WidgetStateProperty.resolveWith((states) {
+            final selected = states.contains(WidgetState.selected);
+            return TextStyle(
+              fontSize: 12,
+              fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+              color: Colors.black,
+            );
+          }),
+          iconTheme: WidgetStateProperty.resolveWith((states) {
+            final selected = states.contains(WidgetState.selected);
+            return IconThemeData(color: selected ? Colors.black : Colors.grey.shade600);
+          }),
+        ),
+      ),
+      home: const PassengerHomePage(),
+    );
+  }
+}
+
+class PassengerHomePage extends StatefulWidget {
+  const PassengerHomePage({super.key});
+
+  @override
+  State<PassengerHomePage> createState() => _PassengerHomePageState();
+}
+
+class _PassengerHomePageState extends State<PassengerHomePage> {
+  bool _loading = true;
+  bool _registered = false;
+  String? _activeTripId;
+  Map<String, dynamic>? _activeTrip;
+  int _tabIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _bootstrap();
+  }
+
+  Future<void> _bootstrap() async {
+    final registered = await PassengerService.isRegistered();
+    final activeTripId = await TripService.getActiveTripId();
+
+    Map<String, dynamic>? trip;
+    if (activeTripId != null) {
+      try {
+        trip = await TripService.getTrip(activeTripId);
+        if (trip == null || trip['status'] == 'completed' || trip['status'] == 'cancelled') {
+          await TripService.clearActiveTrip();
+          trip = null;
+        }
+      } catch (_) {
+        trip = null;
+      }
+    }
+
+    setState(() {
+      _registered = registered;
+      _activeTripId = trip != null ? activeTripId : null;
+      _activeTrip = trip;
+      _loading = false;
+    });
+  }
+
+  void _onRegistered() => setState(() => _registered = true);
+
+  void _onLoggedOut() {
+    setState(() {
+      _registered = false;
+      _tabIndex = 0;
+      _activeTripId = null;
+      _activeTrip = null;
+    });
+  }
+
+  void _onRideRequested(String tripId) async {
+    final trip = await TripService.getTrip(tripId);
+    setState(() {
+      _activeTripId = tripId;
+      _activeTrip = trip;
+    });
+  }
+
+  void _onTripStatusChanged(Map<String, dynamic> trip) {
+    setState(() => _activeTrip = trip);
+  }
+
+  void _onTripFinished() {
+    setState(() {
+      _activeTripId = null;
+      _activeTrip = null;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    if (!_registered) {
+      return RegistrationScreen(onDone: _onRegistered);
+    }
+
+    if (_activeTripId != null && _activeTrip != null) {
+      final status = _activeTrip!['status'] as String?;
+      if (status == 'accepted' || status == 'arrived_at_pickup' || status == 'in_progress') {
+        return ActiveTripTrackingScreen(
+          tripId: _activeTripId!,
+          trip: _activeTrip!,
+          onFinished: _onTripFinished,
+        );
+      }
+      return SearchingScreen(
+        tripId: _activeTripId!,
+        trip: _activeTrip!,
+        onStatusChanged: _onTripStatusChanged,
+        onCancelled: _onTripFinished,
+      );
+    }
+
+    final tabs = [
+      HomeTabScreen(onRequested: _onRideRequested),
+      const ActivityTabScreen(),
+      AccountTabScreen(onLoggedOut: _onLoggedOut),
+    ];
+
+    return Scaffold(
+      body: IndexedStack(index: _tabIndex, children: tabs),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _tabIndex,
+        onDestinationSelected: (index) => setState(() => _tabIndex = index),
+        destinations: const [
+          NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: 'Inicio'),
+          NavigationDestination(icon: Icon(Icons.receipt_long_outlined), selectedIcon: Icon(Icons.receipt_long), label: 'Actividad'),
+          NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: 'Cuenta'),
+        ],
+      ),
+    );
+  }
+}

@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Panel de Control - Rastreo de Flota</title>
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23000'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23fff'/%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<!-- Pantalla de login / registro -->
+<div id="login-screen" class="login-screen">
+  <form id="login-form" class="login-card">
+    <div class="brand">
+      <span class="brand-icon">F</span>
+      <span class="brand-text">Panel de Flota</span>
+    </div>
+    <h1>Bienvenido de vuelta</h1>
+    <p id="login-subtitle" class="subtitle">Inicia sesión para monitorear los vehículos</p>
+
+    <div class="auth-tabs">
+      <button type="button" id="tab-login" class="auth-tab active">Iniciar sesión</button>
+      <button type="button" id="tab-register" class="auth-tab">Registrarme</button>
+    </div>
+
+    <input type="email" id="login-email" placeholder="Correo" required autocomplete="username" />
+    <input type="password" id="login-password" placeholder="Contraseña" required autocomplete="current-password" />
+    <input type="password" id="login-password-confirm" placeholder="Confirmar contraseña" autocomplete="new-password" class="hidden" />
+    <button type="submit" id="login-submit">Entrar</button>
+    <p id="login-error" class="login-error"></p>
+  </form>
+</div>
+
+<!-- Aplicacion principal -->
+<div id="app" class="app hidden">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-icon">F</span>
+      <span class="brand-text">Panel de Flota</span>
+    </div>
+    <h1>Panel de Control de Flota</h1>
+    <nav class="top-nav">
+      <button type="button" class="nav-tab active" data-view="map">Mapa</button>
+      <button type="button" class="nav-tab" data-view="drivers-admin">
+        Conductores
+        <span id="pending-badge" class="pending-badge hidden">0</span>
+      </button>
+      <button type="button" class="nav-tab" data-view="settings">Configuración</button>
+    </nav>
+    <div class="topbar-right">
+      <span id="live-indicator" class="live-indicator"><span class="live-dot"></span>En vivo</span>
+      <span id="driver-count" class="badge">0 vehículos</span>
+      <button id="logout-btn" class="logout-btn">Cerrar sesión</button>
+    </div>
+  </header>
+
+  <div id="map-view" class="layout">
+    <aside class="sidebar">
+      <input type="text" id="search-input" placeholder="Buscar por nombre, placa u hotel..." />
+      <div id="status-filters" class="status-filters">
+        <button type="button" class="filter-pill active" data-filter="all">Todos</button>
+        <button type="button" class="filter-pill" data-filter="available">Disponibles</button>
+        <button type="button" class="filter-pill" data-filter="to_pickup">En ruta</button>
+        <button type="button" class="filter-pill" data-filter="on_trip">En viaje</button>
+        <button type="button" class="filter-pill" data-filter="offline">Desconectados</button>
+      </div>
+      <ul id="driver-list" class="driver-list"></ul>
+    </aside>
+
+    <main class="map-panel">
+      <div id="map"></div>
+      <footer class="map-legend">
+        <span class="legend-item"><span class="legend-dot state-available"></span>Disponible</span>
+        <span class="legend-item"><span class="legend-dot state-to_pickup"></span>En ruta de recogida</span>
+        <span class="legend-item"><span class="legend-dot state-on_trip"></span>En viaje</span>
+        <span class="legend-item"><span class="legend-dot state-offline"></span>Desconectado</span>
+      </footer>
+    </main>
+  </div>
+
+  <div id="drivers-admin-view" class="drivers-admin-view hidden"></div>
+  <div id="settings-view" class="settings-view hidden"></div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+  // Render de PDFs subidos como documento (SOAT, licencia, etc.) a imagen,
+  // para incrustarlos en el reporte igual que las fotos.
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+</script>
+<script src="js/firebase-config.js"></script>
+<script src="js/google-maps-config.js"></script>
+<script src="js/app.js"></script>
+<script src="js/drivers-admin.js"></script>
+<script src="js/settings.js"></script>
+<script>
+  (function loadGoogleMaps() {
+    const script = document.createElement('script');
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&callback=onGoogleMapsReady&loading=async`;
+    script.async = true;
+    document.head.appendChild(script);
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /passenger_credentials/{passengerId}/{fileName} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null
+                   && request.auth.uid == passengerId
+                   && request.resource.size < 5 * 1024 * 1024
+                   && request.resource.contentType.matches('image/.*');
+      // "write" no sirve para delete: en un borrado no hay request.resource
+      // (no hay archivo nuevo), asi que las validaciones de tamaño/tipo de
+      // arriba fallarian y bloquearian el borrado. Delete separado, solo
+      // valida dueño.
+      allow delete: if request.auth != null && request.auth.uid == passengerId;
+    }
+
+    // APKs de las apps de conductor/pasajero, publicados desde el dashboard
+    // (Configuracion > Actualizaciones) con nombre fijo (driver-app.apk /
+    // passenger-app.apk, sobreescritos en cada version) para que la URL de
+    // descarga en AppConfig.apkDownloadUrl nunca cambie. Lectura publica: es
+    // solo un instalador, no hay datos sensibles.
+    match /app_releases/{fileName} {
+      allow read: if true;
+      allow write: if request.auth != null
+                   && request.auth.token.firebase.sign_in_provider == 'password'
+                   && request.resource.size < 150 * 1024 * 1024
+                   && request.resource.contentType == 'application/vnd.android.package-archive';
+    }
+
+    match /driver_documents/{driverId}/{fileName} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null
+                   && request.auth.uid == driverId
+                   && request.resource.size < 10 * 1024 * 1024
+                   && (request.resource.contentType.matches('image/.*')
+                       || request.resource.contentType == 'application/pdf');
+      // Mismo motivo que arriba: delete separado, solo valida dueño.
+      allow delete: if request.auth != null && request.auth.uid == driverId;
+    }
+  }
+}
