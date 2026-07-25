@@ -376,7 +376,8 @@ async function downloadDriverPdf(button) {
       }
     }
 
-    const fileName = `conductor_${(d.name || driverId).trim().replace(/\s+/g, '_')}.pdf`;
+    const slug = (s) => (s || '').trim().replace(/\s+/g, '_').replace(/[\\/:*?"<>|]/g, '');
+    const fileName = `${[slug(d.plate), slug(d.name)].filter(Boolean).join('_') || driverId}.pdf`;
     doc.save(fileName);
   } catch (e) {
     alert(`No se pudo generar el PDF: ${e.message || e}`);

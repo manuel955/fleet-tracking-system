@@ -36,6 +36,7 @@ class ActiveTripScreen extends StatefulWidget {
 
 class _ActiveTripScreenState extends State<ActiveTripScreen> {
   bool _busy = false;
+  GoogleMapController? _mapController;
 
   // Ruta real dibujada del conductor hasta el punto de recogida o destino
   // (segun la etapa), igual que en el dashboard: se recalcula con cada
@@ -192,6 +193,13 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
     );
   }
 
+  Future<void> _recenterToMyLocation() async {
+    _refreshRoute(force: true);
+    final here = widget.currentLatLng;
+    if (here == null || _mapController == null) return;
+    _mapController!.animateCamera(CameraUpdate.newLatLngZoom(here, 16));
+  }
+
   Future<void> _openInGoogleMaps(double lat, double lng) async {
     final uri = Uri.parse('https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving');
     final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
@@ -260,6 +268,7 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
           Positioned.fill(
             child: GoogleMap(
               initialCameraPosition: CameraPosition(target: markerPosition, zoom: 15),
+              onMapCreated: (controller) => _mapController = controller,
               myLocationEnabled: true,
               myLocationButtonEnabled: false,
               zoomControlsEnabled: false,
@@ -308,7 +317,7 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
                   child: IconButton(
                     icon: const Icon(Icons.my_location, color: Colors.black87),
                     tooltip: 'Actualizar posición',
-                    onPressed: () => _refreshRoute(force: true),
+                    onPressed: _recenterToMyLocation,
                   ),
                 ),
               ),

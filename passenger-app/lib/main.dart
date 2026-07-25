@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter_android/google_maps_flutter_android.dart';
@@ -225,12 +226,63 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
   bool _registered = false;
   String? _activeTripId;
   Map<String, dynamic>? _activeTrip;
+  // Viaje programado, aparte del "activo": no bloquea las pestañas -- el
+  // pasajero puede seguir usando la app (y pedir un viaje para ahora) con
+  // un viaje programado en espera. Se muestra como tarjeta en Inicio.
+  String? _scheduledTripId;
+  Map<String, dynamic>? _scheduledTrip;
+  Timer? _scheduledPollTimer;
   int _tabIndex = 0;
 
   @override
   void initState() {
     super.initState();
     _bootstrap();
+    _scheduledPollTimer = Timer.periodic(const Duration(seconds: 15), (_) => _pollScheduledTrip());
+  }
+
+  @override
+  void dispose() {
+    _scheduledPollTimer?.cancel();
+    super.dispose();
+  }
+
+  // Revisa si el viaje programado ya fue despachado (Cloud Functions lo
+  // asigna cerca de la hora elegida) o cancelado/completado desde otro
+  // lado (ej. el dashboard). Corre en segundo plano aunque el pasajero
+  // este en cualquier pestaña, no solo si esta viendo la tarjeta.
+  Future<void> _pollScheduledTrip() async {
+    final id = _scheduledTripId;
+    if (id == null) return;
+    Map<String, dynamic>? trip;
+    try {
+      trip = await TripService.getTrip(id);
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    if (trip == null || trip['status'] == 'completed' || trip['status'] == 'cancelled') {
+      await TripService.clearScheduledTrip();
+      if (mounted) setState(() { _scheduledTripId = null; _scheduledTrip = null; });
+      return;
+    }
+    if (trip['status'] != 'scheduled') {
+      // Ya se despacho: si no hay otro viaje activo bloqueando la pantalla,
+      // pasa a serlo. Si ya hay uno, se reintenta en el siguiente tick.
+      if (_activeTripId == null) {
+        await TripService.promoteScheduledTrip(id);
+        if (mounted) {
+          setState(() {
+            _activeTripId = id;
+            _activeTrip = trip;
+            _scheduledTripId = null;
+            _scheduledTrip = null;
+          });
+        }
+      }
+      return;
+    }
+    if (mounted) setState(() => _scheduledTrip = trip);
   }
 
   Future<void> _bootstrap() async {
@@ -256,7 +308,7 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
     });
     if (registered) PushService.registerToken();
 
-    final activeTripId = await TripService.getActiveTripId();
+    var activeTripId = await TripService.getActiveTripId();
 
     Map<String, dynamic>? trip;
     if (activeTripId != null) {
@@ -267,9 +319,37 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
             trip['status'] == 'cancelled') {
           await TripService.clearActiveTrip();
           trip = null;
+          activeTripId = null;
         }
       } catch (_) {
         trip = null;
+        activeTripId = null;
+      }
+    }
+
+    final scheduledTripId = await TripService.getScheduledTripId();
+    Map<String, dynamic>? scheduledTrip;
+    if (scheduledTripId != null) {
+      try {
+        scheduledTrip = await TripService.getTrip(scheduledTripId);
+        if (scheduledTrip == null ||
+            scheduledTrip['status'] == 'completed' ||
+            scheduledTrip['status'] == 'cancelled') {
+          await TripService.clearScheduledTrip();
+          scheduledTrip = null;
+        } else if (scheduledTrip['status'] != 'scheduled') {
+          // Ya se habia despachado (dejo de estar 'scheduled') mientras la
+          // app estaba cerrada -- se trata directo como viaje activo, si no
+          // hay ya otro viaje inmediato ocupando ese lugar.
+          await TripService.promoteScheduledTrip(scheduledTripId);
+          if (trip == null) {
+            trip = scheduledTrip;
+            activeTripId = scheduledTripId;
+          }
+          scheduledTrip = null;
+        }
+      } catch (_) {
+        scheduledTrip = null;
       }
     }
 
@@ -277,6 +357,8 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
       _registered = registered;
       _activeTripId = trip != null ? activeTripId : null;
       _activeTrip = trip;
+      _scheduledTripId = scheduledTrip != null ? scheduledTripId : null;
+      _scheduledTrip = scheduledTrip;
       _loading = false;
     });
   }
@@ -292,25 +374,57 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
       _tabIndex = 0;
       _activeTripId = null;
       _activeTrip = null;
+      _scheduledTripId = null;
+      _scheduledTrip = null;
     });
   }
 
+  // Un mismo flujo de pedido (RequestRideScreen) puede terminar en un
+  // viaje inmediato ('searching') o uno programado ('scheduled') -- se
+  // guarda en el estado correspondiente segun lo que haya devuelto el
+  // servidor, sin bloquear las pestañas si fue programado.
   void _onRideRequested(String tripId) async {
     final trip = await TripService.getTrip(tripId);
+    if (trip != null && trip['status'] == 'scheduled') {
+      setState(() {
+        _scheduledTripId = tripId;
+        _scheduledTrip = trip;
+      });
+      return;
+    }
     setState(() {
       _activeTripId = tripId;
       _activeTrip = trip;
     });
   }
 
+  // SearchingScreen llama esto para CUALQUIER cambio de estado del viaje
+  // activo, incluido que lo cancelen desde el dashboard mientras el
+  // pasajero sigue en "buscando conductor" -- sin este chequeo el viaje se
+  // quedaba mostrando "buscando..." con un boton "Cancelar viaje" que ya
+  // no podia hacer nada (las reglas de RTDB rechazan re-cancelar un viaje
+  // que ya quedo 'cancelled', asi que el pasajero veia el boton fallar).
   void _onTripStatusChanged(Map<String, dynamic> trip) {
+    final status = trip['status'] as String?;
+    if (status == 'completed' || status == 'cancelled') {
+      _onTripFinished();
+      return;
+    }
     setState(() => _activeTrip = trip);
   }
 
   void _onTripFinished() {
+    TripService.clearActiveTrip();
     setState(() {
       _activeTripId = null;
       _activeTrip = null;
+    });
+  }
+
+  void _onScheduledTripCancelled() {
+    setState(() {
+      _scheduledTripId = null;
+      _scheduledTrip = null;
     });
   }
 
@@ -344,7 +458,12 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
     }
 
     final tabs = [
-      HomeTabScreen(onRequested: _onRideRequested),
+      HomeTabScreen(
+        onRequested: _onRideRequested,
+        scheduledTripId: _scheduledTripId,
+        scheduledTrip: _scheduledTrip,
+        onScheduledTripCancelled: _onScheduledTripCancelled,
+      ),
       const ActivityTabScreen(),
       AccountTabScreen(onLoggedOut: _onLoggedOut),
     ];

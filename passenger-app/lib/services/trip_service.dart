@@ -58,7 +58,14 @@ class TripService {
 
     final tripId = jsonDecode(response.body)['name'] as String;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('active_trip_id', tripId);
+    // Un viaje programado se guarda aparte del viaje "activo" (inmediato):
+    // el pasajero puede tener un viaje programado esperando su hora Y pedir
+    // un viaje para ahora mismo al mismo tiempo -- ver getScheduledTripId.
+    if (scheduledPickupAt != null) {
+      await prefs.setString('scheduled_trip_id', tripId);
+    } else {
+      await prefs.setString('active_trip_id', tripId);
+    }
     return tripId;
   }
 
@@ -100,7 +107,13 @@ class TripService {
     if (response.statusCode != 200) {
       throw Exception('Firebase rechazo la cancelacion (${response.statusCode}): ${response.body}');
     }
-    await clearActiveTrip();
+    await _clearIfMatches(tripId);
+  }
+
+  static Future<void> _clearIfMatches(String tripId) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getString('active_trip_id') == tripId) await prefs.remove('active_trip_id');
+    if (prefs.getString('scheduled_trip_id') == tripId) await prefs.remove('scheduled_trip_id');
   }
 
   // Cambia el destino de un viaje ya en curso. Las reglas de RTDB solo lo
@@ -231,5 +244,27 @@ class TripService {
   static Future<void> clearActiveTrip() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('active_trip_id');
+  }
+
+  static Future<String?> getScheduledTripId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('scheduled_trip_id');
+  }
+
+  static Future<void> clearScheduledTrip() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('scheduled_trip_id');
+  }
+
+  // Cuando Cloud Functions despacha un viaje programado (deja de estar
+  // 'scheduled' y pasa a buscar/asignar conductor), pasa a tratarse como
+  // el viaje activo normal -- se mueve de la clave 'scheduled_trip_id' a
+  // 'active_trip_id' para que quede consistente si se reabre la app.
+  static Future<void> promoteScheduledTrip(String tripId) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getString('scheduled_trip_id') == tripId) {
+      await prefs.remove('scheduled_trip_id');
+      await prefs.setString('active_trip_id', tripId);
+    }
   }
 }

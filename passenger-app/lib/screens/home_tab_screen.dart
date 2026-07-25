@@ -5,6 +5,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'destination_picker_screen.dart';
 import 'preset_places_screen.dart';
 import 'request_ride_screen.dart';
+import '../services/trip_service.dart';
 import '../widgets/support_button.dart';
 
 /// Pestaña "Inicio": mapa de fondo centrado en la ubicacion actual, con el
@@ -14,8 +15,20 @@ import '../widgets/support_button.dart';
 /// viaje.
 class HomeTabScreen extends StatefulWidget {
   final void Function(String tripId) onRequested;
+  // Viaje programado en espera (si hay uno) -- no bloquea esta pantalla,
+  // solo se muestra como tarjeta con opcion de cancelar. Mientras exista
+  // uno, no se permite programar otro (si puede pedir uno para ahora).
+  final String? scheduledTripId;
+  final Map<String, dynamic>? scheduledTrip;
+  final VoidCallback? onScheduledTripCancelled;
 
-  const HomeTabScreen({super.key, required this.onRequested});
+  const HomeTabScreen({
+    super.key,
+    required this.onRequested,
+    this.scheduledTripId,
+    this.scheduledTrip,
+    this.onScheduledTripCancelled,
+  });
 
   @override
   State<HomeTabScreen> createState() => _HomeTabScreenState();
@@ -84,10 +97,39 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
           initialPickup: _pickup,
           initialDestination: LatLng(result.lat, result.lng),
           initialDestinationLabel: result.description,
+          allowScheduling: widget.scheduledTrip == null,
         ),
       ),
     );
     if (tripId != null) widget.onRequested(tripId);
+  }
+
+  Future<void> _cancelScheduledTrip() async {
+    final tripId = widget.scheduledTripId;
+    if (tripId == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cancelar viaje programado'),
+        content: const Text('¿Seguro que quieres cancelar este viaje programado?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('No')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Sí, cancelar', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await TripService.cancelTrip(tripId);
+      widget.onScheduledTripCancelled?.call();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
+    }
   }
 
   @override
@@ -167,6 +209,10 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
                       ),
                     ),
                   ),
+                  if (widget.scheduledTrip != null) ...[
+                    const SizedBox(height: 12),
+                    _buildScheduledTripCard(),
+                  ],
                 ],
               ),
             ),
@@ -226,6 +272,35 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildScheduledTripCard() {
+    final trip = widget.scheduledTrip!;
+    final label = trip['scheduledPickupLabel'] as String?;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 12, offset: Offset(0, 2))],
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.schedule, color: Colors.black87),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              label != null ? 'Viaje programado para las $label' : 'Tienes un viaje programado',
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+            ),
+          ),
+          TextButton(
+            onPressed: _cancelScheduledTrip,
+            child: const Text('Cancelar', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
     );
   }
 }

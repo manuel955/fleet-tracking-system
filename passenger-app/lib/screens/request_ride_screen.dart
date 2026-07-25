@@ -18,6 +18,10 @@ class RequestRideScreen extends StatefulWidget {
   final LatLng? initialPickup;
   final LatLng? initialDestination;
   final String? initialDestinationLabel;
+  // false cuando el pasajero ya tiene un viaje programado en espera -- solo
+  // se permite uno a la vez, asi que se oculta la opcion de programar otro
+  // (pero sigue pudiendo pedir uno para ahora mismo).
+  final bool allowScheduling;
 
   const RequestRideScreen({
     super.key,
@@ -25,6 +29,7 @@ class RequestRideScreen extends StatefulWidget {
     this.initialPickup,
     this.initialDestination,
     this.initialDestinationLabel,
+    this.allowScheduling = true,
   });
 
   @override
@@ -150,6 +155,73 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
     final minute = time.minute.toString().padLeft(2, '0');
     final period = time.period == DayPeriod.am ? 'AM' : 'PM';
     return '$hour12:$minute $period';
+  }
+
+  void _selectNow() {
+    if (_scheduledTime != null) setState(() => _scheduledTime = null);
+  }
+
+  Future<void> _selectProgramar() async {
+    if (!widget.allowScheduling) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Ya tienes un viaje programado. Cancélalo para programar otro.')),
+      );
+      return;
+    }
+    await _pickScheduledTime();
+  }
+
+  Widget _buildWhenToggle() {
+    return Row(
+      children: [
+        Expanded(child: _whenTab(label: 'Ahora', icon: Icons.bolt, selected: _scheduledTime == null, onTap: _selectNow)),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _whenTab(
+            label: 'Programar',
+            icon: Icons.schedule,
+            selected: _scheduledTime != null,
+            dimmed: !widget.allowScheduling && _scheduledTime == null,
+            onTap: _selectProgramar,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _whenTab({
+    required String label,
+    required IconData icon,
+    required bool selected,
+    required VoidCallback onTap,
+    bool dimmed = false,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: selected ? Colors.black : Colors.grey.shade100,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 16, color: selected ? Colors.white : (dimmed ? Colors.black26 : Colors.black87)),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: selected ? Colors.white : (dimmed ? Colors.black26 : Colors.black87),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _pickScheduledTime() async {
@@ -320,31 +392,27 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
           children: [
             const Text('Tu viaje', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
-            InkWell(
-              onTap: _pickScheduledTime,
-              borderRadius: BorderRadius.circular(8),
-              child: Row(
-                children: [
-                  const Icon(Icons.schedule, size: 16, color: Colors.black87),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Text(
-                      _scheduledTime != null
-                          ? 'Recogida: ${_formatTime12h(_scheduledTime!)}'
-                          : 'Recogida: Ahora',
-                      style: const TextStyle(fontSize: 14, color: Colors.black87),
+            _buildWhenToggle(),
+            if (_scheduledTime != null) ...[
+              const SizedBox(height: 10),
+              InkWell(
+                onTap: _pickScheduledTime,
+                borderRadius: BorderRadius.circular(8),
+                child: Row(
+                  children: [
+                    const Icon(Icons.schedule, size: 16, color: Colors.black87),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Text(
+                        'Recogida: ${_formatTime12h(_scheduledTime!)}',
+                        style: const TextStyle(fontSize: 14, color: Colors.black87),
+                      ),
                     ),
-                  ),
-                  if (_scheduledTime != null)
-                    IconButton(
-                      icon: const Icon(Icons.close, size: 16),
-                      onPressed: () => setState(() => _scheduledTime = null),
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                    ),
-                ],
+                    const Icon(Icons.edit, size: 14, color: Colors.black45),
+                  ],
+                ),
               ),
-            ),
+            ],
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 4),
               child: Divider(height: 20),
