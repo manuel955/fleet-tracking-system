@@ -1,4 +1,5 @@
 const admin = require('firebase-admin');
+const { sendPush } = require('./notifications');
 
 // Misma ventana de "conductor todavia activo" que usa el dashboard
 // (dashboard/js/app.js -> OFFLINE_AFTER_MS): si no reporto GPS en los
@@ -52,30 +53,11 @@ async function claimDriver(driverId, tripId) {
   return putRes.status === 200;
 }
 
-// Aviso push al conductor asignado. Mensaje solo-datos (sin bloque
-// `notification`) a proposito: asi el handler de background de la app
-// corre siempre y reproduce la alerta completa (canal con sonido/vibracion
-// + voz TTS), en vez de que Android muestre una notificacion generica.
-// Best-effort: si falla (token vencido, sin Play Services), la asignacion
-// ya quedo escrita y el polling de la app la detecta igual.
-async function notifyAssignedDriver(driverId, fcmToken, tripId) {
-  if (!fcmToken) return;
-  try {
-    await admin.messaging().send({
-      token: fcmToken,
-      data: { type: 'trip_assigned', tripId },
-      android: { priority: 'high' },
-    });
-  } catch (e) {
-    console.error(`FCM al conductor ${driverId} fallo: ${e.message || e}`);
-  }
-}
-
 // Busca al conductor disponible mas cercano y lo reclama de forma atomica
 // antes de asignarlo al viaje. Si dos viajes intentan reclamar al mismo
 // conductor casi al mismo tiempo, solo uno gana el "if-match"; el otro
 // simplemente sigue probando con el siguiente candidato mas cercano.
-async function attemptAssignment(tripId, pickupLat, pickupLng, excludeMap) {
+async function attemptAssignment(tripId, pickupLat, pickupLng, excludeMap, scheduledPickupLabel) {
   const db = admin.database();
   const snap = await db
     .ref('drivers')
@@ -113,7 +95,15 @@ async function attemptAssignment(tripId, pickupLat, pickupLng, excludeMap) {
         assignedAt: now,
         acceptedAt: now,
       });
-      await notifyAssignedDriver(c.id, c.driver.fcmToken, tripId);
+      // Aviso push al conductor asignado (best-effort: si falla, la
+      // asignacion ya quedo escrita y el polling de la app la detecta igual).
+      // Si el viaje era programado, se manda la hora para que la app la
+      // diga en la notificacion/voz en vez del generico "nuevo servicio".
+      await sendPush(
+        c.driver.fcmToken,
+        'trip_assigned',
+        scheduledPickupLabel ? { tripId, scheduledPickupLabel } : { tripId }
+      );
       return;
     }
     // Perdi la carrera contra otra asignacion; sigo con el siguiente candidato.

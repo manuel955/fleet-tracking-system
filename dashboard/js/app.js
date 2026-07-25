@@ -21,6 +21,7 @@ const STATE_LABELS = {
 };
 
 const TRIP_STATUS_LABELS = {
+  scheduled: 'Programado, esperando hora de despacho',
   searching: 'Buscando conductor',
   assigned_pending_accept: 'Asignado',
   accepted: 'Asignado, en camino a recoger',
@@ -162,7 +163,7 @@ function tryStartDashboard() {
 
 function initMap() {
   map = new google.maps.Map(document.getElementById('map'), {
-    center: { lat: 19.4326, lng: -99.1332 }, // Ciudad de Mexico por defecto
+    center: { lat: -12.0464, lng: -77.0428 }, // Lima, Peru por defecto
     zoom: 12,
     mapTypeControl: false,
     streetViewControl: false,
@@ -708,6 +709,7 @@ function driverDetailHtml(driverId, d, state) {
         <div class="row"><b>Recogida:</b> ${escapeHtml(trip.pickupAddress || '-')}</div>
         <div class="row"><b>Se dirige a:</b> ${escapeHtml(trip.destinationAddress || '-')}</div>
         ${eta ? `<div class="row"><b>Tiempo de llegada:</b> ${eta}</div>` : ''}
+        ${trip.scheduledPickupLabel ? `<div class="row"><b>Recogida programada:</b> ${escapeHtml(trip.scheduledPickupLabel)}</div>` : ''}
         ${
           tripCancellable
             ? `<button type="button" class="cancel-trip-btn" data-cancel-trip="${d.currentTripId}" onclick="event.stopPropagation()">Cancelar viaje</button>`

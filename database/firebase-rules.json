@@ -6,6 +6,24 @@
       "supportPhone": { ".validate": "newData.isString() && newData.val().length > 0" },
       "driverAppBuild": { ".validate": "newData.isNumber() && newData.val() > 0" },
       "passengerAppBuild": { ".validate": "newData.isNumber() && newData.val() > 0" },
+      "sportVenues": {
+        "$venueId": {
+          "name": { ".validate": "newData.isString() && newData.val().length > 0" },
+          "address": { ".validate": "newData.isString()" },
+          "lat": { ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90" },
+          "lng": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180" },
+          "$other": { ".validate": false }
+        }
+      },
+      "hotels": {
+        "$hotelId": {
+          "name": { ".validate": "newData.isString() && newData.val().length > 0" },
+          "address": { ".validate": "newData.isString()" },
+          "lat": { ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90" },
+          "lng": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180" },
+          "$other": { ".validate": false }
+        }
+      },
       "$other": { ".validate": false }
     },
     "drivers": {
@@ -65,15 +83,16 @@
         "phone": { ".validate": "newData.isString()" },
         "credentialPhotoUrl": { ".validate": "newData.isString()" },
         "registeredAt": { ".validate": "newData.isNumber()" },
+        "fcmToken": { ".validate": "newData.isString()" },
         "$other": { ".validate": false }
       }
     },
     "trips": {
       ".read": "auth != null && auth.token.firebase.sign_in_provider === 'password'",
-      ".indexOn": ["passengerId", "driverId", "requestedAt"],
+      ".indexOn": ["passengerId", "driverId", "requestedAt", "status"],
       "$tripId": {
         ".read": "auth != null && (data.child('passengerId').val() === auth.uid || data.child('driverId').val() === auth.uid)",
-        ".write": "auth != null && ((!data.exists() && newData.child('passengerId').val() === auth.uid && newData.child('status').val() === 'searching') || (data.exists() && data.child('passengerId').val() === auth.uid && (newData.child('status').val() !== 'cancelled' || !data.child('driverId').exists())) || (data.exists() && data.child('driverId').val() === auth.uid && newData.child('status').val() !== 'cancelled') || (data.exists() && auth.token.firebase.sign_in_provider === 'password'))",
+        ".write": "auth != null && ((!data.exists() && newData.child('passengerId').val() === auth.uid && (newData.child('status').val() === 'searching' || newData.child('status').val() === 'scheduled')) || (data.exists() && data.child('passengerId').val() === auth.uid && !data.child('status').val().matches(/^(completed|cancelled)$/) && (newData.child('status').val() === data.child('status').val() || (newData.child('status').val() === 'cancelled' && !data.child('status').val().matches(/^(in_progress|completed|cancelled)$/)))) || (data.exists() && data.child('driverId').val() === auth.uid && newData.child('status').val() !== 'cancelled') || (data.exists() && auth.token.firebase.sign_in_provider === 'password'))",
         "passengerId": { ".validate": "newData.isString() && (!data.exists() || newData.val() == data.val())" },
         "passengerName": { ".validate": "newData.isString()" },
         "passengerPhone": { ".validate": "newData.isString()" },
@@ -83,7 +102,7 @@
         "destinationLat": { ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90" },
         "destinationLng": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180" },
         "destinationAddress": { ".validate": "newData.isString()" },
-        "status": { ".validate": "newData.isString() && newData.val().matches(/^(searching|assigned_pending_accept|accepted|rejected|arrived_at_pickup|in_progress|completed|cancelled|no_drivers_available)$/)" },
+        "status": { ".validate": "newData.isString() && newData.val().matches(/^(scheduled|searching|assigned_pending_accept|accepted|rejected|arrived_at_pickup|in_progress|completed|cancelled|no_drivers_available)$/)" },
         "driverId": { ".validate": "newData.isString()" },
         "driverName": { ".validate": "newData.isString()" },
         "driverPhone": { ".validate": "newData.isString()" },
@@ -92,6 +111,8 @@
           "$rejectedId": { ".validate": "newData.isBoolean()" }
         },
         "requestedAt": { ".validate": "newData.isNumber() && (!data.exists() || newData.val() == data.val())" },
+        "scheduledPickupLabel": { ".validate": "newData.isString()" },
+        "scheduledPickupAt": { ".validate": "newData.isNumber() && (!data.exists() || newData.val() == data.val())" },
         "assignedAt": { ".validate": "newData.isNumber()" },
         "acceptedAt": { ".validate": "newData.isNumber()" },
         "arrivedAt": { ".validate": "newData.isNumber()" },

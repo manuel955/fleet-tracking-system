@@ -90,7 +90,9 @@ class _SearchingScreenState extends State<SearchingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final noDrivers = _trip['status'] == 'no_drivers_available';
+    final status = _trip['status'] as String?;
+    final noDrivers = status == 'no_drivers_available';
+    final scheduled = status == 'scheduled';
     final pickup = LatLng(
       (_trip['pickupLat'] as num).toDouble(),
       (_trip['pickupLng'] as num).toDouble(),
@@ -130,7 +132,23 @@ class _SearchingScreenState extends State<SearchingScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (!noDrivers) ...[
+                  if (scheduled) ...[
+                    const Icon(Icons.schedule, size: 40, color: Colors.black87),
+                    const SizedBox(height: 16),
+                    Text(
+                      (_trip['scheduledPickupLabel'] as String?) != null
+                          ? 'Viaje programado para las ${_trip['scheduledPickupLabel']}'
+                          : 'Viaje programado',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Vamos a buscar tu conductor automáticamente cerca de esa hora.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 13, color: Colors.black54),
+                    ),
+                  ] else if (!noDrivers) ...[
                     const SizedBox(
                       height: 40,
                       width: 40,

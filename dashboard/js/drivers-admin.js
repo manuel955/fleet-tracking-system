@@ -36,8 +36,10 @@ navTabs.forEach((tab) => {
     const view = tab.getAttribute('data-view');
     mapViewEl.classList.toggle('hidden', view !== 'map');
     adminViewEl.classList.toggle('hidden', view !== 'drivers-admin');
+    placesViewEl.classList.toggle('hidden', view !== 'places');
     settingsViewEl.classList.toggle('hidden', view !== 'settings');
     if (view === 'drivers-admin') startDriversAdmin();
+    if (view === 'places') startPlaces();
     if (view === 'settings') startSettings();
   });
 });
@@ -335,46 +337,42 @@ async function downloadDriverPdf(button) {
       y += 18;
     });
 
-    y += 12;
-    ensureSpace(26);
-    doc.setFontSize(14);
-    doc.setFont(undefined, 'bold');
-    doc.text('Documentos', margin, y);
-    y += 20;
-    doc.setFont(undefined, 'normal');
-    doc.setFontSize(11);
-
+    // Un documento por hoja, con su nombre como titulo arriba de la
+    // imagen -- mas facil de revisar/imprimir uno por uno que la
+    // cuadricula compartiendo pagina de antes.
     for (const field of DOC_FIELDS) {
       const url = d[field.key];
-      ensureSpace(20);
+      doc.addPage();
+      y = margin;
+
+      doc.setFontSize(16);
+      doc.setFont(undefined, 'bold');
+      doc.text(field.label, margin, y);
+      y += 28;
+      doc.setFont(undefined, 'normal');
+      doc.setFontSize(11);
 
       if (!url) {
         doc.setTextColor(150);
-        doc.text(`${field.label}: no subido`, margin, y);
+        doc.text('No subido', margin, y);
         doc.setTextColor(0);
-        y += 20;
         continue;
       }
 
-      doc.text(`${field.label}${isPdfUrl(url) ? ' (PDF)' : ''}:`, margin, y);
-      y += 6;
       try {
         const dataUrl = await documentAsDataUrl(url);
         const props = doc.getImageProperties(dataUrl);
         const maxWidth = pageWidth - margin * 2;
-        const maxHeight = 260;
+        const maxHeight = pageHeight - y - margin;
         const scale = Math.min(maxWidth / props.width, maxHeight / props.height, 1);
         const w = props.width * scale;
         const h = props.height * scale;
-        ensureSpace(h + 12);
         doc.addImage(dataUrl, props.fileType || 'JPEG', margin, y, w, h);
-        y += h + 16;
       } catch (e) {
         console.error(`No se pudo cargar "${field.label}" (${url}):`, e);
         doc.setTextColor(200, 0, 0);
         doc.text(`(no se pudo cargar: ${e.message || e})`, margin, y);
         doc.setTextColor(0);
-        y += 20;
       }
     }
 

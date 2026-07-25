@@ -50,6 +50,7 @@
         Conductores
         <span id="pending-badge" class="pending-badge hidden">0</span>
       </button>
+      <button type="button" class="nav-tab" data-view="places">Lugares</button>
       <button type="button" class="nav-tab" data-view="settings">Configuración</button>
     </nav>
     <div class="topbar-right">
@@ -84,6 +85,7 @@
   </div>
 
   <div id="drivers-admin-view" class="drivers-admin-view hidden"></div>
+  <div id="places-view" class="settings-view hidden"></div>
   <div id="settings-view" class="settings-view hidden"></div>
 </div>
 
@@ -104,6 +106,7 @@
 <script src="js/app.js"></script>
 <script src="js/drivers-admin.js"></script>
 <script src="js/settings.js"></script>
+<script src="js/places-admin.js"></script>
 <script>
   (function loadGoogleMaps() {
     const script = document.createElement('script');

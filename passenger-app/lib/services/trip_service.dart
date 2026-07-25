@@ -18,6 +18,8 @@ class TripService {
     double? destinationLat,
     double? destinationLng,
     String? destinationAddress,
+    String? scheduledPickupLabel,
+    int? scheduledPickupAt,
   }) async {
     final auth = await AuthService.signInAnonymously();
     final uri = Uri.parse('${AppConfig.firebaseDbUrl}/trips.json?auth=${auth['idToken']}');
@@ -35,7 +37,16 @@ class TripService {
         if (destinationLat != null) 'destinationLat': destinationLat,
         if (destinationLng != null) 'destinationLng': destinationLng,
         if (destinationAddress != null) 'destinationAddress': destinationAddress,
-        'status': 'searching',
+        // Hora de recogida elegida, en formato 12h AM/PM (ej. "3:30 PM") --
+        // solo para mostrar. scheduledPickupAt (epoch ms) es lo que usa
+        // Cloud Functions (dispatchScheduledTrips) para decidir cuando
+        // despachar de verdad -- ver request_ride_screen.dart.
+        if (scheduledPickupLabel != null) 'scheduledPickupLabel': scheduledPickupLabel,
+        if (scheduledPickupAt != null) 'scheduledPickupAt': scheduledPickupAt,
+        // Con hora programada el viaje espera en 'scheduled' -- Cloud
+        // Functions lo despacha (busca/asigna conductor) mas cerca de la
+        // hora elegida, no de inmediato como un pedido normal.
+        'status': scheduledPickupAt != null ? 'scheduled' : 'searching',
         'requestedAt': DateTime.now().millisecondsSinceEpoch,
         'rejectedDriverIds': <String, dynamic>{},
       }),
@@ -90,6 +101,32 @@ class TripService {
       throw Exception('Firebase rechazo la cancelacion (${response.statusCode}): ${response.body}');
     }
     await clearActiveTrip();
+  }
+
+  // Cambia el destino de un viaje ya en curso. Las reglas de RTDB solo lo
+  // permiten mientras el viaje no este 'completed'/'cancelled' (ver
+  // database/firebase-rules.json); dispara notifyTripUpdated en Cloud
+  // Functions, que avisa al conductor.
+  static Future<void> updateDestination(
+    String tripId, {
+    required double destinationLat,
+    required double destinationLng,
+    required String destinationAddress,
+  }) async {
+    final auth = await AuthService.signInAnonymously();
+    final uri = Uri.parse('${AppConfig.firebaseDbUrl}/trips/$tripId.json?auth=${auth['idToken']}');
+    final response = await http.patch(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'destinationLat': destinationLat,
+        'destinationLng': destinationLng,
+        'destinationAddress': destinationAddress,
+      }),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Firebase rechazo la modificacion (${response.statusCode}): ${response.body}');
+    }
   }
 
   static Future<void> retrySearch(String tripId) async {

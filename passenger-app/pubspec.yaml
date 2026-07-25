@@ -1,7 +1,7 @@
 name: fleet_passenger_app
 description: App del pasajero - pide viajes y seguimiento en vivo del conductor asignado
 publish_to: "none"
-version: 1.0.0+2
+version: 1.0.0+4
 
 environment:
   sdk: ^3.12.2
@@ -19,6 +19,9 @@ dependencies:
   image_picker: ^1.1.2
   url_launcher: ^6.3.0
   package_info_plus: ^8.0.0
+  firebase_core: ^4.12.1
+  firebase_messaging: ^16.4.3
+  flutter_local_notifications: ^17.2.3
 
 dev_dependencies:
   flutter_test:

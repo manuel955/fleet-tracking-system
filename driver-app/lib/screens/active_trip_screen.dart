@@ -296,6 +296,25 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
             ),
           ),
           Positioned(
+            top: 0,
+            left: 16,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Material(
+                  color: Colors.white,
+                  shape: const CircleBorder(),
+                  elevation: 2,
+                  child: IconButton(
+                    icon: const Icon(Icons.my_location, color: Colors.black87),
+                    tooltip: 'Actualizar posición',
+                    onPressed: () => _refreshRoute(force: true),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
             left: 0,
             right: 0,
             bottom: 0,
@@ -311,6 +330,13 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(_statusLabel, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  if ((trip['scheduledPickupLabel'] as String?)?.isNotEmpty == true) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      'Viaje programado para las ${trip['scheduledPickupLabel']}',
+                      style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                    ),
+                  ],
                   const SizedBox(height: 16),
                   Row(
                     children: [

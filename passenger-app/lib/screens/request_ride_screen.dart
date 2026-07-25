@@ -43,6 +43,7 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
   bool _showMap = false;
   bool _mapReady = false;
   List<LatLng> _routePoints = [];
+  TimeOfDay? _scheduledTime;
 
   @override
   void initState() {
@@ -141,6 +142,39 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
     _loadRoute();
   }
 
+  // Formato 12h AM/PM fijo, sin depender de la configuracion regional del
+  // telefono (a diferencia de TimeOfDay.format(context), que usa 24h si el
+  // locale del dispositivo lo hace).
+  static String _formatTime12h(TimeOfDay time) {
+    final hour12 = time.hourOfPeriod == 0 ? 12 : time.hourOfPeriod;
+    final minute = time.minute.toString().padLeft(2, '0');
+    final period = time.period == DayPeriod.am ? 'AM' : 'PM';
+    return '$hour12:$minute $period';
+  }
+
+  Future<void> _pickScheduledTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _scheduledTime ?? TimeOfDay.now(),
+      // Forzado a 12h AM/PM aunque el telefono este en formato 24h.
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
+        child: child!,
+      ),
+    );
+    if (picked != null) setState(() => _scheduledTime = picked);
+  }
+
+  // Solo se elige la hora (no la fecha): si ya paso por hoy, se asume que
+  // es para mañana a esa hora -- evita pedir un despacho "programado" en
+  // el pasado.
+  DateTime _scheduledDateTime(TimeOfDay time) {
+    final now = DateTime.now();
+    var candidate = DateTime(now.year, now.month, now.day, time.hour, time.minute);
+    if (candidate.isBefore(now)) candidate = candidate.add(const Duration(days: 1));
+    return candidate;
+  }
+
   // "Mi ubicación actual" y "Punto marcado en el mapa" son etiquetas
   // genericas que se muestran en la caja de busqueda, no direcciones
   // reales -- si se guardan tal cual en el viaje, el historial (Actividad)
@@ -170,6 +204,11 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
         destinationAddress: _destinationLabel,
         passengerName: profile?['name'] ?? 'Pasajero',
         passengerPhone: profile?['phone'] ?? '',
+        scheduledPickupLabel:
+            _scheduledTime != null ? _formatTime12h(_scheduledTime!) : null,
+        scheduledPickupAt: _scheduledTime != null
+            ? _scheduledDateTime(_scheduledTime!).millisecondsSinceEpoch
+            : null,
       );
       widget.onRequested(tripId);
       if (mounted) Navigator.pop(context, tripId);
@@ -281,6 +320,35 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
           children: [
             const Text('Tu viaje', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
+            InkWell(
+              onTap: _pickScheduledTime,
+              borderRadius: BorderRadius.circular(8),
+              child: Row(
+                children: [
+                  const Icon(Icons.schedule, size: 16, color: Colors.black87),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Text(
+                      _scheduledTime != null
+                          ? 'Recogida: ${_formatTime12h(_scheduledTime!)}'
+                          : 'Recogida: Ahora',
+                      style: const TextStyle(fontSize: 14, color: Colors.black87),
+                    ),
+                  ),
+                  if (_scheduledTime != null)
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 16),
+                      onPressed: () => setState(() => _scheduledTime = null),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                ],
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 4),
+              child: Divider(height: 20),
+            ),
             if (_error != null) ...[
               Text(_error!, style: const TextStyle(color: Colors.red)),
               const SizedBox(height: 8),
@@ -297,7 +365,9 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
                         child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                       )
                     : Text(
-                        _destination == null ? 'Elige un destino' : 'Confirmar viaje',
+                        _destination == null
+                            ? 'Elige un destino'
+                            : (_scheduledTime != null ? 'Programar viaje' : 'Confirmar viaje'),
                         style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                       ),
               ),

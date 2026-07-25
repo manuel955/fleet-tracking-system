@@ -14,6 +14,10 @@ class NotificationService {
   // vibracion explicito (el enableVibration simple, sin patron, no vibraba
   // de forma confiable en algunos telefonos Samsung).
   static const String _channelId = 'trip_alert_channel_v2';
+  // Canal aparte, importancia normal (sin el patron de vibracion/TTS del de
+  // arriba): para avisos que no necesitan interrumpir con sonido fuerte,
+  // como aprobacion/rechazo de cuenta o un cambio de destino en un viaje.
+  static const String _generalChannelId = 'general_alert_channel';
   static final Int64List _vibrationPattern = Int64List.fromList([0, 800, 400, 800, 400, 800]);
   static final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
   static final FlutterTts _tts = FlutterTts();
@@ -32,10 +36,17 @@ class NotificationService {
       enableVibration: true,
       vibrationPattern: _vibrationPattern,
     );
+    final generalChannel = AndroidNotificationChannel(
+      _generalChannelId,
+      'Avisos generales',
+      description: 'Aprobacion de cuenta, cambios de viaje, etc.',
+      importance: Importance.defaultImportance,
+    );
 
-    await _plugin
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(channel);
+    final androidPlugin = _plugin
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    await androidPlugin?.createNotificationChannel(channel);
+    await androidPlugin?.createNotificationChannel(generalChannel);
 
     await _plugin.initialize(
       const InitializationSettings(
@@ -97,12 +108,19 @@ class NotificationService {
     }
   }
 
-  static Future<void> showTripAssigned() async {
+  // [scheduledPickupLabel] viene de Cloud Functions solo si el viaje fue
+  // programado por el pasajero (ver dispatchScheduledTrips en
+  // functions/index.js) -- en ese caso se avisa la hora en vez del
+  // generico "nuevo servicio".
+  static Future<void> showTripAssigned({String? scheduledPickupLabel}) async {
+    final hasSchedule = scheduledPickupLabel != null && scheduledPickupLabel.isNotEmpty;
     await initialize();
     await _plugin.show(
       900,
-      'Nuevo Servicio Asignado',
-      'Tienes un viaje nuevo. Abre la app para ver los detalles.',
+      hasSchedule ? 'Viaje Programado Asignado' : 'Nuevo Servicio Asignado',
+      hasSchedule
+          ? 'Viaje programado para las $scheduledPickupLabel. Abre la app para ver los detalles.'
+          : 'Tienes un viaje nuevo. Abre la app para ver los detalles.',
       NotificationDetails(
         android: AndroidNotificationDetails(
           _channelId,
@@ -116,7 +134,36 @@ class NotificationService {
         ),
       ),
     );
-    _speak('Nuevo servicio asignado');
+    _speak(hasSchedule ? 'Nuevo servicio programado para las $scheduledPickupLabel' : 'Nuevo servicio asignado');
+  }
+
+  // El pasajero cambio el destino de un viaje ya asignado: notificacion del
+  // canal general (sonido normal, sin el patron fuerte de "viaje asignado")
+  // + aviso hablado, para que el conductor lo note aunque no este mirando
+  // el telefono en ese momento.
+  static Future<void> showTripUpdated() async {
+    await showSimple('Viaje actualizado', 'El pasajero cambió el destino del viaje.');
+    _speak('Cambio de destino');
+  }
+
+  // Aviso simple (aprobacion/rechazo de cuenta, etc.): sin sonido fuerte ni
+  // TTS, solo notificacion normal.
+  static Future<void> showSimple(String title, String body) async {
+    await initialize();
+    await _plugin.show(
+      DateTime.now().millisecondsSinceEpoch.remainder(100000),
+      title,
+      body,
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          _generalChannelId,
+          'Avisos generales',
+          channelDescription: 'Aprobacion de cuenta, cambios de viaje, etc.',
+          importance: Importance.defaultImportance,
+          priority: Priority.defaultPriority,
+        ),
+      ),
+    );
   }
 
   // Se llama al cerrar sesion: retira cualquier notificacion de este canal

@@ -1,3 +1,4 @@
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter_android/google_maps_flutter_android.dart';
 import 'package:google_maps_flutter_platform_interface/google_maps_flutter_platform_interface.dart';
@@ -7,11 +8,15 @@ import 'screens/activity_tab_screen.dart';
 import 'screens/home_tab_screen.dart';
 import 'screens/registration_screen.dart';
 import 'screens/searching_screen.dart';
+import 'services/notification_service.dart';
 import 'services/passenger_service.dart';
+import 'services/push_service.dart';
 import 'services/trip_service.dart';
 import 'services/update_service.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
   // La app crea varios GoogleMap distintos a lo largo de una sesion
   // (pedir viaje, seguimiento del viaje activo). El modo de renderizado por
   // defecto (virtual display) puede dejar el segundo/tercer mapa en blanco
@@ -21,6 +26,9 @@ void main() {
   if (mapsImplementation is GoogleMapsFlutterAndroid) {
     mapsImplementation.useAndroidViewSurface = true;
   }
+
+  await NotificationService.initialize();
+  await PushService.initialize();
   runApp(const FleetPassengerApp());
 }
 
@@ -227,6 +235,27 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
 
   Future<void> _bootstrap() async {
     final registered = await PassengerService.isRegistered();
+
+    // Con la app visible, el push llega por aqui en vez de por el handler
+    // de background -- mismo patron que driver-app/lib/main.dart.
+    FirebaseMessaging.onMessage.listen((message) {
+      switch (message.data['type']) {
+        case 'driver_arrived':
+          NotificationService.showSimple(
+            'Tu conductor llegó',
+            'Te está esperando en el punto de recogida.',
+          );
+          break;
+        case 'trip_updated':
+          NotificationService.showSimple(
+            'Viaje actualizado',
+            'El destino de tu viaje cambió.',
+          );
+          break;
+      }
+    });
+    if (registered) PushService.registerToken();
+
     final activeTripId = await TripService.getActiveTripId();
 
     Map<String, dynamic>? trip;
@@ -252,7 +281,10 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
     });
   }
 
-  void _onRegistered() => setState(() => _registered = true);
+  void _onRegistered() {
+    PushService.registerToken();
+    setState(() => _registered = true);
+  }
 
   void _onLoggedOut() {
     setState(() {

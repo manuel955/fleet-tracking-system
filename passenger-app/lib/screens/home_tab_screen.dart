@@ -3,6 +3,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'destination_picker_screen.dart';
+import 'preset_places_screen.dart';
 import 'request_ride_screen.dart';
 import '../widgets/support_button.dart';
 
@@ -60,8 +61,21 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
         builder: (_) => DestinationPickerScreen(initialCenter: _pickup),
       ),
     );
-    if (result == null || !mounted) return;
+    if (result != null) await _requestWithDestination(result);
+  }
 
+  Future<void> _openPresetPlaces(String title, String configKey) async {
+    final result = await Navigator.push<DestinationPickerResult>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PresetPlacesScreen(title: title, configKey: configKey),
+      ),
+    );
+    if (result != null) await _requestWithDestination(result);
+  }
+
+  Future<void> _requestWithDestination(DestinationPickerResult result) async {
+    if (!mounted) return;
     final tripId = await Navigator.push<String>(
       context,
       MaterialPageRoute(
@@ -165,6 +179,49 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
             child: Padding(
               padding: EdgeInsets.only(top: 12),
               child: SupportButton(),
+            ),
+          ),
+        ),
+        Positioned(
+          left: 16,
+          right: 16,
+          bottom: 16,
+          child: SafeArea(
+            top: false,
+            child: Row(
+              children: [
+                Expanded(
+                  child: FloatingActionButton.extended(
+                    heroTag: 'sport-venues-fab',
+                    backgroundColor: Colors.white,
+                    foregroundColor: Colors.black,
+                    icon: const Icon(Icons.sports_soccer, size: 20),
+                    label: const Text(
+                      'Sedes deportivas',
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                      style: TextStyle(fontSize: 13),
+                    ),
+                    onPressed: () => _openPresetPlaces('Sedes deportivas', 'sportVenues'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FloatingActionButton.extended(
+                    heroTag: 'hotels-fab',
+                    backgroundColor: Colors.white,
+                    foregroundColor: Colors.black,
+                    icon: const Icon(Icons.hotel, size: 20),
+                    label: const Text(
+                      'Hoteles',
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                      style: TextStyle(fontSize: 13),
+                    ),
+                    onPressed: () => _openPresetPlaces('Hoteles', 'hotels'),
+                  ),
+                ),
+              ],
             ),
           ),
         ),

@@ -3,10 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../services/car_icon.dart';
 import '../services/directions_service.dart';
 import '../services/trip_service.dart';
 import '../widgets/labeled_icon_button.dart';
 import '../widgets/support_button.dart';
+import 'destination_picker_screen.dart';
 
 /// Viaje ya aceptado por un conductor, estilo Uber: mapa a pantalla
 /// completa con un panel inferior fijo mostrando el estado y los datos del
@@ -41,6 +43,8 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
   LatLng? _lastRouteOrigin;
   ({double lat, double lng})? _lastRouteTarget;
   int _routeReqToken = 0;
+  bool _busy = false;
+  BitmapDescriptor? _carIcon;
 
   @override
   void initState() {
@@ -49,6 +53,9 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
     _tripTimer = Timer.periodic(const Duration(seconds: 4), (_) => _pollTrip());
     _driverTimer = Timer.periodic(const Duration(seconds: 5), (_) => _pollDriver());
     _pollDriver();
+    CarIcon.build().then((icon) {
+      if (mounted) setState(() => _carIcon = icon);
+    });
   }
 
   @override
@@ -158,6 +165,81 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
     }
   }
 
+  // Cancelar solo se ofrece hasta que el conductor marca "pasajero a
+  // bordo" (in_progress) -- desde ahi en adelante las reglas de RTDB lo
+  // bloquean del lado servidor (ver database/firebase-rules.json).
+  bool get _canCancel {
+    final status = _trip['status'] as String?;
+    return status == 'accepted' || status == 'arrived_at_pickup';
+  }
+
+  Future<void> _cancel() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cancelar viaje'),
+        content: const Text('¿Seguro que quieres cancelar este viaje?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('No'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Sí, cancelar', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _busy = true);
+    try {
+      await TripService.cancelTrip(widget.tripId);
+      widget.onFinished();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+        setState(() => _busy = false);
+      }
+    }
+  }
+
+  Future<void> _modifyDestination() async {
+    final pickup = LatLng(
+      (_trip['pickupLat'] as num).toDouble(),
+      (_trip['pickupLng'] as num).toDouble(),
+    );
+    final result = await Navigator.push<DestinationPickerResult>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => DestinationPickerScreen(
+          initialCenter: pickup,
+          pickupLabel: _trip['pickupAddress'] as String? ?? 'Mi ubicación actual',
+        ),
+      ),
+    );
+    if (result == null) return;
+
+    setState(() => _busy = true);
+    try {
+      await TripService.updateDestination(
+        widget.tripId,
+        destinationLat: result.lat,
+        destinationLng: result.lng,
+        destinationAddress: result.description,
+      );
+      final trip = await TripService.getTrip(widget.tripId);
+      if (mounted && trip != null) setState(() => _trip = trip);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   String get _statusLabel {
     switch (_trip['status'] as String?) {
       case 'accepted':
@@ -200,6 +282,8 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
                   Marker(
                     markerId: const MarkerId('driver'),
                     position: _driverLatLng!,
+                    icon: _carIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+                    anchor: const Offset(0.5, 0.5),
                     infoWindow: const InfoWindow(title: 'Conductor'),
                   ),
                 if (_trip['status'] == 'in_progress' &&
@@ -252,6 +336,13 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(_statusLabel, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  if ((_trip['scheduledPickupLabel'] as String?)?.isNotEmpty == true) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      'Recogida programada: ${_trip['scheduledPickupLabel']}',
+                      style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                    ),
+                  ],
                   const SizedBox(height: 16),
                   Row(
                     children: [
@@ -286,6 +377,30 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
                         color: const Color(0xFF06C167),
                         onTap: _callDriver,
                       ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: _busy ? null : _modifyDestination,
+                          child: const Text('Modificar viaje'),
+                        ),
+                      ),
+                      if (_canCancel) ...[
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: _busy ? null : _cancel,
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.red,
+                              side: const BorderSide(color: Colors.red),
+                            ),
+                            child: const Text('Cancelar viaje'),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ],

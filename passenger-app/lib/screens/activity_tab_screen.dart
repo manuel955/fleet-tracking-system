@@ -32,6 +32,8 @@ class _ActivityTabScreenState extends State<ActivityTabScreen> {
         return 'Cancelado';
       case 'no_drivers_available':
         return 'Sin conductores';
+      case 'scheduled':
+        return 'Programado';
       default:
         return status ?? '-';
     }

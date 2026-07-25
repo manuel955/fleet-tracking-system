@@ -15,8 +15,31 @@ import 'notification_service.dart';
 // onMessage y lo atiende el polling de main.dart, no este handler.
 @pragma('vm:entry-point')
 Future<void> pushBackgroundHandler(RemoteMessage message) async {
-  if (message.data['type'] != 'trip_assigned') return;
-  await NotificationService.showTripAssigned();
+  switch (message.data['type']) {
+    case 'trip_assigned':
+      await NotificationService.showTripAssigned(
+        scheduledPickupLabel: message.data['scheduledPickupLabel'] as String?,
+      );
+      break;
+    case 'trip_updated':
+      await NotificationService.showTripUpdated();
+      break;
+    case 'approval_status':
+      final status = message.data['status'];
+      if (status == 'approved') {
+        await NotificationService.showSimple(
+          'Cuenta aprobada',
+          'Ya puedes empezar a recibir viajes.',
+        );
+      } else if (status == 'rejected') {
+        final reason = message.data['rejectionReason'] as String? ?? '';
+        await NotificationService.showSimple(
+          'Registro rechazado',
+          reason.isNotEmpty ? reason : 'Revisa tus documentos e intenta de nuevo.',
+        );
+      }
+      break;
+  }
 }
 
 /// Registra el dispositivo en FCM y guarda el token en

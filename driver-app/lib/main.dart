@@ -335,7 +335,34 @@ class _DriverHomePageState extends State<DriverHomePage> {
     // viaje de inmediato. El aviso sonoro lo pone _pollForTrip, que ya
     // deduplica por tripId.
     FirebaseMessaging.onMessage.listen((message) {
-      if (message.data['type'] == 'trip_assigned') _pollForTrip();
+      switch (message.data['type']) {
+        case 'trip_assigned':
+          _pollForTrip();
+          break;
+        case 'trip_updated':
+          _pollForTrip();
+          NotificationService.showTripUpdated();
+          break;
+        case 'approval_status':
+          // Refresca el perfil para que la pantalla de "pendiente de
+          // aprobacion" reaccione sin que el conductor tenga que reabrir
+          // la app.
+          _afterAuthResolved();
+          final status = message.data['status'];
+          if (status == 'approved') {
+            NotificationService.showSimple(
+              'Cuenta aprobada',
+              'Ya puedes empezar a recibir viajes.',
+            );
+          } else if (status == 'rejected') {
+            final reason = message.data['rejectionReason'] as String? ?? '';
+            NotificationService.showSimple(
+              'Registro rechazado',
+              reason.isNotEmpty ? reason : 'Revisa tus documentos e intenta de nuevo.',
+            );
+          }
+          break;
+      }
     });
 
     final loggedIn = await AuthService.isLoggedIn();
@@ -502,7 +529,9 @@ class _DriverHomePageState extends State<DriverHomePage> {
       // la app ya este la pantalla del viaje activo.
       if (_tripId != tripId &&
           WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
-        NotificationService.showTripAssigned();
+        NotificationService.showTripAssigned(
+          scheduledPickupLabel: trip['scheduledPickupLabel'] as String?,
+        );
       }
 
       setState(() {
