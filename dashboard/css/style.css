@@ -710,6 +710,35 @@ button, input { font-family: inherit; }
   max-width: 420px;
 }
 
+.settings-home-heading { margin: 4px 0 20px; }
+.settings-home-heading h2 { margin: 0; font-size: 20px; letter-spacing: -0.02em; }
+.settings-home-heading p { margin: 6px 0 0; color: var(--gray-500); font-size: 14px; }
+
+.settings-shortcuts,
+.settings-home-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+  gap: 16px;
+  max-width: 1160px;
+}
+.settings-shortcuts { margin-bottom: 16px; }
+.settings-shortcuts .settings-section-link {
+  min-height: 112px;
+  margin: 0;
+  padding: 20px;
+  background: var(--white);
+  border-radius: var(--radius-lg);
+}
+.settings-home-grid .settings-card { max-width: none; margin: 0; }
+
+.dashboard-users-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  gap: 16px;
+  max-width: 1160px;
+}
+.dashboard-users-grid .settings-card { max-width: none; margin: 0; }
+
 .settings-card h3 {
   font-size: 15px;
   font-weight: 700;
@@ -771,6 +800,7 @@ button, input { font-family: inherit; }
 .settings-feedback.error { color: var(--red); }
 
 .settings-card + .settings-card { margin-top: 20px; }
+.settings-home-grid .settings-card + .settings-card { margin-top: 0; }
 
 .settings-section-link {
   width: 100%;
@@ -793,6 +823,11 @@ button, input { font-family: inherit; }
 .settings-section-link b { font-size: 13.5px; }
 .settings-section-link small { margin-top: 3px; color: var(--gray-500); font-size: 12px; }
 .settings-section-link > span:last-child { font-size: 24px; line-height: 1; }
+
+@media (max-width: 620px) {
+  .settings-shortcuts, .settings-home-grid, .dashboard-users-grid { grid-template-columns: 1fr; }
+  .settings-card { padding: 20px; }
+}
 
 .settings-back {
   margin-bottom: 14px;

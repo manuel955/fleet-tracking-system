@@ -95,32 +95,35 @@ function renderSettings() {
   }
 
   settingsViewEl.innerHTML = `
-    <div class="settings-card">
-      <h3>Configuración</h3>
-      <p class="settings-hint">Administra las opciones y herramientas del sistema.</p>
-      ${window.dashboardIsAdmin ? `<button type="button" id="open-updates" class="settings-section-link">
+    <div class="settings-home-heading">
+      <h2>Panel de administración</h2>
+      <p>Gestiona las aplicaciones, los accesos y la información del panel.</p>
+    </div>
+    ${window.dashboardIsAdmin ? `<div class="settings-shortcuts">
+      <button type="button" id="open-updates" class="settings-section-link">
         <span>
           <b>Actualizaciones</b>
           <small>Publica nuevas versiones de las apps</small>
         </span>
         <span aria-hidden="true">›</span>
-      </button>` : ''}
-      ${window.dashboardIsAdmin ? `<button type="button" id="open-apps" class="settings-section-link">
+      </button>
+      <button type="button" id="open-apps" class="settings-section-link">
         <span>
           <b>Apps</b>
           <small>Cambia el nombre y el ícono de cada app</small>
         </span>
         <span aria-hidden="true">›</span>
-      </button>` : ''}
-      ${window.dashboardIsAdmin ? `<button type="button" id="open-dashboard-users" class="settings-section-link">
+      </button>
+      <button type="button" id="open-dashboard-users" class="settings-section-link">
         <span>
           <b>Usuarios del dashboard</b>
           <small>Crea y administra quién puede ingresar</small>
         </span>
         <span aria-hidden="true">›</span>
-      </button>` : ''}
-    </div>
+      </button>
+    </div>` : ''}
 
+    <div class="settings-home-grid">
     ${window.dashboardIsAdmin ? `<div class="settings-card">
       <h3>Nombre del dashboard</h3>
       <p class="settings-hint">Nombre que aparece en el inicio de sesión y la barra superior.</p>
@@ -159,6 +162,7 @@ function renderSettings() {
         <button type="submit">Guardar</button>
       </form>
       <p id="settings-feedback" class="settings-feedback"></p>
+    </div>
     </div>
   `;
 
@@ -250,6 +254,7 @@ function renderDashboardUsers() {
   }
   settingsViewEl.innerHTML = `
     <button type="button" id="back-to-settings" class="settings-back">← Configuración</button>
+    <div class="dashboard-users-grid">
     <div class="settings-card apps-settings-card">
       <h3>Nuevo usuario</h3>
       <form id="create-dashboard-user" class="app-branding-form">
@@ -270,6 +275,7 @@ function renderDashboardUsers() {
     <div class="settings-card apps-settings-card">
       <h3>Usuarios con acceso</h3>
       ${dashboardUsers.map((user) => dashboardUserCardHtml(user)).join('') || '<p class="settings-hint">No hay usuarios.</p>'}
+    </div>
     </div>
   `;
   document.getElementById('back-to-settings').addEventListener('click', () => { settingsSection = 'home'; renderSettings(); });
