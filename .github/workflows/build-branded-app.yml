@@ -30,6 +30,7 @@ jobs:
       REQUEST_ID: ${{ inputs.request_id }}
       BUILD_TOKEN: ${{ inputs.build_token }}
       ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+      GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -72,6 +73,14 @@ jobs:
           fi
           mkdir -p "$HOME/.android"
           echo "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"
+
+      - name: Restore Firebase Android configuration
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "Falta la configuracion privada de Firebase para Android"
+            exit 1
+          fi
+          echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > "$APP_KIND-app/android/app/google-services.json"
 
       - uses: subosito/flutter-action@v2
         with:
