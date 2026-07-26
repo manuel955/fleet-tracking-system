@@ -125,17 +125,15 @@ function renderSettings() {
 
     <div class="settings-home-grid">
     ${window.dashboardIsAdmin ? `<div class="settings-card">
-      <h3>Nombre del dashboard</h3>
-      <p class="settings-hint">Nombre que aparece en el inicio de sesión y la barra superior.</p>
+      <h3>Dashboard</h3>
+      <p class="settings-hint">Personaliza el nombre y el logo que aparecen en el inicio de sesión y la barra superior.</p>
+      <label class="settings-field-label" for="dashboard-name-input">Nombre del dashboard</label>
       <form id="dashboard-name-form" class="settings-form">
         <input id="dashboard-name-input" maxlength="60" value="${escapeHtml(currentDashboardName)}" required />
         <button type="submit">Guardar</button>
       </form>
       <p id="dashboard-name-feedback" class="settings-feedback"></p>
-    </div>` : ''}
-
-    ${window.dashboardIsAdmin ? `<div class="settings-card">
-      <h3>Logo del dashboard</h3>
+      <label class="settings-field-label" for="dashboard-logo-input">Logo del dashboard</label>
       <p class="settings-hint">PNG, JPG o WebP de hasta 2 MB.</p>
       <form id="dashboard-logo-form" class="app-branding-form">
         <input id="dashboard-logo-input" type="file" accept="image/png,image/jpeg,image/webp" />

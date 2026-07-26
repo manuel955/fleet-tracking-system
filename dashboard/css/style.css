@@ -753,6 +753,13 @@ button, input { font-family: inherit; }
   margin-bottom: 16px;
 }
 
+.settings-field-label {
+  display: block;
+  margin: 14px 0 7px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .settings-form {
   display: flex;
   gap: 8px;
