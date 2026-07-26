@@ -760,6 +760,32 @@ button, input { font-family: inherit; }
 }
 .dashboard-add-user-btn:hover { background: var(--gray-800); }
 .dashboard-create-panel { max-width: 520px; margin-bottom: 16px; }
+.dashboard-user-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 22px;
+  background: rgba(0, 0, 0, 0.38);
+}
+.dashboard-user-modal-card {
+  position: relative;
+  width: min(100%, 580px);
+  padding: 30px 36px;
+  border-radius: var(--radius-lg);
+  background: var(--white);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.24);
+}
+.dashboard-user-modal-card h3 { margin: 0 0 22px; font-size: 21px; }
+.dashboard-user-modal-card .app-branding-form { gap: 14px; }
+.dashboard-user-modal-card label { display: grid; gap: 7px; font-size: 14px; font-weight: 700; }
+.dashboard-user-modal-card input,
+.dashboard-user-modal-card select { width: 100%; box-sizing: border-box; padding: 12px 14px; border: 1px solid var(--gray-300); border-radius: var(--radius-sm); font: inherit; }
+.dashboard-user-modal-card .app-branding-form button[type="submit"] { align-self: flex-end; min-width: 90px; }
+.dashboard-modal-close { position: absolute; top: 16px; right: 18px; border: 0; background: none; color: var(--gray-500); font-size: 29px; line-height: 1; cursor: pointer; }
+.dashboard-modal-close:hover { color: var(--black); }
 .dashboard-users-table-wrap {
   max-width: 1160px;
   overflow-x: auto;

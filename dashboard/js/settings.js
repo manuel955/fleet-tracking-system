@@ -251,15 +251,19 @@ function renderDashboardUsers() {
        </div>
        <button type="button" id="show-create-dashboard-user" class="dashboard-add-user-btn">Nuevo usuario</button>
     </div>
-    <div id="dashboard-create-panel" class="settings-card apps-settings-card dashboard-create-panel${dashboardUserCreateOpen ? '' : ' hidden'}">
+    <div id="dashboard-create-panel" class="dashboard-user-modal${dashboardUserCreateOpen ? '' : ' hidden'}">
+      <div class="dashboard-user-modal-card">
+      <button type="button" id="close-create-dashboard-user" class="dashboard-modal-close" aria-label="Cerrar">×</button>
       <h3>Nuevo usuario</h3>
       <form id="create-dashboard-user" class="app-branding-form">
-        <input id="new-dashboard-email" type="email" placeholder="correo@empresa.com" required />
-        <input id="new-dashboard-password" type="password" placeholder="Contraseña temporal (mínimo 6 caracteres)" minlength="6" required />
-        <select id="new-dashboard-role"><option value="supervisor">Supervisor</option><option value="admin">Administrador</option></select>
+        <label>Nombre<input id="new-dashboard-name" type="text" maxlength="60" required /></label>
+        <label>Email<input id="new-dashboard-email" type="email" placeholder="correo@empresa.com" required /></label>
+        <label>Contraseña<input id="new-dashboard-password" type="password" placeholder="Mínimo 6 caracteres" minlength="6" required /></label>
+        <label>Rol<select id="new-dashboard-role"><option value="supervisor">Supervisor</option><option value="admin">Administrador</option></select></label>
         <button type="submit">Crear usuario</button>
       </form>
       <p id="dashboard-users-feedback" class="settings-feedback"></p>
+      </div>
     </div>
     <div class="dashboard-users-table-wrap">
       <table class="dashboard-users-table">
@@ -273,12 +277,13 @@ function renderDashboardUsers() {
     dashboardUserCreateOpen = !dashboardUserCreateOpen;
     renderDashboardUsers();
   });
+  document.getElementById('close-create-dashboard-user').addEventListener('click', () => { dashboardUserCreateOpen = false; renderDashboardUsers(); });
   document.getElementById('create-dashboard-user').addEventListener('submit', async (event) => {
     event.preventDefault();
     const feedback = document.getElementById('dashboard-users-feedback');
     try {
       feedback.textContent = 'Creando…';
-      await dashboardUsersRequest({ action: 'create', email: document.getElementById('new-dashboard-email').value, password: document.getElementById('new-dashboard-password').value, role: document.getElementById('new-dashboard-role').value });
+      await dashboardUsersRequest({ action: 'create', name: document.getElementById('new-dashboard-name').value, email: document.getElementById('new-dashboard-email').value, password: document.getElementById('new-dashboard-password').value, role: document.getElementById('new-dashboard-role').value });
       dashboardUserCreateOpen = false;
       await loadDashboardUsers();
     } catch (error) { feedback.textContent = error.message; feedback.className = 'settings-feedback error'; }
@@ -287,7 +292,7 @@ function renderDashboardUsers() {
 }
 
 function dashboardUserCardHtml(user) {
-  const name = user.email ? user.email.split('@')[0] : 'Usuario';
+  const name = user.name || (user.email ? user.email.split('@')[0] : 'Usuario');
   const state = user.disabled ? 'Inactivo' : 'Activo';
   return `<tr>
     <td><b>${escapeHtml(name)}</b>${user.isCurrent ? ' <small>(tu)</small>' : ''}</td>
@@ -295,7 +300,7 @@ function dashboardUserCardHtml(user) {
     <td>${user.isCurrent ? '<span class="dashboard-role-static">Administrador</span>' : `<select id="dashboard-role-${user.uid}" class="dashboard-role-select"><option value="supervisor"${user.role === 'supervisor' ? ' selected' : ''}>Supervisor</option><option value="admin"${user.role === 'admin' ? ' selected' : ''}>Administrador</option></select>`}</td>
     <td><span class="dashboard-status ${user.disabled ? 'inactive' : 'active'}">${state}</span></td>
     <td>${formatDashboardDate(user.createdAt)}</td>
-    <td class="dashboard-user-actions"><button type="button" data-save-user="${user.uid}" class="dashboard-table-action">Guardar</button><button type="button" data-password-user="${user.uid}" class="dashboard-table-action">Contrasena</button>${user.isCurrent ? '' : `<button type="button" data-delete-user="${user.uid}" class="dashboard-table-action danger">Eliminar</button>`}</td>
+    <td class="dashboard-user-actions"><button type="button" data-save-user="${user.uid}" class="dashboard-table-action">Editar</button>${user.isCurrent ? '' : `<button type="button" data-delete-user="${user.uid}" class="dashboard-table-action danger">Eliminar</button>`}</td>
   </tr>`;
 }
 
@@ -305,11 +310,6 @@ function bindDashboardUserControls(user) {
       await dashboardUsersRequest({ action: 'update', uid: user.uid, role: user.isCurrent ? 'admin' : document.getElementById(`dashboard-role-${user.uid}`).value });
       await loadDashboardUsers();
     } catch (error) { alert(error.message); }
-  });
-  document.querySelector(`[data-password-user="${user.uid}"]`).addEventListener('click', async () => {
-    const password = prompt(`Nueva contrasena para ${user.email} (minimo 6 caracteres):`);
-    if (password === null || !password.trim()) return;
-    try { await dashboardUsersRequest({ action: 'update', uid: user.uid, password: password.trim() }); alert('Contrasena actualizada.'); } catch (error) { alert(error.message); }
   });
   const remove = document.querySelector(`[data-delete-user="${user.uid}"]`);
   if (remove) remove.addEventListener('click', async () => {

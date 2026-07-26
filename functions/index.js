@@ -178,7 +178,7 @@ exports.manageDashboardUsers = functions.https.onRequest(async (req, res) => {
         const page = await admin.auth().listUsers(1000, pageToken);
         page.users.forEach((user) => {
           if (user.customClaims?.dashboardUser || user.customClaims?.dashboardAdmin || user.uid === manager.uid) {
-            users.push({ uid: user.uid, email: user.email || '', disabled: user.disabled, role: user.customClaims?.dashboardAdmin ? 'admin' : 'supervisor', isCurrent: user.uid === manager.uid, createdAt: user.metadata.creationTime || '' });
+            users.push({ uid: user.uid, name: user.displayName || '', email: user.email || '', disabled: user.disabled, role: user.customClaims?.dashboardAdmin ? 'admin' : 'supervisor', isCurrent: user.uid === manager.uid, createdAt: user.metadata.creationTime || '' });
           }
         });
         pageToken = page.pageToken;
@@ -187,9 +187,10 @@ exports.manageDashboardUsers = functions.https.onRequest(async (req, res) => {
     }
     if (action === 'create') {
       const email = String(req.body?.email || '').trim();
+      const name = String(req.body?.name || '').trim();
       const password = String(req.body?.password || '');
       if (!email || password.length < 6) return res.status(400).json({ error: 'Correo y contraseña de al menos 6 caracteres son requeridos' });
-      const user = await admin.auth().createUser({ email, password });
+      const user = await admin.auth().createUser({ email, password, displayName: name });
       const role = req.body?.role === 'admin' ? 'admin' : 'supervisor';
       await admin.auth().setCustomUserClaims(user.uid, { dashboardUser: true, dashboardAdmin: role === 'admin' });
       return res.status(201).json({ uid: user.uid });
