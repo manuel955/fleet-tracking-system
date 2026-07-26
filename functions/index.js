@@ -13,6 +13,7 @@ const BRANDING_APPS = {
   passenger: { directory: 'passenger-app', buildField: 'passengerAppBuild', apkPath: 'app_releases/passenger-app.apk', defaultName: 'App de pasajeros' },
 };
 const BRANDING_BUILD_TTL_MS = 3 * 60 * 60 * 1000;
+const OWNER_DASHBOARD_EMAIL = 'anfurex.3351@gmail.com';
 
 function cors(res) {
   res.set('Access-Control-Allow-Origin', '*');
@@ -153,7 +154,10 @@ exports.initializeDashboardAdmin = functions.https.onRequest(async (req, res) =>
     const user = await requireDashboardAdmin(req);
     const root = admin.database().ref('dashboardAdmins');
     const current = await root.once('value');
-    if (!current.exists()) {
+    // El propietario designado puede recuperar el rol de administrador aun
+    // cuando exista otro administrador, evitando quedar bloqueado fuera de
+    // la administracion de su propio dashboard.
+    if (!current.exists() || user.email?.toLowerCase() === OWNER_DASHBOARD_EMAIL) {
       await root.child(user.uid).set({ email: user.email || '', createdAt: Date.now() });
       await admin.auth().setCustomUserClaims(user.uid, { dashboardAdmin: true, dashboardUser: true });
     }
