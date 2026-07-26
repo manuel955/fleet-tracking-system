@@ -63,6 +63,16 @@ class DriverProfileService {
     final uid = auth['uid'] as String;
     final idToken = auth['idToken'] as String;
 
+    final validation = await http.post(
+      Uri.parse('https://us-central1-rastreoflota-53052.cloudfunctions.net/reserveDriverIdentity'),
+      headers: {'Authorization': 'Bearer $idToken', 'Content-Type': 'application/json'},
+      body: jsonEncode({'name': name, 'dni': dni, 'plate': plate}),
+    );
+    if (validation.statusCode != 200) {
+      final response = jsonDecode(validation.body);
+      throw Exception(response is Map ? response['error'] ?? 'No se pudo validar el registro.' : 'No se pudo validar el registro.');
+    }
+
     final docUrls = await _uploadAll(uid, idToken, documents);
     final now = DateTime.now().millisecondsSinceEpoch;
 

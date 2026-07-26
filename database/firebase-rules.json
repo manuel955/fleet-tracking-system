@@ -84,6 +84,12 @@
         "currentTripId": { ".validate": "newData.isString()" },
         "fcmToken": { ".validate": "newData.isString()" },
         "activeSessionId": { ".validate": "newData.isString()" },
+        "assignedPlace": {
+          ".write": "auth != null && auth.token.dashboardAdmin === true",
+          "name": { ".validate": "newData.isString()" },
+          "type": { ".validate": "newData.isString()" },
+          "assignedAt": { ".validate": "newData.isNumber()" }
+        },
         "$other": { ".validate": false }
       }
     },
@@ -135,6 +141,14 @@
         "cancelReason": { ".validate": "newData.isString()" },
         "$other": { ".validate": false }
       }
+    },
+    "tripHistory": {
+      ".read": "auth != null && auth.token.dashboardAdmin === true",
+      ".write": false
+    },
+    "driverConnectionHistory": {
+      ".read": "auth != null && auth.token.dashboardAdmin === true",
+      ".write": false
     }
   }
 }

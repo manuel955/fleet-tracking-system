@@ -643,6 +643,9 @@ button, input { font-family: inherit; }
   gap: 8px;
   margin-top: 12px;
 }
+.assign-place-select { flex: 1; min-width: 150px; padding: 8px; border: 1px solid var(--gray-200); border-radius: var(--radius-sm); }
+.delete-driver-btn { border: 1px solid var(--red); border-radius: var(--radius-sm); background: var(--white); color: var(--red); padding: 8px 10px; font-weight: 700; cursor: pointer; }
+.delete-driver-btn:hover { background: var(--red-tint); }
 
 .approve-btn, .reject-btn {
   flex: 1;
@@ -1009,6 +1012,7 @@ button, input { font-family: inherit; }
   padding-top: 16px;
   border-top: 1px solid var(--gray-150);
 }
+.place-settings-card { max-width: none; width: min(100%, 1100px); }
 
 .place-row {
   display: flex;

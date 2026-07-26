@@ -22,8 +22,11 @@ const APPROVAL_LABELS = {
 
 let adminDriversCache = {};
 let adminSubscribed = false;
-let adminActiveFilter = 'pending_review';
+let adminActiveFilter = 'approved';
 let openRejectFormId = null;
+let adminPlacesCache = { hotels: {}, sportVenues: {} };
+let adminTripHistory = {};
+let adminConnectionHistory = {};
 
 const mapViewEl = document.getElementById('map-view');
 const adminViewEl = document.getElementById('drivers-admin-view');
@@ -59,6 +62,22 @@ function startDriversAdmin() {
     updatePendingBadge();
     renderDriversAdmin();
   });
+  ['hotels', 'sportVenues'].forEach((key) => db.ref(`config/${key}`).on('value', (snapshot) => {
+    adminPlacesCache[key] = snapshot.val() || {};
+    renderDriversAdmin();
+  }));
+  db.ref('tripHistory').on('value', (snapshot) => { adminTripHistory = snapshot.val() || {}; renderDriversAdmin(); });
+  db.ref('driverConnectionHistory').on('value', (snapshot) => { adminConnectionHistory = snapshot.val() || {}; renderDriversAdmin(); });
+}
+
+function driverPlaceOptions(d) {
+  const current = d.assignedPlace?.name || '';
+  const options = [
+    '<option value="">Asignar hotel o sede…</option>',
+    ...Object.values(adminPlacesCache.hotels).map((place) => `<option value="hotel|${escapeHtml(place.name)}"${current === place.name ? ' selected' : ''}>Hotel: ${escapeHtml(place.name)}</option>`),
+    ...Object.values(adminPlacesCache.sportVenues).map((place) => `<option value="sportVenue|${escapeHtml(place.name)}"${current === place.name ? ' selected' : ''}>Sede: ${escapeHtml(place.name)}</option>`),
+  ];
+  return options.join('');
 }
 
 function updatePendingBadge() {
@@ -137,11 +156,15 @@ function driverAdminCardHtml(driverId, d) {
         <div class="row"><b>Teléfono:</b> ${escapeHtml(d.phone || '-')}</div>
         <div class="row"><b>Placa:</b> ${escapeHtml(d.plate || '-')}</div>
         <div class="row"><b>Edad:</b> ${escapeHtml(String(d.age ?? '-'))}</div>
+        <div class="row"><b>Lugar asignado:</b> ${escapeHtml(d.assignedPlace?.name || '-')}</div>
       </div>
       ${rejectionBlock}
       <div class="doc-grid">${docsHtml}</div>
       <div class="driver-admin-actions">
         <button type="button" class="view-file-btn" data-action="view-file" data-id="${driverId}">Ver archivo completo</button>
+        <select class="assign-place-select" data-place-select="${driverId}">${driverPlaceOptions(d)}</select>
+        <button type="button" class="view-file-btn" data-action="assign-place" data-id="${driverId}">Asignar lugar</button>
+        <button type="button" class="delete-driver-btn" data-action="delete-driver" data-id="${driverId}">Eliminar conductor</button>
       </div>
       ${actionsHtml}
     </div>
@@ -149,6 +172,10 @@ function driverAdminCardHtml(driverId, d) {
 }
 
 function renderDriversAdmin() {
+  if (adminActiveFilter === 'trip-history' || adminActiveFilter === 'connection-history') {
+    renderDriversHistory();
+    return;
+  }
   const entries = Object.entries(adminDriversCache).filter(([, d]) => {
     if (adminActiveFilter === 'all') return true;
     return (d.approvalStatus || 'pending_review') === adminActiveFilter;
@@ -156,11 +183,11 @@ function renderDriversAdmin() {
 
   const toolbarHtml = `
     <div class="drivers-admin-toolbar">
-      ${['pending_review', 'approved', 'rejected', 'all']
+      ${['approved', 'pending_review', 'rejected', 'all', 'trip-history', 'connection-history']
         .map(
           (f) => `
         <button type="button" class="filter-pill ${adminActiveFilter === f ? 'active' : ''}" data-admin-filter="${f}">
-          ${f === 'all' ? 'Todos' : APPROVAL_LABELS[f]}
+          ${f === 'all' ? 'Todos' : f === 'trip-history' ? 'Historial de viajes' : f === 'connection-history' ? 'Conexiones' : APPROVAL_LABELS[f]}
         </button>
       `
         )
@@ -196,6 +223,13 @@ function renderDriversAdmin() {
     });
   });
 
+  adminViewEl.querySelectorAll('[data-action="assign-place"]').forEach((btn) => {
+    btn.addEventListener('click', () => assignDriverPlace(btn.getAttribute('data-id')));
+  });
+  adminViewEl.querySelectorAll('[data-action="delete-driver"]').forEach((btn) => {
+    btn.addEventListener('click', () => deleteDriver(btn.getAttribute('data-id')));
+  });
+
   adminViewEl.querySelectorAll('[data-reject-form]').forEach((form) => {
     form.addEventListener('submit', (e) => {
       e.preventDefault();
@@ -205,6 +239,42 @@ function renderDriversAdmin() {
       rejectDriver(driverId, reason);
     });
   });
+}
+
+function historyToolbarHtml() {
+  return `<div class="drivers-admin-toolbar">${['approved', 'pending_review', 'rejected', 'all', 'trip-history', 'connection-history'].map((f) => `<button type="button" class="filter-pill ${adminActiveFilter === f ? 'active' : ''}" data-admin-filter="${f}">${f === 'all' ? 'Todos' : f === 'trip-history' ? 'Historial de viajes' : f === 'connection-history' ? 'Conexiones' : APPROVAL_LABELS[f]}</button>`).join('')}</div>`;
+}
+
+function renderDriversHistory() {
+  const isTrips = adminActiveFilter === 'trip-history';
+  const rows = isTrips
+    ? Object.entries(adminTripHistory).map(([id, trip]) => `<tr><td>${new Date(trip.completedAt || trip.cancelledAt || trip.archivedAt).toLocaleString('es-PE')}</td><td>${escapeHtml(trip.driverName || '-')}</td><td>${escapeHtml(trip.passengerName || '-')}</td><td>${escapeHtml(trip.pickupAddress || '-')}</td><td>${escapeHtml(trip.destinationAddress || '-')}</td><td>${escapeHtml(trip.status || '-')}</td></tr>`)
+    : Object.entries(adminConnectionHistory).flatMap(([driverId, events]) => Object.values(events || {}).map((event) => `<tr><td>${new Date(event.at).toLocaleString('es-PE')}</td><td>${escapeHtml(event.driverName || driverId)}</td><td>${event.status === 'online' ? 'Conectado' : 'Desconectado'}</td></tr>`));
+  adminViewEl.innerHTML = `${historyToolbarHtml()}<div class="dashboard-users-table-wrap"><table class="dashboard-users-table"><thead><tr>${isTrips ? '<th>Fecha</th><th>Conductor</th><th>Pasajero</th><th>Origen</th><th>Destino</th><th>Estado</th>' : '<th>Fecha</th><th>Conductor</th><th>Evento</th>'}</tr></thead><tbody>${rows.join('') || `<tr><td colspan="${isTrips ? 6 : 3}" class="dashboard-empty-row">Sin registros todavía.</td></tr>`}</tbody></table></div>`;
+  adminViewEl.querySelectorAll('[data-admin-filter]').forEach((btn) => btn.addEventListener('click', () => { adminActiveFilter = btn.getAttribute('data-admin-filter'); renderDriversAdmin(); }));
+}
+
+async function manageDriver(payload) {
+  const token = await auth.currentUser.getIdToken();
+  const response = await fetch('https://us-central1-rastreoflota-53052.cloudfunctions.net/manageDrivers', {
+    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || 'No se pudo administrar el conductor.');
+  return result;
+}
+
+async function assignDriverPlace(driverId) {
+  const value = document.querySelector(`[data-place-select="${driverId}"]`).value;
+  if (!value) return alert('Selecciona un hotel o sede deportiva.');
+  const [type, name] = value.split('|');
+  try { await manageDriver({ action: 'assignPlace', driverId, place: { type, name } }); } catch (error) { alert(error.message); }
+}
+
+async function deleteDriver(driverId) {
+  const driver = adminDriversCache[driverId];
+  if (!driver || !confirm(`¿Eliminar definitivamente a ${driver.name || 'este conductor'}?`)) return;
+  try { await manageDriver({ action: 'delete', driverId }); } catch (error) { alert(error.message); }
 }
 
 function approveDriver(driverId) {

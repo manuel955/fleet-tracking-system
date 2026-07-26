@@ -63,7 +63,7 @@ function placeListCardHtml(list) {
     : '<p class="empty-list">Sin lugares todavía.</p>';
 
   return `
-    <div class="settings-card">
+    <div class="settings-card place-settings-card">
       <h3>${list.label}</h3>
       <p class="settings-hint">
         Aparecen en la app de pasajeros al tocar el botón "${list.label}" en

@@ -41,6 +41,82 @@ function requestTokenHash(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+function normalizedIdentity(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function identityKey(value) {
+  return crypto.createHash('sha256').update(normalizedIdentity(value)).digest('hex');
+}
+
+async function reserveUniqueDriverValue(field, value, uid) {
+  const ref = admin.database().ref(`driverUnique/${field}/${identityKey(value)}`);
+  const result = await ref.transaction((current) => current || { uid, value: normalizedIdentity(value), reservedAt: Date.now() });
+  return result.committed && result.snapshot.val()?.uid === uid;
+}
+
+exports.reserveDriverIdentity = functions.https.onRequest(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
+  try {
+    const header = req.get('Authorization') || '';
+    if (!header.startsWith('Bearer ')) throw new Error('No autorizado');
+    const user = await admin.auth().verifyIdToken(header.slice(7));
+    const { plate, dni, name } = req.body || {};
+    if (!plate || !dni || !name) return res.status(400).json({ error: 'Completa placa, DNI y nombre.' });
+    const fields = [['plate', plate, 'placa'], ['dni', dni, 'DNI'], ['name', name, 'nombre completo']];
+    const reserved = [];
+    for (const [field, value, label] of fields) {
+      const ok = await reserveUniqueDriverValue(field, value, user.uid);
+      if (!ok) {
+        await Promise.all(reserved.map(([reservedField, reservedValue]) => admin.database().ref(`driverUnique/${reservedField}/${identityKey(reservedValue)}`).remove()));
+        await admin.auth().deleteUser(user.uid).catch(() => null);
+        return res.status(409).json({ error: `Ya existe un conductor con ese ${label}.` });
+      }
+      reserved.push([field, value]);
+    }
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('reserveDriverIdentity', error);
+    return res.status(400).json({ error: error.message || 'No se pudo validar el registro.' });
+  }
+});
+
+exports.manageDrivers = functions.https.onRequest(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
+  try {
+    await requireDashboardManager(req);
+    const { action, driverId, place } = req.body || {};
+    if (!driverId) return res.status(400).json({ error: 'Conductor requerido' });
+    const driverRef = admin.database().ref(`drivers/${driverId}`);
+    const driver = (await driverRef.once('value')).val();
+    if (!driver) return res.status(404).json({ error: 'Conductor no encontrado' });
+    if (action === 'assignPlace') {
+      if (!place?.name || !place?.type) return res.status(400).json({ error: 'Selecciona un hotel o sede.' });
+      await driverRef.update({ assignedPlace: { name: String(place.name), type: String(place.type), assignedAt: Date.now() } });
+      return res.json({ ok: true });
+    }
+    if (action === 'delete') {
+      await Promise.all([
+        driverRef.remove(),
+        admin.database().ref(`driverConnectionHistory/${driverId}`).remove(),
+        admin.database().ref(`driverUnique/plate/${identityKey(driver.plate)}`).remove(),
+        admin.database().ref(`driverUnique/dni/${identityKey(driver.dni)}`).remove(),
+        admin.database().ref(`driverUnique/name/${identityKey(driver.name)}`).remove(),
+      ]);
+      await admin.auth().deleteUser(driverId).catch(() => null);
+      return res.json({ ok: true });
+    }
+    return res.status(400).json({ error: 'Accion invalida' });
+  } catch (error) {
+    console.error('manageDrivers', error);
+    return res.status(403).json({ error: error.message || 'No autorizado' });
+  }
+});
+
 async function validBuildRequest(requestId, token) {
   const snapshot = await admin.database().ref(`appBuildRequests/${requestId}`).once('value');
   const request = snapshot.val();
@@ -323,6 +399,7 @@ exports.handleTripStatusChange = functions.database
       const tripSnap = await db.ref(`trips/${tripId}`).once('value');
       const trip = tripSnap.val();
       if (trip.driverId) await releaseDriver(trip.driverId, tripId);
+      await db.ref(`tripHistory/${tripId}`).set({ ...trip, archivedAt: Date.now() });
       return null;
     }
 
@@ -337,6 +414,23 @@ exports.handleTripStatusChange = functions.database
     }
 
     return null;
+  });
+
+// Registra las conexiones y desconexiones para el historial del dashboard.
+exports.recordDriverConnection = functions.database
+  .ref('/drivers/{driverId}/status')
+  .onUpdate(async (change, context) => {
+    const before = change.before.val();
+    const after = change.after.val();
+    if (before === after) return null;
+    if (!['online', 'offline'].includes(after)) return null;
+    const driverSnap = await admin.database().ref(`drivers/${context.params.driverId}`).once('value');
+    const driver = driverSnap.val() || {};
+    return admin.database().ref(`driverConnectionHistory/${context.params.driverId}`).push({
+      status: after,
+      driverName: driver.name || '',
+      at: Date.now(),
+    });
   });
 
 // Avisa al conductor si el pasajero modifica el destino de un viaje ya
