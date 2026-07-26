@@ -739,6 +739,29 @@ button, input { font-family: inherit; }
 }
 .dashboard-users-grid .settings-card { max-width: none; margin: 0; }
 
+.dashboard-users-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 4px 0 16px;
+}
+.dashboard-users-toolbar h2 { margin: 0; font-size: 20px; letter-spacing: -0.02em; }
+.dashboard-users-toolbar p { margin: 4px 0 0; color: var(--gray-500); font-size: 13px; }
+.dashboard-add-user-btn {
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 11px 16px;
+  background: var(--black);
+  color: var(--white);
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dashboard-add-user-btn:hover { background: var(--gray-800); }
+.dashboard-create-panel { max-width: 520px; margin-bottom: 16px; }
+.dashboard-users-list-card { max-width: 900px; }
+.hidden { display: none; }
+
 .settings-card h3 {
   font-size: 15px;
   font-weight: 700;
@@ -834,6 +857,7 @@ button, input { font-family: inherit; }
 @media (max-width: 620px) {
   .settings-shortcuts, .settings-home-grid, .dashboard-users-grid { grid-template-columns: 1fr; }
   .settings-card { padding: 20px; }
+  .dashboard-users-toolbar { align-items: flex-start; flex-direction: column; }
 }
 
 .settings-back {

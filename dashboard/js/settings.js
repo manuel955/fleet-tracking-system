@@ -30,6 +30,7 @@ let currentAppBranding = {};
 let currentDashboardName = 'Panel de Flota';
 let currentDashboardLogoUrl = '';
 let dashboardUsers = [];
+let dashboardUserCreateOpen = false;
 
 function applyDashboardName(name) {
   const value = name || 'Panel de Flota';
@@ -252,8 +253,14 @@ function renderDashboardUsers() {
   }
   settingsViewEl.innerHTML = `
     <button type="button" id="back-to-settings" class="settings-back">← Configuración</button>
-    <div class="dashboard-users-grid">
-    <div class="settings-card apps-settings-card">
+    <div class="dashboard-users-toolbar">
+      <button type="button" id="show-create-dashboard-user" class="dashboard-add-user-btn">+ Agregar usuario</button>
+      <div>
+        <h2>Usuarios del dashboard</h2>
+        <p>Administra quién puede ingresar al panel.</p>
+      </div>
+    </div>
+    <div id="dashboard-create-panel" class="settings-card apps-settings-card dashboard-create-panel${dashboardUserCreateOpen ? '' : ' hidden'}">
       <h3>Nuevo usuario</h3>
       <form id="create-dashboard-user" class="app-branding-form">
         <input id="new-dashboard-email" type="email" placeholder="correo@empresa.com" required />
@@ -263,35 +270,25 @@ function renderDashboardUsers() {
       </form>
       <p id="dashboard-users-feedback" class="settings-feedback"></p>
     </div>
-    <div class="settings-card apps-settings-card">
-      <h3>Convertir usuario existente en administrador</h3>
-      <form id="promote-dashboard-user" class="settings-form">
-        <input id="promote-dashboard-email" type="email" placeholder="correo@empresa.com" required />
-        <button type="submit">Hacer administrador</button>
-      </form>
-    </div>
-    <div class="settings-card apps-settings-card">
+    <div class="settings-card dashboard-users-list-card">
       <h3>Usuarios con acceso</h3>
       ${dashboardUsers.map((user) => dashboardUserCardHtml(user)).join('') || '<p class="settings-hint">No hay usuarios.</p>'}
     </div>
-    </div>
   `;
   document.getElementById('back-to-settings').addEventListener('click', () => { settingsSection = 'home'; renderSettings(); });
+  document.getElementById('show-create-dashboard-user').addEventListener('click', () => {
+    dashboardUserCreateOpen = !dashboardUserCreateOpen;
+    renderDashboardUsers();
+  });
   document.getElementById('create-dashboard-user').addEventListener('submit', async (event) => {
     event.preventDefault();
     const feedback = document.getElementById('dashboard-users-feedback');
     try {
       feedback.textContent = 'Creando…';
       await dashboardUsersRequest({ action: 'create', email: document.getElementById('new-dashboard-email').value, password: document.getElementById('new-dashboard-password').value, role: document.getElementById('new-dashboard-role').value });
+      dashboardUserCreateOpen = false;
       await loadDashboardUsers();
     } catch (error) { feedback.textContent = error.message; feedback.className = 'settings-feedback error'; }
-  });
-  document.getElementById('promote-dashboard-user').addEventListener('submit', async (event) => {
-    event.preventDefault();
-    try {
-      await dashboardUsersRequest({ action: 'grantAdmin', email: document.getElementById('promote-dashboard-email').value });
-      await loadDashboardUsers();
-    } catch (error) { alert(error.message); }
   });
   dashboardUsers.forEach((user) => bindDashboardUserControls(user));
 }
