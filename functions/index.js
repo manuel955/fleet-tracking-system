@@ -66,6 +66,15 @@ exports.reserveDriverIdentity = functions.https.onRequest(async (req, res) => {
     const { plate, dni, name } = req.body || {};
     if (!plate || !dni || !name) return res.status(400).json({ error: 'Completa placa, DNI y nombre.' });
     const fields = [['plate', plate, 'placa'], ['dni', dni, 'DNI'], ['name', name, 'nombre completo']];
+    const existingDrivers = (await admin.database().ref('drivers').once('value')).val() || {};
+    for (const [, driver] of Object.entries(existingDrivers)) {
+      for (const [field, value, label] of fields) {
+        if (normalizedIdentity(driver[field]) === normalizedIdentity(value)) {
+          await admin.auth().deleteUser(user.uid).catch(() => null);
+          return res.status(409).json({ error: `Ya existe un conductor con ese ${label}.` });
+        }
+      }
+    }
     const reserved = [];
     for (const [field, value, label] of fields) {
       const ok = await reserveUniqueDriverValue(field, value, user.uid);
