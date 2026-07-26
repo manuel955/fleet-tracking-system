@@ -5,6 +5,8 @@ plugins {
     id("com.google.gms.google-services")
 }
 
+val fleetKeystorePath = System.getenv("FLEET_KEYSTORE_PATH")
+
 android {
     namespace = "com.example.fleet_passenger_app"
     compileSdk = flutter.compileSdkVersion
@@ -27,11 +29,26 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (!fleetKeystorePath.isNullOrBlank()) {
+            create("fleetRelease") {
+                storeFile = file(fleetKeystorePath)
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // GitHub usa una llave fija restaurada por el workflow. En local
+            // se conserva la llave debug para que `flutter run --release` funcione.
+            signingConfig = if (!fleetKeystorePath.isNullOrBlank()) {
+                signingConfigs.getByName("fleetRelease")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }
