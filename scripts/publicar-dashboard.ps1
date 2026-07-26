@@ -37,7 +37,7 @@ try {
     "rsync -a --delete $stagingRemoto/ $destinoRemoto/",
     "rm -rf $stagingRemoto",
     "test -f $destinoRemoto/index.html",
-    "curl -fsS http://127.0.0.1/flota/ | grep -q 'Panel de Control - Rastreo de Flota'"
+    "curl -fsS http://127.0.0.1/flota/ | grep -q 'data-dashboard-name'"
   ) -join '; '
 
   & ssh -i $clave -o BatchMode=yes -o ConnectTimeout=15 "root@$Servidor" $comandoRemoto

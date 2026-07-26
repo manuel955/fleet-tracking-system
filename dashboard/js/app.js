@@ -70,28 +70,7 @@ const loginForm = document.getElementById('login-form');
 const loginError = document.getElementById('login-error');
 const loginSubtitle = document.getElementById('login-subtitle');
 const tabLogin = document.getElementById('tab-login');
-const tabRegister = document.getElementById('tab-register');
-const passwordConfirmInput = document.getElementById('login-password-confirm');
 const submitBtn = document.getElementById('login-submit');
-
-let authMode = 'login';
-
-function setAuthMode(mode) {
-  authMode = mode;
-  loginError.textContent = '';
-
-  const isRegister = mode === 'register';
-  tabLogin.classList.toggle('active', !isRegister);
-  tabRegister.classList.toggle('active', isRegister);
-  passwordConfirmInput.classList.toggle('hidden', !isRegister);
-  submitBtn.textContent = isRegister ? 'Registrarme' : 'Entrar';
-  loginSubtitle.textContent = isRegister
-    ? 'Crea tu cuenta para administrar la flota'
-    : 'Inicia sesión para monitorear los vehículos';
-}
-
-tabLogin.addEventListener('click', () => setAuthMode('login'));
-tabRegister.addEventListener('click', () => setAuthMode('register'));
 
 const AUTH_ERROR_MESSAGES = {
   'auth/invalid-email': 'Correo inválido.',
@@ -108,16 +87,7 @@ loginForm.addEventListener('submit', async (e) => {
   const password = document.getElementById('login-password').value;
 
   try {
-    if (authMode === 'register') {
-      const confirm = passwordConfirmInput.value;
-      if (password !== confirm) {
-        loginError.textContent = 'Las contraseñas no coinciden.';
-        return;
-      }
-      await auth.createUserWithEmailAndPassword(email, password);
-    } else {
-      await auth.signInWithEmailAndPassword(email, password);
-    }
+    await auth.signInWithEmailAndPassword(email, password);
   } catch (err) {
     loginError.textContent = AUTH_ERROR_MESSAGES[err.code] || 'Ocurrió un error. Intenta de nuevo.';
   }
@@ -125,11 +95,25 @@ loginForm.addEventListener('submit', async (e) => {
 
 document.getElementById('logout-btn').addEventListener('click', () => auth.signOut());
 
+async function initializeDashboardAdmin(user) {
+  try {
+    const token = await user.getIdToken();
+    await fetch('https://us-central1-rastreoflota-53052.cloudfunctions.net/initializeDashboardAdmin', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch (_) {
+    // El dashboard sigue funcionando para cuentas existentes; el apartado de
+    // usuarios mostrara un mensaje si la cuenta no es administradora.
+  }
+}
+
 auth.onAuthStateChanged((user) => {
   if (user) {
     loginScreen.classList.add('hidden');
     appEl.classList.remove('hidden');
     userAuthenticated = true;
+    initializeDashboardAdmin(user);
     tryStartDashboard();
   } else {
     loginScreen.classList.remove('hidden');

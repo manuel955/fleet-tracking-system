@@ -27,6 +27,24 @@ const BRAND_APPS = [
 
 let currentBuilds = {}; // buildField -> numero
 let currentAppBranding = {};
+let currentDashboardName = 'Panel de Flota';
+let dashboardUsers = [];
+
+function applyDashboardName(name) {
+  const value = name || 'Panel de Flota';
+  document.querySelectorAll('[data-dashboard-name]').forEach((element) => {
+    element.textContent = value;
+  });
+  document.title = value;
+}
+
+// El nombre del dashboard es publico para que tambien se muestre antes de
+// iniciar sesion, pero solo una cuenta de administrador puede modificarlo.
+db.ref('config/dashboardName').on('value', (snapshot) => {
+  currentDashboardName = snapshot.val() || 'Panel de Flota';
+  applyDashboardName(currentDashboardName);
+  if (settingsSubscribed) renderSettings();
+});
 
 function startSettings() {
   if (settingsSubscribed) return;
@@ -56,6 +74,10 @@ function renderSettings() {
     renderApps();
     return;
   }
+  if (settingsSection === 'users') {
+    renderDashboardUsers();
+    return;
+  }
 
   settingsViewEl.innerHTML = `
     <div class="settings-card">
@@ -75,6 +97,23 @@ function renderSettings() {
         </span>
         <span aria-hidden="true">›</span>
       </button>
+      <button type="button" id="open-dashboard-users" class="settings-section-link">
+        <span>
+          <b>Usuarios del dashboard</b>
+          <small>Crea y administra quién puede ingresar</small>
+        </span>
+        <span aria-hidden="true">›</span>
+      </button>
+    </div>
+
+    <div class="settings-card">
+      <h3>Nombre del dashboard</h3>
+      <p class="settings-hint">Nombre que aparece en el inicio de sesión y la barra superior.</p>
+      <form id="dashboard-name-form" class="settings-form">
+        <input id="dashboard-name-input" maxlength="60" value="${escapeHtml(currentDashboardName)}" required />
+        <button type="submit">Guardar</button>
+      </form>
+      <p id="dashboard-name-feedback" class="settings-feedback"></p>
     </div>
 
     <div class="settings-card">
@@ -106,6 +145,16 @@ function renderSettings() {
     settingsSection = 'apps';
     renderSettings();
   });
+  document.getElementById('open-dashboard-users').addEventListener('click', () => {
+    settingsSection = 'users';
+    loadDashboardUsers();
+  });
+  document.getElementById('dashboard-name-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const name = document.getElementById('dashboard-name-input').value.trim();
+    if (!name) return;
+    saveDashboardName(name);
+  });
 
   document.getElementById('support-phone-form').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -117,6 +166,108 @@ function renderSettings() {
     if (!value.startsWith('+')) value = `+51${value}`;
     saveSupportPhone(value);
   });
+}
+
+async function dashboardUsersRequest(payload) {
+  const token = await auth.currentUser.getIdToken();
+  const response = await fetch(
+    'https://us-central1-rastreoflota-53052.cloudfunctions.net/manageDashboardUsers',
+    { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) },
+  );
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || 'No se pudo administrar los usuarios');
+  return result;
+}
+
+async function loadDashboardUsers() {
+  dashboardUsers = null;
+  renderDashboardUsers();
+  try {
+    const result = await dashboardUsersRequest({ action: 'list' });
+    dashboardUsers = result.users;
+  } catch (error) {
+    dashboardUsers = { error: error.message || String(error) };
+  }
+  renderDashboardUsers();
+}
+
+function renderDashboardUsers() {
+  if (dashboardUsers === null) {
+    settingsViewEl.innerHTML = '<p class="settings-hint">Cargando usuarios…</p>';
+    return;
+  }
+  if (dashboardUsers?.error) {
+    settingsViewEl.innerHTML = `<button type="button" id="back-to-settings" class="settings-back">← Configuración</button><p class="settings-feedback error">${escapeHtml(dashboardUsers.error)}</p>`;
+    document.getElementById('back-to-settings').addEventListener('click', () => { settingsSection = 'home'; renderSettings(); });
+    return;
+  }
+  settingsViewEl.innerHTML = `
+    <button type="button" id="back-to-settings" class="settings-back">← Configuración</button>
+    <div class="settings-card apps-settings-card">
+      <h3>Nuevo usuario</h3>
+      <form id="create-dashboard-user" class="app-branding-form">
+        <input id="new-dashboard-email" type="email" placeholder="correo@empresa.com" required />
+        <input id="new-dashboard-password" type="password" placeholder="Contraseña temporal (mínimo 6 caracteres)" minlength="6" required />
+        <button type="submit">Crear usuario</button>
+      </form>
+      <p id="dashboard-users-feedback" class="settings-feedback"></p>
+    </div>
+    <div class="settings-card apps-settings-card">
+      <h3>Usuarios con acceso</h3>
+      ${dashboardUsers.map((user) => dashboardUserCardHtml(user)).join('') || '<p class="settings-hint">No hay usuarios.</p>'}
+    </div>
+  `;
+  document.getElementById('back-to-settings').addEventListener('click', () => { settingsSection = 'home'; renderSettings(); });
+  document.getElementById('create-dashboard-user').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const feedback = document.getElementById('dashboard-users-feedback');
+    try {
+      feedback.textContent = 'Creando…';
+      await dashboardUsersRequest({ action: 'create', email: document.getElementById('new-dashboard-email').value, password: document.getElementById('new-dashboard-password').value });
+      await loadDashboardUsers();
+    } catch (error) { feedback.textContent = error.message; feedback.className = 'settings-feedback error'; }
+  });
+  dashboardUsers.forEach((user) => bindDashboardUserControls(user));
+}
+
+function dashboardUserCardHtml(user) {
+  return `<form id="dashboard-user-${user.uid}" class="dashboard-user-row">
+    <input id="dashboard-email-${user.uid}" type="email" value="${escapeHtml(user.email)}" required />
+    <input id="dashboard-password-${user.uid}" type="password" placeholder="Nueva contraseña (opcional)" minlength="6" />
+    <button type="submit">Guardar</button>
+    ${user.isAdmin ? '<span class="dashboard-admin-badge">Administrador</span>' : `<button type="button" data-delete-user="${user.uid}" class="dashboard-delete-btn">Eliminar</button>`}
+  </form>`;
+}
+
+function bindDashboardUserControls(user) {
+  document.getElementById(`dashboard-user-${user.uid}`).addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+      await dashboardUsersRequest({ action: 'update', uid: user.uid, email: document.getElementById(`dashboard-email-${user.uid}`).value, password: document.getElementById(`dashboard-password-${user.uid}`).value });
+      await loadDashboardUsers();
+    } catch (error) { alert(error.message); }
+  });
+  const remove = document.querySelector(`[data-delete-user="${user.uid}"]`);
+  if (remove) remove.addEventListener('click', async () => {
+    if (!confirm(`¿Eliminar el acceso de ${user.email}?`)) return;
+    try { await dashboardUsersRequest({ action: 'delete', uid: user.uid }); await loadDashboardUsers(); } catch (error) { alert(error.message); }
+  });
+}
+
+function saveDashboardName(name) {
+  const feedback = document.getElementById('dashboard-name-feedback');
+  feedback.textContent = 'Guardando…';
+  feedback.className = 'settings-feedback';
+  db.ref('config/dashboardName')
+    .set(name)
+    .then(() => {
+      feedback.textContent = 'Nombre actualizado.';
+      feedback.className = 'settings-feedback success';
+    })
+    .catch((error) => {
+      feedback.textContent = `Error al guardar: ${error.message || error}`;
+      feedback.className = 'settings-feedback error';
+    });
 }
 
 function renderUpdates() {

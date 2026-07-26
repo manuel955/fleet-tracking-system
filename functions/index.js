@@ -28,6 +28,13 @@ async function requireDashboardAdmin(req) {
   return decoded;
 }
 
+async function requireDashboardManager(req) {
+  const user = await requireDashboardAdmin(req);
+  const adminRef = admin.database().ref(`dashboardAdmins/${user.uid}`);
+  if (!(await adminRef.once('value')).exists()) throw new Error('No tienes permiso para administrar usuarios');
+  return user;
+}
+
 function requestTokenHash(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
@@ -133,6 +140,84 @@ exports.completeAppBrandingBuild = functions.https.onRequest(async (req, res) =>
   await admin.database().ref(`config/${app.buildField}`).set(request.build);
   await admin.database().ref(`appBuildRequests/${requestId}`).update({ status: 'published', publishedAt: Date.now() });
   return res.json({ build: request.build });
+});
+
+// La primera cuenta que abre esta herramienta se convierte en administradora.
+// Despues de eso solo los uid ya registrados en dashboardAdmins pueden crear,
+// editar o eliminar accesos al dashboard.
+exports.initializeDashboardAdmin = functions.https.onRequest(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
+  try {
+    const user = await requireDashboardAdmin(req);
+    const root = admin.database().ref('dashboardAdmins');
+    const current = await root.once('value');
+    if (!current.exists()) {
+      await root.child(user.uid).set({ email: user.email || '', createdAt: Date.now() });
+      await admin.auth().setCustomUserClaims(user.uid, { dashboardAdmin: true, dashboardUser: true });
+    }
+    if (!(await root.child(user.uid).once('value')).exists()) throw new Error('No tienes permiso para administrar usuarios');
+    return res.json({ ok: true });
+  } catch (error) {
+    return res.status(403).json({ error: error.message || 'No autorizado' });
+  }
+});
+
+exports.manageDashboardUsers = functions.https.onRequest(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
+  try {
+    const manager = await requireDashboardManager(req);
+    const action = req.body?.action;
+    if (action === 'list') {
+      const users = [];
+      let pageToken;
+      do {
+        const page = await admin.auth().listUsers(1000, pageToken);
+        page.users.forEach((user) => {
+          if (user.customClaims?.dashboardUser || user.customClaims?.dashboardAdmin || user.uid === manager.uid) {
+            users.push({ uid: user.uid, email: user.email || '', disabled: user.disabled, isAdmin: user.uid === manager.uid });
+          }
+        });
+        pageToken = page.pageToken;
+      } while (pageToken);
+      return res.json({ users });
+    }
+    if (action === 'create') {
+      const email = String(req.body?.email || '').trim();
+      const password = String(req.body?.password || '');
+      if (!email || password.length < 6) return res.status(400).json({ error: 'Correo y contraseña de al menos 6 caracteres son requeridos' });
+      const user = await admin.auth().createUser({ email, password });
+      await admin.auth().setCustomUserClaims(user.uid, { dashboardUser: true });
+      return res.status(201).json({ uid: user.uid });
+    }
+    if (action === 'update') {
+      const uid = String(req.body?.uid || '');
+      const changes = {};
+      if (req.body?.email) changes.email = String(req.body.email).trim();
+      if (req.body?.password) {
+        if (String(req.body.password).length < 6) return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+        changes.password = String(req.body.password);
+      }
+      if (typeof req.body?.disabled === 'boolean') changes.disabled = req.body.disabled;
+      if (!uid || Object.keys(changes).length === 0) return res.status(400).json({ error: 'No hay cambios para guardar' });
+      await admin.auth().updateUser(uid, changes);
+      return res.json({ ok: true });
+    }
+    if (action === 'delete') {
+      const uid = String(req.body?.uid || '');
+      if (!uid || uid === manager.uid) return res.status(400).json({ error: 'No puedes eliminar tu propia cuenta' });
+      await admin.auth().deleteUser(uid);
+      await admin.database().ref(`dashboardAdmins/${uid}`).remove();
+      return res.json({ ok: true });
+    }
+    return res.status(400).json({ error: 'Accion invalida' });
+  } catch (error) {
+    console.error('manageDashboardUsers', error);
+    return res.status(403).json({ error: error.message || 'No autorizado' });
+  }
 });
 
 // Se dispara al crear /trips/{tripId} (el pasajero acaba de pedir un
