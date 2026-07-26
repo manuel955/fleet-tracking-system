@@ -29,6 +29,7 @@ jobs:
       APP_KIND: ${{ inputs.app }}
       REQUEST_ID: ${{ inputs.request_id }}
       BUILD_TOKEN: ${{ inputs.build_token }}
+      ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -65,9 +66,12 @@ jobs:
 
       - name: Restore the existing Android signing key
         run: |
-          SIGNING_URL=$(python3 -c "import json; print(json.load(open('build-request.json'))['signingUrl'])")
+          if [ -z "$ANDROID_DEBUG_KEYSTORE_BASE64" ]; then
+            echo "Falta la llave de firma segura de Android"
+            exit 1
+          fi
           mkdir -p "$HOME/.android"
-          curl --fail --silent --show-error "$SIGNING_URL" -o "$HOME/.android/debug.keystore"
+          echo "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"
 
       - uses: subosito/flutter-action@v2
         with:
