@@ -106,6 +106,9 @@ async function initializeDashboardAdmin(user) {
     const result = await response.json().catch(() => ({}));
     window.dashboardIsAdmin = response.ok && result.isAdmin === true;
     if (window.dashboardIsAdmin) await user.getIdToken(true);
+    // Si el usuario ya abrio Configuracion, vuelve a pintarla en cuanto el
+    // rol llegue para que aparezcan los apartados sin otro inicio de sesion.
+    if (typeof renderSettings === 'function') renderSettings();
   } catch (_) {
     // El dashboard sigue funcionando para cuentas existentes; el apartado de
     // usuarios mostrara un mensaje si la cuenta no es administradora.

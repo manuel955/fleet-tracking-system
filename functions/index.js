@@ -31,8 +31,9 @@ async function requireDashboardAdmin(req) {
 
 async function requireDashboardManager(req) {
   const user = await requireDashboardAdmin(req);
-  const adminRef = admin.database().ref(`dashboardAdmins/${user.uid}`);
-  if (!(await adminRef.once('value')).exists()) throw new Error('No tienes permiso para administrar usuarios');
+  // Los roles viven en Firebase Auth. Asi el acceso al dashboard no depende de
+  // Realtime Database (ni se bloquea si esta base esta temporalmente inaccesible).
+  if (user.dashboardAdmin !== true) throw new Error('No tienes permiso para administrar usuarios');
   return user;
 }
 
@@ -143,25 +144,19 @@ exports.completeAppBrandingBuild = functions.https.onRequest(async (req, res) =>
   return res.json({ build: request.build });
 });
 
-// La primera cuenta que abre esta herramienta se convierte en administradora.
-// Despues de eso solo los uid ya registrados en dashboardAdmins pueden crear,
-// editar o eliminar accesos al dashboard.
+// El propietario designado recupera su rol mediante Firebase Auth. Los roles
+// se guardan como custom claims y no requieren Realtime Database.
 exports.initializeDashboardAdmin = functions.https.onRequest(async (req, res) => {
   cors(res);
   if (req.method === 'OPTIONS') return res.status(204).send('');
   if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
   try {
     const user = await requireDashboardAdmin(req);
-    const root = admin.database().ref('dashboardAdmins');
-    const current = await root.once('value');
-    // El propietario designado puede recuperar el rol de administrador aun
-    // cuando exista otro administrador, evitando quedar bloqueado fuera de
-    // la administracion de su propio dashboard.
-    if (!current.exists() || user.email?.toLowerCase() === OWNER_DASHBOARD_EMAIL) {
-      await root.child(user.uid).set({ email: user.email || '', createdAt: Date.now() });
+    const isOwner = user.email?.toLowerCase() === OWNER_DASHBOARD_EMAIL;
+    if (isOwner && user.dashboardAdmin !== true) {
       await admin.auth().setCustomUserClaims(user.uid, { dashboardAdmin: true, dashboardUser: true });
     }
-    const isAdmin = (await root.child(user.uid).once('value')).exists();
+    const isAdmin = isOwner || user.dashboardAdmin === true;
     if (!isAdmin) throw new Error('No tienes permiso para administrar usuarios');
     return res.json({ ok: true, isAdmin });
   } catch (error) {
@@ -197,7 +192,6 @@ exports.manageDashboardUsers = functions.https.onRequest(async (req, res) => {
       const user = await admin.auth().createUser({ email, password });
       const role = req.body?.role === 'admin' ? 'admin' : 'supervisor';
       await admin.auth().setCustomUserClaims(user.uid, { dashboardUser: true, dashboardAdmin: role === 'admin' });
-      if (role === 'admin') await admin.database().ref(`dashboardAdmins/${user.uid}`).set({ email, createdAt: Date.now() });
       return res.status(201).json({ uid: user.uid });
     }
     if (action === 'grantAdmin') {
@@ -205,7 +199,6 @@ exports.manageDashboardUsers = functions.https.onRequest(async (req, res) => {
       if (!email) return res.status(400).json({ error: 'Correo requerido' });
       const user = await admin.auth().getUserByEmail(email);
       await admin.auth().setCustomUserClaims(user.uid, { dashboardUser: true, dashboardAdmin: true });
-      await admin.database().ref(`dashboardAdmins/${user.uid}`).set({ email: user.email || email, updatedAt: Date.now() });
       return res.json({ ok: true });
     }
     if (action === 'update') {
@@ -222,8 +215,6 @@ exports.manageDashboardUsers = functions.https.onRequest(async (req, res) => {
       if (req.body?.role && uid !== manager.uid) {
         const isAdmin = req.body.role === 'admin';
         await admin.auth().setCustomUserClaims(uid, { dashboardUser: true, dashboardAdmin: isAdmin });
-        if (isAdmin) await admin.database().ref(`dashboardAdmins/${uid}`).set({ updatedAt: Date.now() });
-        else await admin.database().ref(`dashboardAdmins/${uid}`).remove();
       }
       return res.json({ ok: true });
     }
@@ -231,7 +222,6 @@ exports.manageDashboardUsers = functions.https.onRequest(async (req, res) => {
       const uid = String(req.body?.uid || '');
       if (!uid || uid === manager.uid) return res.status(400).json({ error: 'No puedes eliminar tu propia cuenta' });
       await admin.auth().deleteUser(uid);
-      await admin.database().ref(`dashboardAdmins/${uid}`).remove();
       return res.json({ ok: true });
     }
     return res.status(400).json({ error: 'Accion invalida' });
