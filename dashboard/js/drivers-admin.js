@@ -114,7 +114,6 @@ function docCellHtml(driverId, field, url) {
 
 function driverAdminCardHtml(driverId, d) {
   const status = d.approvalStatus || 'pending_review';
-  const docsHtml = DOC_FIELDS.map((f) => docCellHtml(driverId, f, d[f.key])).join('');
   const rejectFormOpen = openRejectFormId === driverId;
 
   const rejectionBlock =
@@ -159,7 +158,6 @@ function driverAdminCardHtml(driverId, d) {
         <div class="row"><b>Lugar asignado:</b> ${escapeHtml(d.assignedPlace?.name || '-')}</div>
       </div>
       ${rejectionBlock}
-      <div class="doc-grid">${docsHtml}</div>
       <div class="driver-admin-actions">
         <button type="button" class="view-file-btn" data-action="view-file" data-id="${driverId}">Ver archivo completo</button>
         <select class="assign-place-select" data-place-select="${driverId}">${driverPlaceOptions(d)}</select>
