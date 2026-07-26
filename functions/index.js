@@ -105,7 +105,12 @@ exports.manageDrivers = functions.https.onRequest(async (req, res) => {
     if (!driver) return res.status(404).json({ error: 'Conductor no encontrado' });
     if (action === 'assignPlace') {
       if (!place?.name || !place?.type) return res.status(400).json({ error: 'Selecciona un hotel o sede.' });
-      await driverRef.update({ assignedPlace: { name: String(place.name), type: String(place.type), assignedAt: Date.now() } });
+      const assignedPlace = { name: String(place.name), type: String(place.type), assignedAt: Date.now() };
+      await driverRef.update({ assignedPlace });
+      await sendPush(driver.fcmToken, 'place_assigned', {
+        placeName: assignedPlace.name,
+        placeType: assignedPlace.type,
+      });
       return res.json({ ok: true });
     }
     if (action === 'delete') {

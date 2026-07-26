@@ -343,6 +343,12 @@ class _DriverHomePageState extends State<DriverHomePage> {
           _pollForTrip();
           NotificationService.showTripUpdated();
           break;
+        case 'place_assigned':
+          _refreshAssignedPlace(
+            message.data['placeName'] as String? ?? 'un lugar',
+            message.data['placeType'] as String? ?? 'Lugar',
+          );
+          break;
         case 'approval_status':
           // Refresca el perfil para que la pantalla de "pendiente de
           // aprobacion" reaccione sin que el conductor tenga que reabrir
@@ -481,7 +487,13 @@ class _DriverHomePageState extends State<DriverHomePage> {
     try {
       final profile = await DriverProfileService.fetchProfile(_driverId!);
       if (profile != null && mounted) {
+        final oldPlace = ((_driverProfile?['assignedPlace'] as Map?)?['name'] ?? '').toString();
+        final newPlace = ((profile['assignedPlace'] as Map?)?['name'] ?? '').toString();
         setState(() => _driverProfile = profile);
+        if (newPlace.isNotEmpty && newPlace != oldPlace) {
+          final type = ((profile['assignedPlace'] as Map?)?['type'] ?? 'Lugar').toString();
+          await NotificationService.showPlaceAssigned(newPlace, type);
+        }
       }
       final remoteSessionId = profile?['activeSessionId'] as String?;
       final localSessionId = await SessionService.localSessionId();
@@ -496,6 +508,17 @@ class _DriverHomePageState extends State<DriverHomePage> {
     } catch (_) {
       // Fallo de red puntual: se reintenta en el siguiente tick.
     }
+  }
+
+  Future<void> _refreshAssignedPlace(String name, String type) async {
+    if (_driverId == null) return;
+    try {
+      final profile = await DriverProfileService.fetchProfile(_driverId!);
+      if (profile != null && mounted) setState(() => _driverProfile = profile);
+    } catch (_) {
+      // El aviso igualmente llega; el siguiente chequeo actualizara la ficha.
+    }
+    await NotificationService.showPlaceAssigned(name, type);
   }
 
   Future<void> _pollForTrip() async {

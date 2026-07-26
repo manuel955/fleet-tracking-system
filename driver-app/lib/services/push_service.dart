@@ -24,6 +24,12 @@ Future<void> pushBackgroundHandler(RemoteMessage message) async {
     case 'trip_updated':
       await NotificationService.showTripUpdated();
       break;
+    case 'place_assigned':
+      await NotificationService.showPlaceAssigned(
+        message.data['placeName'] as String? ?? 'un lugar',
+        message.data['placeType'] as String? ?? 'Lugar',
+      );
+      break;
     case 'approval_status':
       final status = message.data['status'];
       if (status == 'approved') {
