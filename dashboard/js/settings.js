@@ -343,15 +343,15 @@ function saveDashboardName(name) {
 function renderUpdates() {
   settingsViewEl.innerHTML = `
     <button type="button" id="back-to-settings" class="settings-back">← Configuración</button>
-    <div class="settings-card">
+    <div class="updates-page">
+      <div class="updates-heading">
       <h3>Actualizaciones de las apps</h3>
       <p class="settings-hint">
-        Sube el APK compilado (release) de cada app. Al terminar, el número
-        de versión (el "+N" de pubspec.yaml) queda publicado y las apps ya
-        instaladas mostrarán un aviso para actualizar la próxima vez que se
-        abran.
+        Genera y publica la APK automáticamente. Al finalizar, los teléfonos
+        recibirán el aviso de actualización al abrir la app.
       </p>
-      ${UPDATE_APPS.map((app) => updateAppCardHtml(app)).join('<hr class="settings-divider" />')}
+      </div>
+      <div class="updates-grid">${UPDATE_APPS.map((app) => updateAppCardHtml(app)).join('')}</div>
     </div>
   `;
 
@@ -360,18 +360,7 @@ function renderUpdates() {
     renderSettings();
   });
 
-  UPDATE_APPS.forEach((app) => {
-    const form = document.getElementById(`update-form-${app.key}`);
-    form.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const fileInput = document.getElementById(`update-file-${app.key}`);
-      const buildInput = document.getElementById(`update-build-${app.key}`);
-      const file = fileInput.files[0];
-      const build = parseInt(buildInput.value, 10);
-      if (!file || !build || build <= 0) return;
-      publishAppUpdate(app, file, build);
-    });
-  });
+  UPDATE_APPS.forEach((app) => document.getElementById(`generate-update-${app.key}`).addEventListener('click', () => requestBrandedAppBuild(app, `update-feedback-${app.key}`)));
 }
 
 function renderApps() {
@@ -449,8 +438,8 @@ async function saveAppBranding(app, name, icon) {
   }
 }
 
-async function requestBrandedAppBuild(app) {
-  const feedback = document.getElementById(`app-branding-feedback-${app.key}`);
+async function requestBrandedAppBuild(app, feedbackId = `app-branding-feedback-${app.key}`) {
+  const feedback = document.getElementById(feedbackId);
   feedback.className = 'settings-feedback';
   feedback.textContent = 'Solicitando compilación…';
   try {
@@ -481,18 +470,8 @@ function updateAppCardHtml(app) {
         <b>${escapeHtml(app.label)}</b>
         <span class="update-current-build">${build ? `Versión publicada: build ${build}` : 'Sin versión publicada aún'}</span>
       </div>
-      <form id="update-form-${app.key}" class="settings-form update-form">
-        <input type="file" id="update-file-${app.key}" accept=".apk" required />
-        <input
-          type="number"
-          id="update-build-${app.key}"
-          class="update-build-input"
-          placeholder="Build (ej. 2)"
-          min="1"
-          required
-        />
-        <button type="submit">Publicar</button>
-      </form>
+      <p class="settings-hint">Compila la versión con la marca actual y publica el aviso de actualización.</p>
+      <button type="button" id="generate-update-${app.key}" class="build-branded-app-btn">Generar APK y enviar actualización</button>
       <p id="update-feedback-${app.key}" class="settings-feedback"></p>
     </div>
   `;

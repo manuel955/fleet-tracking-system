@@ -1051,6 +1051,12 @@ button, input { font-family: inherit; }
   margin-bottom: 10px;
   font-size: 13.5px;
 }
+.updates-page { max-width: 1100px; }
+.updates-heading { margin-bottom: 16px; }
+.updates-heading h3 { margin: 0 0 8px; font-size: 20px; }
+.updates-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.update-app-block { min-height: 190px; padding: 22px; border: 1.5px solid var(--gray-150); border-radius: var(--radius-lg); background: var(--white); }
+.update-app-block .build-branded-app-btn { margin-top: 4px; }
 
 .update-current-build { color: var(--gray-500); font-size: 12px; }
 
