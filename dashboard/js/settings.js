@@ -94,13 +94,22 @@ function renderSettings() {
     renderDashboardUsers();
     return;
   }
+  if (settingsSection === 'dashboard') {
+    renderDashboardSettings();
+    return;
+  }
+  if (settingsSection === 'support') {
+    renderSupportSettings();
+    return;
+  }
 
   settingsViewEl.innerHTML = `
     <div class="settings-home-heading">
       <h2>Panel de administración</h2>
       <p>Gestiona las aplicaciones, los accesos y la información del panel.</p>
     </div>
-    ${window.dashboardIsAdmin ? `<div class="settings-shortcuts">
+    <div class="settings-shortcuts">
+    ${window.dashboardIsAdmin ? `
       <button type="button" id="open-updates" class="settings-section-link">
         <span>
           <b>Actualizaciones</b>
@@ -122,46 +131,22 @@ function renderSettings() {
         </span>
         <span aria-hidden="true">›</span>
       </button>
-    </div>` : ''}
+      <button type="button" id="open-dashboard-settings" class="settings-section-link">
+        <span>
+          <b>Dashboard</b>
+          <small>Cambia el nombre y el logo del panel</small>
+        </span>
+        <span aria-hidden="true">›</span>
+      </button>
+    ` : ''}
 
-    <div class="settings-home-grid">
-    ${window.dashboardIsAdmin ? `<div class="settings-card">
-      <h3>Dashboard</h3>
-      <p class="settings-hint">Personaliza el nombre y el logo que aparecen en el inicio de sesión y la barra superior.</p>
-      <label class="settings-field-label" for="dashboard-name-input">Nombre del dashboard</label>
-      <form id="dashboard-name-form" class="settings-form">
-        <input id="dashboard-name-input" maxlength="60" value="${escapeHtml(currentDashboardName)}" required />
-        <button type="submit">Guardar</button>
-      </form>
-      <p id="dashboard-name-feedback" class="settings-feedback"></p>
-      <label class="settings-field-label" for="dashboard-logo-input">Logo del dashboard</label>
-      <p class="settings-hint">PNG, JPG o WebP de hasta 2 MB.</p>
-      <form id="dashboard-logo-form" class="app-branding-form">
-        <input id="dashboard-logo-input" type="file" accept="image/png,image/jpeg,image/webp" />
-        <button type="submit">Guardar logo</button>
-      </form>
-      <p id="dashboard-logo-feedback" class="settings-feedback"></p>
-    </div>` : ''}
-
-    <div class="settings-card">
-      <h3>Número de soporte</h3>
-      <p class="settings-hint">
-        Numero que usa el boton "Soporte" (llamar / WhatsApp) tanto en la app
-        de conductores como en la de pasajeros. Incluye el codigo de pais,
-        ej. +51987654321.
-      </p>
-      <form id="support-phone-form" class="settings-form">
-        <input
-          type="tel"
-          id="support-phone-input"
-          placeholder="+51987654321"
-          value="${escapeHtml(currentSupportPhone)}"
-          required
-        />
-        <button type="submit">Guardar</button>
-      </form>
-      <p id="settings-feedback" class="settings-feedback"></p>
-    </div>
+    <button type="button" id="open-support-settings" class="settings-section-link">
+      <span>
+        <b>Número de soporte</b>
+        <small>Configura el teléfono de llamadas y WhatsApp</small>
+      </span>
+      <span aria-hidden="true">›</span>
+    </button>
     </div>
   `;
 
@@ -180,29 +165,35 @@ function renderSettings() {
     settingsSection = 'users';
     loadDashboardUsers();
   });
-  const dashboardNameForm = document.getElementById('dashboard-name-form');
-  if (dashboardNameForm) dashboardNameForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const name = document.getElementById('dashboard-name-input').value.trim();
-    if (!name) return;
-    saveDashboardName(name);
-  });
-  const logoForm = document.getElementById('dashboard-logo-form');
-  if (logoForm) logoForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    saveDashboardLogo(document.getElementById('dashboard-logo-input').files[0]);
-  });
+  const dashboardButton = document.getElementById('open-dashboard-settings');
+  if (dashboardButton) dashboardButton.addEventListener('click', () => { settingsSection = 'dashboard'; renderSettings(); });
+  document.getElementById('open-support-settings').addEventListener('click', () => { settingsSection = 'support'; renderSettings(); });
+}
 
-  document.getElementById('support-phone-form').addEventListener('submit', (e) => {
-    e.preventDefault();
-    let value = document.getElementById('support-phone-input').value.trim();
-    if (!value) return;
-    // Mismo criterio que driver-app/passenger-app (AppConfig.defaultPhoneCountryCode):
-    // si escriben solo los digitos sin "+", se asume Peru. Sin esto, tel:/wa.me
-    // arman un numero invalido en las apps.
-    if (!value.startsWith('+')) value = `+51${value}`;
-    saveSupportPhone(value);
-  });
+function renderDashboardSettings() {
+  settingsViewEl.innerHTML = `<button type="button" id="back-to-settings" class="settings-back">← Configuración</button>
+    <div class="settings-card apps-settings-card">
+      <h3>Dashboard</h3><p class="settings-hint">Personaliza el nombre y el logo del panel.</p>
+      <label class="settings-field-label" for="dashboard-name-input">Nombre del dashboard</label>
+      <form id="dashboard-name-form" class="settings-form"><input id="dashboard-name-input" maxlength="60" value="${escapeHtml(currentDashboardName)}" required /><button type="submit">Guardar</button></form>
+      <p id="dashboard-name-feedback" class="settings-feedback"></p>
+      <label class="settings-field-label" for="dashboard-logo-input">Logo del dashboard</label>
+      <p class="settings-hint">PNG, JPG o WebP de hasta 2 MB.</p>
+      <form id="dashboard-logo-form" class="app-branding-form"><input id="dashboard-logo-input" type="file" accept="image/png,image/jpeg,image/webp" /><button type="submit">Guardar logo</button></form>
+      <p id="dashboard-logo-feedback" class="settings-feedback"></p>
+    </div>`;
+  document.getElementById('back-to-settings').addEventListener('click', () => { settingsSection = 'home'; renderSettings(); });
+  document.getElementById('dashboard-name-form').addEventListener('submit', (event) => { event.preventDefault(); const name = document.getElementById('dashboard-name-input').value.trim(); if (name) saveDashboardName(name); });
+  document.getElementById('dashboard-logo-form').addEventListener('submit', (event) => { event.preventDefault(); saveDashboardLogo(document.getElementById('dashboard-logo-input').files[0]); });
+}
+
+function renderSupportSettings() {
+  settingsViewEl.innerHTML = `<button type="button" id="back-to-settings" class="settings-back">← Configuración</button>
+    <div class="settings-card apps-settings-card"><h3>Número de soporte</h3><p class="settings-hint">Teléfono usado por los botones de llamada y WhatsApp de ambas apps. Incluye código de país, por ejemplo +51987654321.</p>
+      <form id="support-phone-form" class="settings-form"><input type="tel" id="support-phone-input" placeholder="+51987654321" value="${escapeHtml(currentSupportPhone)}" required /><button type="submit">Guardar</button></form><p id="settings-feedback" class="settings-feedback"></p>
+    </div>`;
+  document.getElementById('back-to-settings').addEventListener('click', () => { settingsSection = 'home'; renderSettings(); });
+  document.getElementById('support-phone-form').addEventListener('submit', (event) => { event.preventDefault(); let value = document.getElementById('support-phone-input').value.trim(); if (!value) return; if (!value.startsWith('+')) value = `+51${value}`; saveSupportPhone(value); });
 }
 
 async function saveDashboardLogo(file) {
