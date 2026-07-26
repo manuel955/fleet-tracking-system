@@ -178,7 +178,7 @@ exports.manageDashboardUsers = functions.https.onRequest(async (req, res) => {
         const page = await admin.auth().listUsers(1000, pageToken);
         page.users.forEach((user) => {
           if (user.customClaims?.dashboardUser || user.customClaims?.dashboardAdmin || user.uid === manager.uid) {
-            users.push({ uid: user.uid, email: user.email || '', disabled: user.disabled, role: user.customClaims?.dashboardAdmin ? 'admin' : 'supervisor', isCurrent: user.uid === manager.uid });
+            users.push({ uid: user.uid, email: user.email || '', disabled: user.disabled, role: user.customClaims?.dashboardAdmin ? 'admin' : 'supervisor', isCurrent: user.uid === manager.uid, createdAt: user.metadata.creationTime || '' });
           }
         });
         pageToken = page.pageToken;

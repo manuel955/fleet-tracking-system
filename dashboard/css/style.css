@@ -745,6 +745,7 @@ button, input { font-family: inherit; }
   gap: 14px;
   margin: 4px 0 16px;
 }
+.dashboard-users-toolbar > div { flex: 1; }
 .dashboard-users-toolbar h2 { margin: 0; font-size: 20px; letter-spacing: -0.02em; }
 .dashboard-users-toolbar p { margin: 4px 0 0; color: var(--gray-500); font-size: 13px; }
 .dashboard-add-user-btn {
@@ -759,7 +760,28 @@ button, input { font-family: inherit; }
 }
 .dashboard-add-user-btn:hover { background: var(--gray-800); }
 .dashboard-create-panel { max-width: 520px; margin-bottom: 16px; }
-.dashboard-users-list-card { max-width: 900px; }
+.dashboard-users-table-wrap {
+  max-width: 1160px;
+  overflow-x: auto;
+  border: 1.5px solid var(--gray-150);
+  border-radius: var(--radius-lg);
+  background: var(--white);
+}
+.dashboard-users-table { width: 100%; min-width: 840px; border-collapse: collapse; }
+.dashboard-users-table th, .dashboard-users-table td { padding: 15px 18px; border-bottom: 1px solid var(--gray-150); text-align: left; font-size: 13px; }
+.dashboard-users-table th { color: var(--gray-500); font-weight: 700; background: var(--gray-50); }
+.dashboard-users-table tr:last-child td { border-bottom: 0; }
+.dashboard-users-table td small { color: var(--gray-500); }
+.dashboard-role-select, .dashboard-role-static { min-width: 126px; padding: 8px 10px; border: 1px solid var(--gray-200); border-radius: var(--radius-sm); background: var(--white); font: inherit; }
+.dashboard-role-static { display: inline-block; color: var(--gray-500); background: var(--gray-50); }
+.dashboard-status { display: inline-block; padding: 4px 11px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+.dashboard-status.active { background: #e8f8ee; color: var(--green-dark); }
+.dashboard-status.inactive { background: var(--gray-100); color: var(--gray-500); }
+.dashboard-user-actions { white-space: nowrap; }
+.dashboard-table-action { padding: 3px 5px; border: 0; background: none; color: var(--gray-600); font: inherit; font-weight: 600; cursor: pointer; }
+.dashboard-table-action:hover { color: var(--black); text-decoration: underline; }
+.dashboard-table-action.danger { color: var(--red); }
+.dashboard-empty-row { padding: 28px !important; text-align: center !important; color: var(--gray-500); }
 .hidden { display: none; }
 
 .settings-card h3 {

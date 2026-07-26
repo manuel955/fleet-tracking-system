@@ -254,11 +254,11 @@ function renderDashboardUsers() {
   settingsViewEl.innerHTML = `
     <button type="button" id="back-to-settings" class="settings-back">← Configuración</button>
     <div class="dashboard-users-toolbar">
-      <button type="button" id="show-create-dashboard-user" class="dashboard-add-user-btn">+ Agregar usuario</button>
-      <div>
+       <div>
         <h2>Usuarios del dashboard</h2>
         <p>Administra quién puede ingresar al panel.</p>
-      </div>
+       </div>
+       <button type="button" id="show-create-dashboard-user" class="dashboard-add-user-btn">Nuevo usuario</button>
     </div>
     <div id="dashboard-create-panel" class="settings-card apps-settings-card dashboard-create-panel${dashboardUserCreateOpen ? '' : ' hidden'}">
       <h3>Nuevo usuario</h3>
@@ -270,9 +270,11 @@ function renderDashboardUsers() {
       </form>
       <p id="dashboard-users-feedback" class="settings-feedback"></p>
     </div>
-    <div class="settings-card dashboard-users-list-card">
-      <h3>Usuarios con acceso</h3>
-      ${dashboardUsers.map((user) => dashboardUserCardHtml(user)).join('') || '<p class="settings-hint">No hay usuarios.</p>'}
+    <div class="dashboard-users-table-wrap">
+      <table class="dashboard-users-table">
+        <thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Estado</th><th>Creado</th><th>Acciones</th></tr></thead>
+        <tbody>${dashboardUsers.map((user) => dashboardUserCardHtml(user)).join('') || '<tr><td colspan="6" class="dashboard-empty-row">No hay usuarios.</td></tr>'}</tbody>
+      </table>
     </div>
   `;
   document.getElementById('back-to-settings').addEventListener('click', () => { settingsSection = 'home'; renderSettings(); });
@@ -294,28 +296,41 @@ function renderDashboardUsers() {
 }
 
 function dashboardUserCardHtml(user) {
-  return `<form id="dashboard-user-${user.uid}" class="dashboard-user-row">
-    <input id="dashboard-email-${user.uid}" type="email" value="${escapeHtml(user.email)}" required />
-    <input id="dashboard-password-${user.uid}" type="password" placeholder="Nueva contraseña (opcional)" minlength="6" />
-    ${user.isCurrent ? '<span class="dashboard-admin-badge">Tu cuenta (Administrador)</span>' : '<select id="dashboard-role-' + user.uid + '"><option value="supervisor"' + (user.role === 'supervisor' ? ' selected' : '') + '>Supervisor</option><option value="admin"' + (user.role === 'admin' ? ' selected' : '') + '>Administrador</option></select>'}
-    <button type="submit">Guardar</button>
-    ${user.isCurrent ? '' : `<button type="button" data-delete-user="${user.uid}" class="dashboard-delete-btn">Eliminar</button>`}
-  </form>`;
+  const name = user.email ? user.email.split('@')[0] : 'Usuario';
+  const state = user.disabled ? 'Inactivo' : 'Activo';
+  return `<tr>
+    <td><b>${escapeHtml(name)}</b>${user.isCurrent ? ' <small>(tu)</small>' : ''}</td>
+    <td>${escapeHtml(user.email)}</td>
+    <td>${user.isCurrent ? '<span class="dashboard-role-static">Administrador</span>' : `<select id="dashboard-role-${user.uid}" class="dashboard-role-select"><option value="supervisor"${user.role === 'supervisor' ? ' selected' : ''}>Supervisor</option><option value="admin"${user.role === 'admin' ? ' selected' : ''}>Administrador</option></select>`}</td>
+    <td><span class="dashboard-status ${user.disabled ? 'inactive' : 'active'}">${state}</span></td>
+    <td>${formatDashboardDate(user.createdAt)}</td>
+    <td class="dashboard-user-actions"><button type="button" data-save-user="${user.uid}" class="dashboard-table-action">Guardar</button><button type="button" data-password-user="${user.uid}" class="dashboard-table-action">Contrasena</button>${user.isCurrent ? '' : `<button type="button" data-delete-user="${user.uid}" class="dashboard-table-action danger">Eliminar</button>`}</td>
+  </tr>`;
 }
 
 function bindDashboardUserControls(user) {
-  document.getElementById(`dashboard-user-${user.uid}`).addEventListener('submit', async (event) => {
-    event.preventDefault();
+  document.querySelector(`[data-save-user="${user.uid}"]`).addEventListener('click', async () => {
     try {
-      await dashboardUsersRequest({ action: 'update', uid: user.uid, email: document.getElementById(`dashboard-email-${user.uid}`).value, password: document.getElementById(`dashboard-password-${user.uid}`).value, role: user.isCurrent ? 'admin' : document.getElementById(`dashboard-role-${user.uid}`).value });
+      await dashboardUsersRequest({ action: 'update', uid: user.uid, role: user.isCurrent ? 'admin' : document.getElementById(`dashboard-role-${user.uid}`).value });
       await loadDashboardUsers();
     } catch (error) { alert(error.message); }
+  });
+  document.querySelector(`[data-password-user="${user.uid}"]`).addEventListener('click', async () => {
+    const password = prompt(`Nueva contrasena para ${user.email} (minimo 6 caracteres):`);
+    if (password === null || !password.trim()) return;
+    try { await dashboardUsersRequest({ action: 'update', uid: user.uid, password: password.trim() }); alert('Contrasena actualizada.'); } catch (error) { alert(error.message); }
   });
   const remove = document.querySelector(`[data-delete-user="${user.uid}"]`);
   if (remove) remove.addEventListener('click', async () => {
     if (!confirm(`¿Eliminar el acceso de ${user.email}?`)) return;
     try { await dashboardUsersRequest({ action: 'delete', uid: user.uid }); await loadDashboardUsers(); } catch (error) { alert(error.message); }
   });
+}
+
+function formatDashboardDate(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: '2-digit' });
 }
 
 function saveDashboardName(name) {
