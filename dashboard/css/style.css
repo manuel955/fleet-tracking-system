@@ -1055,8 +1055,13 @@ button, input { font-family: inherit; }
 .updates-heading { margin-bottom: 16px; }
 .updates-heading h3 { margin: 0 0 8px; font-size: 20px; }
 .updates-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
-.update-app-block { min-height: 190px; padding: 22px; border: 1.5px solid var(--gray-150); border-radius: var(--radius-lg); background: var(--white); }
+.update-app-block { min-height: 250px; padding: 22px; border: 1.5px solid var(--gray-150); border-radius: var(--radius-lg); background: var(--white); }
 .update-app-block .build-branded-app-btn { margin-top: 4px; }
+.manual-update-form { display: grid; grid-template-columns: 1fr 130px auto; gap: 8px; align-items: center; }
+.manual-update-form input { min-width: 0; box-sizing: border-box; padding: 10px; border: 1px solid var(--gray-200); border-radius: var(--radius-sm); background: var(--gray-50); font: inherit; }
+.manual-update-form button { padding: 11px 14px; border: 0; border-radius: var(--radius-sm); background: var(--black); color: var(--white); font-weight: 700; cursor: pointer; }
+.update-or { margin: 12px 0; color: var(--gray-500); font-size: 12px; text-align: center; }
+@media (max-width: 620px) { .manual-update-form { grid-template-columns: 1fr; } }
 
 .update-current-build { color: var(--gray-500); font-size: 12px; }
 

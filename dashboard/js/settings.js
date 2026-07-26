@@ -360,7 +360,16 @@ function renderUpdates() {
     renderSettings();
   });
 
-  UPDATE_APPS.forEach((app) => document.getElementById(`generate-update-${app.key}`).addEventListener('click', () => requestBrandedAppBuild(app, `update-feedback-${app.key}`)));
+  UPDATE_APPS.forEach((app) => {
+    document.getElementById(`generate-update-${app.key}`).addEventListener('click', () => requestBrandedAppBuild(app, `update-feedback-${app.key}`));
+    document.getElementById(`update-form-${app.key}`).addEventListener('submit', (event) => {
+      event.preventDefault();
+      const file = document.getElementById(`update-file-${app.key}`).files[0];
+      const build = Number.parseInt(document.getElementById(`update-build-${app.key}`).value, 10);
+      if (!file || !build || build < 1) return;
+      publishAppUpdate(app, file, build);
+    });
+  });
 }
 
 function renderApps() {
@@ -470,8 +479,14 @@ function updateAppCardHtml(app) {
         <b>${escapeHtml(app.label)}</b>
         <span class="update-current-build">${build ? `Versión publicada: build ${build}` : 'Sin versión publicada aún'}</span>
       </div>
-      <p class="settings-hint">Compila la versión con la marca actual y publica el aviso de actualización.</p>
-      <button type="button" id="generate-update-${app.key}" class="build-branded-app-btn">Generar APK y enviar actualización</button>
+      <p class="settings-hint">Sube una APK release ya compilada e indica su build.</p>
+      <form id="update-form-${app.key}" class="manual-update-form">
+        <input type="file" id="update-file-${app.key}" accept=".apk" required />
+        <input type="number" id="update-build-${app.key}" placeholder="Número de build" min="1" required />
+        <button type="submit">Publicar APK</button>
+      </form>
+      <div class="update-or">o</div>
+      <button type="button" id="generate-update-${app.key}" class="build-branded-app-btn">Generar APK automáticamente</button>
       <p id="update-feedback-${app.key}" class="settings-feedback"></p>
     </div>
   `;
