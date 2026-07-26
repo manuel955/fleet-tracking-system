@@ -38,7 +38,13 @@ function openDashboardView(view) {
   settingsViewEl.classList.toggle('hidden', view !== 'settings');
   if (view === 'drivers-admin') startDriversAdmin();
   if (view === 'places') startPlaces();
-  if (view === 'settings') { startSettings(); renderSettings(); }
+  if (view === 'settings') {
+    // El boton superior siempre vuelve al inicio de Configuracion, incluso
+    // cuando se esta dentro de Usuarios, Apps o Actualizaciones.
+    settingsSection = 'home';
+    startSettings();
+    renderSettings();
+  }
   if (view === 'map' && map && window.google?.maps) window.google.maps.event.trigger(map, 'resize');
 }
 
