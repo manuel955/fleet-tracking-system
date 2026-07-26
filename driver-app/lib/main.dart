@@ -466,7 +466,6 @@ class _DriverHomePageState extends State<DriverHomePage> {
             Timer.periodic(const Duration(seconds: 5), (_) => _pollForTrip());
         _pollForTrip();
         PushService.registerToken();
-        _startShift();
       }
     } catch (e) {
       setState(() {
@@ -1126,7 +1125,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
       child: ElevatedButton.icon(
         onPressed: _startShift,
         icon: const Icon(Icons.play_circle_fill),
-        label: const Text('Reintentar inicio de turno',
+        label: const Text('Iniciar turno',
             style: TextStyle(fontWeight: FontWeight.w600)),
         style: ElevatedButton.styleFrom(
           backgroundColor: Colors.orange.shade800,
