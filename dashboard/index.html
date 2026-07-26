@@ -16,10 +16,10 @@
 <!-- Pantalla de login / registro -->
 <div id="login-screen" class="login-screen">
   <form id="login-form" class="login-card">
-    <button type="button" id="dashboard-home-link" class="brand brand-home" aria-label="Ir al mapa">
+    <div class="brand">
       <span class="brand-icon" data-dashboard-icon>F</span>
       <span class="brand-text" data-dashboard-name>Panel de Flota</span>
-    </button>
+    </div>
     <h1>Bienvenido de vuelta</h1>
     <p id="login-subtitle" class="subtitle">Inicia sesión para monitorear los vehículos</p>
 
@@ -37,10 +37,10 @@
 <!-- Aplicacion principal -->
 <div id="app" class="app hidden">
   <header class="topbar">
-    <div class="brand">
+    <button type="button" id="dashboard-home-link" class="brand brand-home" aria-label="Ir al mapa">
       <span class="brand-icon" data-dashboard-icon>F</span>
       <span class="brand-text" data-dashboard-name>Panel de Flota</span>
-    </div>
+    </button>
     <h1 data-dashboard-name>Panel de Flota</h1>
     <nav class="top-nav">
       <button type="button" class="nav-tab active" data-view="map">Mapa</button>
