@@ -36,6 +36,7 @@ let map;
 let markers = {};        // driverId -> google.maps.Marker
 let selectionHalo = null; // aro de color detras del auto seleccionado
 let driversCache = {};   // driverId -> data
+let mapPlacesCache = { hotels: {}, sportVenues: {} };
 
 let activeTripListeners = {}; // tripId -> callback, solo para conductores 'busy'
 let activeTripsCache = {};    // tripId -> trip data (viajes en curso)
@@ -136,6 +137,10 @@ function tryStartDashboard() {
     subscribed = true;
     subscribeToDrivers();
     subscribeTodayTrips();
+    ['hotels', 'sportVenues'].forEach((key) => db.ref(`config/${key}`).on('value', (snapshot) => {
+      mapPlacesCache[key] = snapshot.val() || {};
+      renderSidebar();
+    }));
     // Los marcadores y la lista ya se actualizan solos en tiempo real con
     // cada escritura de Firebase. Este timer detecta el paso del tiempo SIN
     // que llegue un dato nuevo (ej. un conductor se desconecto) y refresca
@@ -648,6 +653,23 @@ function renderSidebar() {
   driverListEl.querySelectorAll('[data-cancel-trip]').forEach((btn) => {
     btn.addEventListener('click', () => cancelTrip(btn.getAttribute('data-cancel-trip')));
   });
+  driverListEl.querySelectorAll('[data-map-assign-place]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const driverId = btn.getAttribute('data-map-assign-place');
+      const select = document.querySelector(`[data-map-place-select="${driverId}"]`);
+      if (!select.value) return alert('Selecciona un hotel o sede deportiva.');
+      const [type, name] = select.value.split('|');
+      try { await manageDriver({ action: 'assignPlace', driverId, place: { type, name } }); } catch (error) { alert(error.message); }
+    });
+  });
+}
+
+function mapPlaceOptions(d) {
+  const current = d.assignedPlace?.name || '';
+  return ['<option value="">Asignar hotel o sede…</option>',
+    ...Object.values(mapPlacesCache.hotels).map((place) => `<option value="hotel|${escapeHtml(place.name)}"${current === place.name ? ' selected' : ''}>Hotel: ${escapeHtml(place.name)}</option>`),
+    ...Object.values(mapPlacesCache.sportVenues).map((place) => `<option value="sportVenue|${escapeHtml(place.name)}"${current === place.name ? ' selected' : ''}>Sede: ${escapeHtml(place.name)}</option>`),
+  ].join('');
 }
 
 // Cancelacion de un viaje ya asignado: solo el dashboard (login con
@@ -713,12 +735,16 @@ function driverDetailHtml(driverId, d, state) {
   return `
     <div class="detail-section">
       <div class="row"><b>Edad:</b> ${escapeHtml(String(d.age ?? '-'))}</div>
-      <div class="row"><b>Hotel asignado:</b> ${escapeHtml(d.hotel || '-')}</div>
+      <div class="row"><b>Lugar asignado:</b> ${escapeHtml(d.assignedPlace?.name || d.hotel || '-')}</div>
       <div class="row"><b>Teléfono:</b> ${escapeHtml(d.phone || '-')}</div>
       <div class="row"><b>Viajes completados hoy:</b> ${completedTripsToday(driverId)}</div>
       <div class="row"><b>Última actualización GPS:</b> ${lastUpdateStr}</div>
     </div>
     ${tripBlock}
+    <div class="map-place-assignment">
+      <select data-map-place-select="${driverId}">${mapPlaceOptions(d)}</select>
+      <button type="button" data-map-assign-place="${driverId}">Asignar lugar</button>
+    </div>
     ${
       phoneDigits
         ? `<div class="contact-actions">

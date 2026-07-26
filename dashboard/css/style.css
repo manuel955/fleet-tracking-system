@@ -649,6 +649,9 @@ button, input { font-family: inherit; }
 .assign-place-select { flex: 1 1 180px; min-width: 0; padding: 8px; border: 1px solid var(--gray-200); border-radius: var(--radius-sm); }
 .delete-driver-btn { flex: 1 1 145px; border: 1px solid var(--red); border-radius: var(--radius-sm); background: var(--white); color: var(--red); padding: 8px 10px; font-weight: 700; cursor: pointer; }
 .delete-driver-btn:hover { background: var(--red-tint); }
+.map-place-assignment { display: flex; gap: 8px; margin: 12px 0 0; }
+.map-place-assignment select { flex: 1; min-width: 0; padding: 9px; border: 1px solid var(--gray-200); border-radius: var(--radius-sm); }
+.map-place-assignment button { border: 0; border-radius: var(--radius-sm); padding: 9px 11px; background: var(--black); color: var(--white); font-weight: 700; cursor: pointer; }
 
 .approve-btn, .reject-btn {
   flex: 1;

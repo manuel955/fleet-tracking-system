@@ -480,6 +480,9 @@ class _DriverHomePageState extends State<DriverHomePage> {
     if (_driverId == null) return;
     try {
       final profile = await DriverProfileService.fetchProfile(_driverId!);
+      if (profile != null && mounted) {
+        setState(() => _driverProfile = profile);
+      }
       final remoteSessionId = profile?['activeSessionId'] as String?;
       final localSessionId = await SessionService.localSessionId();
       if (remoteSessionId != null &&
@@ -1163,6 +1166,11 @@ class _DriverHomePageState extends State<DriverHomePage> {
         children: [
           _chip('DNI: ${_driverProfile?['dni'] ?? '-'}', Colors.blueGrey,
               onTap: _copyDni),
+          if ((_driverProfile?['assignedPlace'] as Map?)?['name'] != null)
+            _chip(
+              'Asignado: ${(_driverProfile!['assignedPlace'] as Map)['name']}',
+              Colors.deepPurple,
+            ),
           _chip(
             'Ubicación: ${_permissionLabel()}',
             _alwaysStatus?.isGranted == true ? Colors.green : Colors.orange,
