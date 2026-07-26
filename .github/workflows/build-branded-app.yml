@@ -49,7 +49,7 @@ jobs:
           app_dir = {'driver': 'driver-app', 'passenger': 'passenger-app'}[request['app']]
           root = Path(app_dir)
           pubspec = root / 'pubspec.yaml'
-          pubspec.write_text(re.sub(r'^version:.*$', f"version: 1.0.0+{request['build']}", pubspec.read_text(), flags=re.M)
+          pubspec.write_text(re.sub(r'^version:.*$', f"version: 1.0.0+{request['build']}", pubspec.read_text(), flags=re.M))
 
           values = root / 'android/app/src/main/res/values'
           (values / 'app_name.xml').write_text(
