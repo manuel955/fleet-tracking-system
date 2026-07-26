@@ -2,12 +2,13 @@
   "rules": {
     "config": {
       ".read": true,
-      ".write": "auth != null && auth.token.firebase.sign_in_provider === 'password'",
-      "supportPhone": { ".validate": "newData.isString() && newData.val().length > 0" },
-      "driverAppBuild": { ".validate": "newData.isNumber() && newData.val() > 0" },
-      "passengerAppBuild": { ".validate": "newData.isNumber() && newData.val() > 0" },
-      "dashboardName": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 60" },
+      "supportPhone": { ".write": "auth != null && auth.token.dashboardUser === true", ".validate": "newData.isString() && newData.val().length > 0" },
+      "driverAppBuild": { ".write": "auth != null && auth.token.dashboardAdmin === true", ".validate": "newData.isNumber() && newData.val() > 0" },
+      "passengerAppBuild": { ".write": "auth != null && auth.token.dashboardAdmin === true", ".validate": "newData.isNumber() && newData.val() > 0" },
+      "dashboardName": { ".write": "auth != null && auth.token.dashboardAdmin === true", ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 60" },
+      "dashboardLogoUrl": { ".write": "auth != null && auth.token.dashboardAdmin === true", ".validate": "newData.isString() && newData.val().length > 0" },
       "appBranding": {
+        ".write": "auth != null && auth.token.dashboardAdmin === true",
         "$app": {
           ".validate": "$app === 'driver' || $app === 'passenger'",
           "name": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 40" },
@@ -16,6 +17,7 @@
         }
       },
       "sportVenues": {
+        ".write": "auth != null && auth.token.dashboardAdmin === true",
         "$venueId": {
           "name": { ".validate": "newData.isString() && newData.val().length > 0" },
           "address": { ".validate": "newData.isString()" },
@@ -25,6 +27,7 @@
         }
       },
       "hotels": {
+        ".write": "auth != null && auth.token.dashboardAdmin === true",
         "$hotelId": {
           "name": { ".validate": "newData.isString() && newData.val().length > 0" },
           "address": { ".validate": "newData.isString()" },

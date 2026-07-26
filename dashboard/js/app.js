@@ -53,6 +53,7 @@ let lastRouteOrigin = null; // {lat,lng} del conductor usado para la ruta ya dib
 let googleMapsReady = false;
 let userAuthenticated = false;
 let subscribed = false;
+window.dashboardIsAdmin = false;
 
 // Llamado por el callback del script de Google Maps (ver index.html)
 function onGoogleMapsReady() {
@@ -98,10 +99,13 @@ document.getElementById('logout-btn').addEventListener('click', () => auth.signO
 async function initializeDashboardAdmin(user) {
   try {
     const token = await user.getIdToken();
-    await fetch('https://us-central1-rastreoflota-53052.cloudfunctions.net/initializeDashboardAdmin', {
+    const response = await fetch('https://us-central1-rastreoflota-53052.cloudfunctions.net/initializeDashboardAdmin', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     });
+    const result = await response.json().catch(() => ({}));
+    window.dashboardIsAdmin = response.ok && result.isAdmin === true;
+    if (window.dashboardIsAdmin) await user.getIdToken(true);
   } catch (_) {
     // El dashboard sigue funcionando para cuentas existentes; el apartado de
     // usuarios mostrara un mensaje si la cuenta no es administradora.

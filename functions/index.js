@@ -157,8 +157,9 @@ exports.initializeDashboardAdmin = functions.https.onRequest(async (req, res) =>
       await root.child(user.uid).set({ email: user.email || '', createdAt: Date.now() });
       await admin.auth().setCustomUserClaims(user.uid, { dashboardAdmin: true, dashboardUser: true });
     }
-    if (!(await root.child(user.uid).once('value')).exists()) throw new Error('No tienes permiso para administrar usuarios');
-    return res.json({ ok: true });
+    const isAdmin = (await root.child(user.uid).once('value')).exists();
+    if (!isAdmin) throw new Error('No tienes permiso para administrar usuarios');
+    return res.json({ ok: true, isAdmin });
   } catch (error) {
     return res.status(403).json({ error: error.message || 'No autorizado' });
   }
@@ -178,7 +179,7 @@ exports.manageDashboardUsers = functions.https.onRequest(async (req, res) => {
         const page = await admin.auth().listUsers(1000, pageToken);
         page.users.forEach((user) => {
           if (user.customClaims?.dashboardUser || user.customClaims?.dashboardAdmin || user.uid === manager.uid) {
-            users.push({ uid: user.uid, email: user.email || '', disabled: user.disabled, isAdmin: user.uid === manager.uid });
+            users.push({ uid: user.uid, email: user.email || '', disabled: user.disabled, role: user.customClaims?.dashboardAdmin ? 'admin' : 'supervisor', isCurrent: user.uid === manager.uid });
           }
         });
         pageToken = page.pageToken;
@@ -190,7 +191,9 @@ exports.manageDashboardUsers = functions.https.onRequest(async (req, res) => {
       const password = String(req.body?.password || '');
       if (!email || password.length < 6) return res.status(400).json({ error: 'Correo y contraseña de al menos 6 caracteres son requeridos' });
       const user = await admin.auth().createUser({ email, password });
-      await admin.auth().setCustomUserClaims(user.uid, { dashboardUser: true });
+      const role = req.body?.role === 'admin' ? 'admin' : 'supervisor';
+      await admin.auth().setCustomUserClaims(user.uid, { dashboardUser: true, dashboardAdmin: role === 'admin' });
+      if (role === 'admin') await admin.database().ref(`dashboardAdmins/${user.uid}`).set({ email, createdAt: Date.now() });
       return res.status(201).json({ uid: user.uid });
     }
     if (action === 'update') {
@@ -202,8 +205,14 @@ exports.manageDashboardUsers = functions.https.onRequest(async (req, res) => {
         changes.password = String(req.body.password);
       }
       if (typeof req.body?.disabled === 'boolean') changes.disabled = req.body.disabled;
-      if (!uid || Object.keys(changes).length === 0) return res.status(400).json({ error: 'No hay cambios para guardar' });
-      await admin.auth().updateUser(uid, changes);
+      if (!uid || (Object.keys(changes).length === 0 && !req.body?.role)) return res.status(400).json({ error: 'No hay cambios para guardar' });
+      if (Object.keys(changes).length) await admin.auth().updateUser(uid, changes);
+      if (req.body?.role && uid !== manager.uid) {
+        const isAdmin = req.body.role === 'admin';
+        await admin.auth().setCustomUserClaims(uid, { dashboardUser: true, dashboardAdmin: isAdmin });
+        if (isAdmin) await admin.database().ref(`dashboardAdmins/${uid}`).set({ updatedAt: Date.now() });
+        else await admin.database().ref(`dashboardAdmins/${uid}`).remove();
+      }
       return res.json({ ok: true });
     }
     if (action === 'delete') {

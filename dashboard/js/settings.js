@@ -28,6 +28,7 @@ const BRAND_APPS = [
 let currentBuilds = {}; // buildField -> numero
 let currentAppBranding = {};
 let currentDashboardName = 'Panel de Flota';
+let currentDashboardLogoUrl = '';
 let dashboardUsers = [];
 
 function applyDashboardName(name) {
@@ -45,6 +46,20 @@ db.ref('config/dashboardName').on('value', (snapshot) => {
   applyDashboardName(currentDashboardName);
   if (settingsSubscribed) renderSettings();
 });
+db.ref('config/dashboardLogoUrl').on('value', (snapshot) => {
+  currentDashboardLogoUrl = snapshot.val() || '';
+  applyDashboardLogo(currentDashboardLogoUrl);
+  if (settingsSubscribed) renderSettings();
+});
+
+function applyDashboardLogo(url) {
+  document.querySelectorAll('[data-dashboard-icon]').forEach((element) => {
+    element.style.backgroundImage = url ? `url("${url}")` : '';
+    element.style.backgroundSize = 'cover';
+    element.style.backgroundPosition = 'center';
+    element.textContent = url ? '' : 'F';
+  });
+}
 
 function startSettings() {
   if (settingsSubscribed) return;
@@ -83,30 +98,30 @@ function renderSettings() {
     <div class="settings-card">
       <h3>Configuración</h3>
       <p class="settings-hint">Administra las opciones y herramientas del sistema.</p>
-      <button type="button" id="open-updates" class="settings-section-link">
+      ${window.dashboardIsAdmin ? `<button type="button" id="open-updates" class="settings-section-link">
         <span>
           <b>Actualizaciones</b>
           <small>Publica nuevas versiones de las apps</small>
         </span>
         <span aria-hidden="true">›</span>
-      </button>
-      <button type="button" id="open-apps" class="settings-section-link">
+      </button>` : ''}
+      ${window.dashboardIsAdmin ? `<button type="button" id="open-apps" class="settings-section-link">
         <span>
           <b>Apps</b>
           <small>Cambia el nombre y el ícono de cada app</small>
         </span>
         <span aria-hidden="true">›</span>
-      </button>
-      <button type="button" id="open-dashboard-users" class="settings-section-link">
+      </button>` : ''}
+      ${window.dashboardIsAdmin ? `<button type="button" id="open-dashboard-users" class="settings-section-link">
         <span>
           <b>Usuarios del dashboard</b>
           <small>Crea y administra quién puede ingresar</small>
         </span>
         <span aria-hidden="true">›</span>
-      </button>
+      </button>` : ''}
     </div>
 
-    <div class="settings-card">
+    ${window.dashboardIsAdmin ? `<div class="settings-card">
       <h3>Nombre del dashboard</h3>
       <p class="settings-hint">Nombre que aparece en el inicio de sesión y la barra superior.</p>
       <form id="dashboard-name-form" class="settings-form">
@@ -114,7 +129,17 @@ function renderSettings() {
         <button type="submit">Guardar</button>
       </form>
       <p id="dashboard-name-feedback" class="settings-feedback"></p>
-    </div>
+    </div>` : ''}
+
+    ${window.dashboardIsAdmin ? `<div class="settings-card">
+      <h3>Logo del dashboard</h3>
+      <p class="settings-hint">PNG, JPG o WebP de hasta 2 MB.</p>
+      <form id="dashboard-logo-form" class="app-branding-form">
+        <input id="dashboard-logo-input" type="file" accept="image/png,image/jpeg,image/webp" />
+        <button type="submit">Guardar logo</button>
+      </form>
+      <p id="dashboard-logo-feedback" class="settings-feedback"></p>
+    </div>` : ''}
 
     <div class="settings-card">
       <h3>Número de soporte</h3>
@@ -137,23 +162,32 @@ function renderSettings() {
     </div>
   `;
 
-  document.getElementById('open-updates').addEventListener('click', () => {
+  const updatesButton = document.getElementById('open-updates');
+  if (updatesButton) updatesButton.addEventListener('click', () => {
     settingsSection = 'updates';
     renderSettings();
   });
-  document.getElementById('open-apps').addEventListener('click', () => {
+  const appsButton = document.getElementById('open-apps');
+  if (appsButton) appsButton.addEventListener('click', () => {
     settingsSection = 'apps';
     renderSettings();
   });
-  document.getElementById('open-dashboard-users').addEventListener('click', () => {
+  const usersButton = document.getElementById('open-dashboard-users');
+  if (usersButton) usersButton.addEventListener('click', () => {
     settingsSection = 'users';
     loadDashboardUsers();
   });
-  document.getElementById('dashboard-name-form').addEventListener('submit', (e) => {
+  const dashboardNameForm = document.getElementById('dashboard-name-form');
+  if (dashboardNameForm) dashboardNameForm.addEventListener('submit', (e) => {
     e.preventDefault();
     const name = document.getElementById('dashboard-name-input').value.trim();
     if (!name) return;
     saveDashboardName(name);
+  });
+  const logoForm = document.getElementById('dashboard-logo-form');
+  if (logoForm) logoForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    saveDashboardLogo(document.getElementById('dashboard-logo-input').files[0]);
   });
 
   document.getElementById('support-phone-form').addEventListener('submit', (e) => {
@@ -166,6 +200,19 @@ function renderSettings() {
     if (!value.startsWith('+')) value = `+51${value}`;
     saveSupportPhone(value);
   });
+}
+
+async function saveDashboardLogo(file) {
+  if (!file) return;
+  const feedback = document.getElementById('dashboard-logo-feedback');
+  feedback.textContent = 'Subiendo logo…';
+  try {
+    const ref = storage.ref('dashboard_branding/logo');
+    await ref.put(file, { contentType: file.type });
+    await db.ref('config/dashboardLogoUrl').set(await ref.getDownloadURL());
+    feedback.textContent = 'Logo actualizado.';
+    feedback.className = 'settings-feedback success';
+  } catch (error) { feedback.textContent = error.message || error; feedback.className = 'settings-feedback error'; }
 }
 
 async function dashboardUsersRequest(payload) {
@@ -208,6 +255,7 @@ function renderDashboardUsers() {
       <form id="create-dashboard-user" class="app-branding-form">
         <input id="new-dashboard-email" type="email" placeholder="correo@empresa.com" required />
         <input id="new-dashboard-password" type="password" placeholder="Contraseña temporal (mínimo 6 caracteres)" minlength="6" required />
+        <select id="new-dashboard-role"><option value="supervisor">Supervisor</option><option value="admin">Administrador</option></select>
         <button type="submit">Crear usuario</button>
       </form>
       <p id="dashboard-users-feedback" class="settings-feedback"></p>
@@ -223,7 +271,7 @@ function renderDashboardUsers() {
     const feedback = document.getElementById('dashboard-users-feedback');
     try {
       feedback.textContent = 'Creando…';
-      await dashboardUsersRequest({ action: 'create', email: document.getElementById('new-dashboard-email').value, password: document.getElementById('new-dashboard-password').value });
+      await dashboardUsersRequest({ action: 'create', email: document.getElementById('new-dashboard-email').value, password: document.getElementById('new-dashboard-password').value, role: document.getElementById('new-dashboard-role').value });
       await loadDashboardUsers();
     } catch (error) { feedback.textContent = error.message; feedback.className = 'settings-feedback error'; }
   });
@@ -234,8 +282,9 @@ function dashboardUserCardHtml(user) {
   return `<form id="dashboard-user-${user.uid}" class="dashboard-user-row">
     <input id="dashboard-email-${user.uid}" type="email" value="${escapeHtml(user.email)}" required />
     <input id="dashboard-password-${user.uid}" type="password" placeholder="Nueva contraseña (opcional)" minlength="6" />
+    ${user.isCurrent ? '<span class="dashboard-admin-badge">Tu cuenta (Administrador)</span>' : '<select id="dashboard-role-' + user.uid + '"><option value="supervisor"' + (user.role === 'supervisor' ? ' selected' : '') + '>Supervisor</option><option value="admin"' + (user.role === 'admin' ? ' selected' : '') + '>Administrador</option></select>'}
     <button type="submit">Guardar</button>
-    ${user.isAdmin ? '<span class="dashboard-admin-badge">Administrador</span>' : `<button type="button" data-delete-user="${user.uid}" class="dashboard-delete-btn">Eliminar</button>`}
+    ${user.isCurrent ? '' : `<button type="button" data-delete-user="${user.uid}" class="dashboard-delete-btn">Eliminar</button>`}
   </form>`;
 }
 
@@ -243,7 +292,7 @@ function bindDashboardUserControls(user) {
   document.getElementById(`dashboard-user-${user.uid}`).addEventListener('submit', async (event) => {
     event.preventDefault();
     try {
-      await dashboardUsersRequest({ action: 'update', uid: user.uid, email: document.getElementById(`dashboard-email-${user.uid}`).value, password: document.getElementById(`dashboard-password-${user.uid}`).value });
+      await dashboardUsersRequest({ action: 'update', uid: user.uid, email: document.getElementById(`dashboard-email-${user.uid}`).value, password: document.getElementById(`dashboard-password-${user.uid}`).value, role: user.isCurrent ? 'admin' : document.getElementById(`dashboard-role-${user.uid}`).value });
       await loadDashboardUsers();
     } catch (error) { alert(error.message); }
   });
