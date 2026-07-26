@@ -27,6 +27,16 @@ service firebase.storage {
                    && request.resource.contentType == 'application/vnd.android.package-archive';
     }
 
+    // Íconos de marca configurables desde el dashboard. Son públicos para
+    // que las dos apps puedan descargarlos al iniciarse.
+    match /app_branding/{fileName} {
+      allow read: if true;
+      allow write: if request.auth != null
+                   && request.auth.token.firebase.sign_in_provider == 'password'
+                   && request.resource.size < 2 * 1024 * 1024
+                   && request.resource.contentType.matches('image/(png|jpeg|webp)');
+    }
+
     match /driver_documents/{driverId}/{fileName} {
       allow read: if request.auth != null;
       allow create, update: if request.auth != null

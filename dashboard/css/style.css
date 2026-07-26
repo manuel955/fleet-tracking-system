@@ -772,6 +772,115 @@ button, input { font-family: inherit; }
 
 .settings-card + .settings-card { margin-top: 20px; }
 
+.settings-section-link {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  border: 1.5px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  background: var(--gray-50);
+  color: var(--black);
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-section-link:hover { border-color: var(--black); background: var(--white); }
+.settings-section-link + .settings-section-link { margin-top: 8px; }
+.settings-section-link b, .settings-section-link small { display: block; }
+.settings-section-link b { font-size: 13.5px; }
+.settings-section-link small { margin-top: 3px; color: var(--gray-500); font-size: 12px; }
+.settings-section-link > span:last-child { font-size: 24px; line-height: 1; }
+
+.settings-back {
+  margin-bottom: 14px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--black);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.settings-back:hover { text-decoration: underline; }
+
+.apps-settings-card { max-width: 520px; }
+
+.app-branding-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  font-size: 13.5px;
+}
+
+.app-branding-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  object-fit: cover;
+  background: var(--black);
+}
+
+.app-branding-icon-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--white);
+  font-size: 21px;
+}
+
+.app-branding-form {
+  display: grid;
+  gap: 7px;
+}
+
+.app-branding-form label {
+  margin-top: 4px;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.app-branding-form input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1.5px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  background: var(--gray-50);
+  font: inherit;
+  font-size: 13.5px;
+}
+
+.app-branding-form input:focus { outline: none; border-color: var(--black); background: var(--white); }
+
+.app-branding-form button {
+  justify-self: start;
+  margin-top: 6px;
+  padding: 10px 16px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--black);
+  color: var(--white);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.build-branded-app-btn {
+  margin-top: 12px;
+  padding: 10px 16px;
+  border: 1.5px solid var(--black);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+  color: var(--black);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.build-branded-app-btn:hover { background: var(--gray-100); }
+
 .settings-divider {
   border: none;
   border-top: 1px solid var(--gray-150);

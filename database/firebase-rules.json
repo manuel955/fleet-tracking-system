@@ -6,6 +6,14 @@
       "supportPhone": { ".validate": "newData.isString() && newData.val().length > 0" },
       "driverAppBuild": { ".validate": "newData.isNumber() && newData.val() > 0" },
       "passengerAppBuild": { ".validate": "newData.isNumber() && newData.val() > 0" },
+      "appBranding": {
+        "$app": {
+          ".validate": "$app === 'driver' || $app === 'passenger'",
+          "name": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 40" },
+          "iconUrl": { ".validate": "newData.isString() && newData.val().length > 0" },
+          "$other": { ".validate": false }
+        }
+      },
       "sportVenues": {
         "$venueId": {
           "name": { ".validate": "newData.isString() && newData.val().length > 0" },

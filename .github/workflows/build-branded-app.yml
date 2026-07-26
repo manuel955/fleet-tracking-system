@@ -1,0 +1,91 @@
+name: Build branded fleet app
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: App to build (driver or passenger)
+        required: true
+        type: choice
+        options: [driver, passenger]
+      request_id:
+        description: One-time build request identifier
+        required: true
+        type: string
+      build_token:
+        description: One-time build request token
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CALLBACK_BASE: https://us-central1-rastreoflota-53052.cloudfunctions.net
+      APP_KIND: ${{ inputs.app }}
+      REQUEST_ID: ${{ inputs.request_id }}
+      BUILD_TOKEN: ${{ inputs.build_token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read signed build request
+        run: |
+          curl --fail --silent --show-error \
+            "$CALLBACK_BASE/getAppBrandingBuild?requestId=$REQUEST_ID&token=$BUILD_TOKEN" \
+            -o build-request.json
+
+      - name: Apply app name, icon and build number
+        run: |
+          python3 - <<'PY'
+          import json, os, re, shutil, urllib.request
+          from pathlib import Path
+          from xml.sax.saxutils import escape
+
+          request = json.loads(Path('build-request.json').read_text())
+          app_dir = {'driver': 'driver-app', 'passenger': 'passenger-app'}[request['app']]
+          root = Path(app_dir)
+          pubspec = root / 'pubspec.yaml'
+          pubspec.write_text(re.sub(r'^version:.*$', f"version: 1.0.0+{request['build']}", pubspec.read_text(), flags=re.M)
+
+          values = root / 'android/app/src/main/res/values'
+          (values / 'app_name.xml').write_text(
+              '<resources>\n    <string name="app_name">' + escape(request['name']) + '</string>\n</resources>\n'
+          )
+
+          if request.get('iconUrl'):
+              icon = root / 'android/app/src/main/res/drawable/app_branding_icon.png'
+              urllib.request.urlretrieve(request['iconUrl'], icon)
+              manifest = root / 'android/app/src/main/AndroidManifest.xml'
+              manifest.write_text(manifest.read_text().replace('android:icon="@mipmap/ic_launcher"', 'android:icon="@drawable/app_branding_icon"'))
+          PY
+
+      - name: Restore the existing Android signing key
+        run: |
+          SIGNING_URL=$(python3 -c "import json; print(json.load(open('build-request.json'))['signingUrl'])")
+          mkdir -p "$HOME/.android"
+          curl --fail --silent --show-error "$SIGNING_URL" -o "$HOME/.android/debug.keystore"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Build Android release APK
+        working-directory: ${{ inputs.app == 'driver' && 'driver-app' || 'passenger-app' }}
+        run: flutter build apk --release
+
+      - name: Upload APK through one-time signed URL
+        run: |
+          UPLOAD_URL=$(python3 -c "import json; print(json.load(open('build-request.json'))['uploadUrl'])")
+          APK_PATH="${APP_KIND}-app/build/app/outputs/flutter-apk/app-release.apk"
+          curl --fail --silent --show-error --upload-file "$APK_PATH" \
+            -H 'Content-Type: application/vnd.android.package-archive' "$UPLOAD_URL"
+
+      - name: Publish the new build
+        run: |
+          curl --fail --silent --show-error -X POST "$CALLBACK_BASE/completeAppBrandingBuild" \
+            -H 'Content-Type: application/json' \
+            --data "{\"requestId\":\"$REQUEST_ID\",\"token\":\"$BUILD_TOKEN\"}"

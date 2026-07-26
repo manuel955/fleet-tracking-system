@@ -133,6 +133,19 @@ Storage y Cloud Messaging.
    `dashboard/js/google-maps-config.js`, sirve la carpeta como sitio
    estatico y entra con el usuario admin de Email/Password.
 
+### Publicar el dashboard en el VPS
+
+En esta maquina, despues de modificar cualquier archivo dentro de
+`dashboard/`, ejecuta desde la raiz del repositorio:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\publicar-dashboard.ps1
+```
+
+El script publica solamente el dashboard en `http://86.48.19.189/flota/`,
+sin reiniciar los contenedores ni modificar los servicios de Sistema POS.
+Tambien puedes hacer doble clic en `scripts/publicar-dashboard.cmd`.
+
 ## Notas de seguridad para produccion
 
 - Cualquier usuario autenticado (incluso anonimo) puede leer `/drivers`;
