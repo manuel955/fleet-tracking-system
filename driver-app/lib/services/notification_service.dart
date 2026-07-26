@@ -147,11 +147,23 @@ class NotificationService {
   }
 
   static Future<void> showPlaceAssigned(String name, String type) async {
-    await showSimple(
-      'Lugar asignado',
-      'Te asignaron ${type.toLowerCase()}: $name. Abre la app para ver el detalle.',
+    await initialize();
+    await _plugin.show(
+      901,
+      '$type asignado',
+      name,
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          _generalChannelId,
+          'Avisos generales',
+          channelDescription: 'Aprobacion de cuenta, cambios de viaje, etc.',
+          importance: Importance.high,
+          priority: Priority.high,
+          ongoing: true,
+          autoCancel: false,
+        ),
+      ),
     );
-    _speak('Te asignaron $name');
   }
 
   // Aviso simple (aprobacion/rechazo de cuenta, etc.): sin sonido fuerte ni

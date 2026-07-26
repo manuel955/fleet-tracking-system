@@ -943,6 +943,12 @@ class _DriverHomePageState extends State<DriverHomePage> {
                       const SizedBox(height: 10),
                       _permissionBanner(_permissionWarning!),
                     ],
+                    if (((_driverProfile?['assignedPlace'] as Map?)?['name'] ?? '')
+                        .toString()
+                        .isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      _assignedPlaceBanner(),
+                    ],
                   ],
                 ),
               ),
@@ -1049,6 +1055,48 @@ class _DriverHomePageState extends State<DriverHomePage> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _assignedPlaceBanner() {
+    final place = Map<String, dynamic>.from(
+        (_driverProfile?['assignedPlace'] as Map?) ?? const {});
+    final name = place['name']?.toString() ?? '';
+    final type = place['type']?.toString() ?? 'Lugar';
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.deepPurple.shade700,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [
+          BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 2)),
+        ],
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.location_on, color: Colors.white, size: 26),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('$type asignado',
+                    style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600)),
+                const SizedBox(height: 2),
+                Text(name,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold)),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
