@@ -40,10 +40,14 @@ jobs:
             "$CALLBACK_BASE/getAppBrandingBuild?requestId=$REQUEST_ID&token=$BUILD_TOKEN" \
             -o build-request.json
 
+      - name: Install icon converter
+        run: python3 -m pip install --quiet Pillow
+
       - name: Apply app name, icon and build number
         run: |
           python3 - <<'PY'
           import json, os, re, shutil, urllib.request
+          from PIL import Image
           from pathlib import Path
           from xml.sax.saxutils import escape
 
@@ -60,7 +64,14 @@ jobs:
 
           if request.get('iconUrl'):
               icon = root / 'android/app/src/main/res/drawable/app_branding_icon.png'
-              urllib.request.urlretrieve(request['iconUrl'], icon)
+              # El icono puede haberse subido como JPG, WebP o PNG. Android
+              # exige que la extension y el contenido coincidan, por eso se
+              # descarga primero sin extension y se convierte a PNG real.
+              source_icon = root / 'app_branding_source'
+              urllib.request.urlretrieve(request['iconUrl'], source_icon)
+              with Image.open(source_icon) as uploaded_icon:
+                  uploaded_icon.convert('RGBA').save(icon, 'PNG')
+              source_icon.unlink(missing_ok=True)
               manifest = root / 'android/app/src/main/AndroidManifest.xml'
               manifest.write_text(manifest.read_text().replace('android:icon="@mipmap/ic_launcher"', 'android:icon="@drawable/app_branding_icon"'))
           PY

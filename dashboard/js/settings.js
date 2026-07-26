@@ -366,7 +366,17 @@ function renderUpdates() {
       event.preventDefault();
       const file = document.getElementById(`update-file-${app.key}`).files[0];
       const build = Number.parseInt(document.getElementById(`update-build-${app.key}`).value, 10);
-      if (!file || !build || build < 1) return;
+      const feedback = document.getElementById(`update-feedback-${app.key}`);
+      if (!file || !build || build < 1) {
+        feedback.textContent = 'Selecciona un archivo APK y escribe un n\u00famero de build mayor a 0.';
+        feedback.className = 'settings-feedback error';
+        return;
+      }
+      if (!file.name.toLowerCase().endsWith('.apk')) {
+        feedback.textContent = 'El archivo seleccionado debe terminar en .apk.';
+        feedback.className = 'settings-feedback error';
+        return;
+      }
       publishAppUpdate(app, file, build);
     });
   });
@@ -479,9 +489,9 @@ function updateAppCardHtml(app) {
         <b>${escapeHtml(app.label)}</b>
         <span class="update-current-build">${build ? `Versión publicada: build ${build}` : 'Sin versión publicada aún'}</span>
       </div>
-      <p class="settings-hint">Sube una APK release ya compilada e indica su build.</p>
+      <p class="settings-hint">Sube una APK que ya tengas en esta computadora. Si usas el bot\u00f3n autom\u00e1tico, no necesitas subir nada aqu\u00ed.</p>
       <form id="update-form-${app.key}" class="manual-update-form">
-        <input type="file" id="update-file-${app.key}" accept=".apk" required />
+        <input type="file" id="update-file-${app.key}" accept=".apk,application/vnd.android.package-archive" required />
         <input type="number" id="update-build-${app.key}" placeholder="Número de build" min="1" required />
         <button type="submit">Publicar APK</button>
       </form>
