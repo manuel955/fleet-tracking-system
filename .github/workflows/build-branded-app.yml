@@ -31,6 +31,7 @@ jobs:
       BUILD_TOKEN: ${{ inputs.build_token }}
       ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
       GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+      PASSENGER_GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.PASSENGER_GOOGLE_SERVICES_JSON_BASE64 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -87,11 +88,16 @@ jobs:
 
       - name: Restore Firebase Android configuration
         run: |
-          if [ -z "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+          if [ "$APP_KIND" = "passenger" ]; then
+            FIREBASE_JSON="$PASSENGER_GOOGLE_SERVICES_JSON_BASE64"
+          else
+            FIREBASE_JSON="$GOOGLE_SERVICES_JSON_BASE64"
+          fi
+          if [ -z "$FIREBASE_JSON" ]; then
             echo "Falta la configuracion privada de Firebase para Android"
             exit 1
           fi
-          echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > "$APP_KIND-app/android/app/google-services.json"
+          echo "$FIREBASE_JSON" | base64 --decode > "$APP_KIND-app/android/app/google-services.json"
 
       - uses: subosito/flutter-action@v2
         with:
