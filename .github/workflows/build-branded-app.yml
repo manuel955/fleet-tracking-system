@@ -30,7 +30,7 @@ jobs:
       REQUEST_ID: ${{ inputs.request_id }}
       BUILD_TOKEN: ${{ inputs.build_token }}
       ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
-      FLEET_KEYSTORE_PATH: ${{ runner.temp }}/fleet-signing.keystore
+      FLEET_KEYSTORE_PATH: /home/runner/.android/fleet-signing.keystore
       GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
       PASSENGER_GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.PASSENGER_GOOGLE_SERVICES_JSON_BASE64 }}
     steps:
@@ -84,6 +84,7 @@ jobs:
             echo "Falta la llave de firma segura de Android"
             exit 1
           fi
+          mkdir -p "$(dirname "$FLEET_KEYSTORE_PATH")"
           echo "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$FLEET_KEYSTORE_PATH"
 
       - name: Restore Firebase Android configuration
