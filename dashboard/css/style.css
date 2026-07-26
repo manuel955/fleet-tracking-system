@@ -534,14 +534,16 @@ button, input { font-family: inherit; }
 }
 
 .driver-admin-card {
-  background: var(--white);
-  border: 1.5px solid var(--gray-150);
+  background: #ffffff;
+  border: 2px solid #d8dde5;
   border-radius: var(--radius-lg);
   padding: 18px;
+  box-shadow: 0 3px 10px rgba(16, 24, 40, 0.08);
+  overflow: hidden;
   transition: box-shadow .15s, border-color .15s;
 }
 
-.driver-admin-card:hover { box-shadow: var(--shadow-sm); border-color: var(--gray-200); }
+.driver-admin-card:hover { box-shadow: 0 8px 20px rgba(16, 24, 40, 0.13); border-color: var(--black); }
 
 .driver-admin-card-header {
   display: flex;
@@ -640,11 +642,12 @@ button, input { font-family: inherit; }
 
 .driver-admin-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
 }
-.assign-place-select { flex: 1; min-width: 150px; padding: 8px; border: 1px solid var(--gray-200); border-radius: var(--radius-sm); }
-.delete-driver-btn { border: 1px solid var(--red); border-radius: var(--radius-sm); background: var(--white); color: var(--red); padding: 8px 10px; font-weight: 700; cursor: pointer; }
+.assign-place-select { flex: 1 1 180px; min-width: 0; padding: 8px; border: 1px solid var(--gray-200); border-radius: var(--radius-sm); }
+.delete-driver-btn { flex: 1 1 145px; border: 1px solid var(--red); border-radius: var(--radius-sm); background: var(--white); color: var(--red); padding: 8px 10px; font-weight: 700; cursor: pointer; }
 .delete-driver-btn:hover { background: var(--red-tint); }
 
 .approve-btn, .reject-btn {
