@@ -196,6 +196,14 @@ exports.manageDashboardUsers = functions.https.onRequest(async (req, res) => {
       if (role === 'admin') await admin.database().ref(`dashboardAdmins/${user.uid}`).set({ email, createdAt: Date.now() });
       return res.status(201).json({ uid: user.uid });
     }
+    if (action === 'grantAdmin') {
+      const email = String(req.body?.email || '').trim();
+      if (!email) return res.status(400).json({ error: 'Correo requerido' });
+      const user = await admin.auth().getUserByEmail(email);
+      await admin.auth().setCustomUserClaims(user.uid, { dashboardUser: true, dashboardAdmin: true });
+      await admin.database().ref(`dashboardAdmins/${user.uid}`).set({ email: user.email || email, updatedAt: Date.now() });
+      return res.json({ ok: true });
+    }
     if (action === 'update') {
       const uid = String(req.body?.uid || '');
       const changes = {};

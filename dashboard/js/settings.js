@@ -261,6 +261,13 @@ function renderDashboardUsers() {
       <p id="dashboard-users-feedback" class="settings-feedback"></p>
     </div>
     <div class="settings-card apps-settings-card">
+      <h3>Convertir usuario existente en administrador</h3>
+      <form id="promote-dashboard-user" class="settings-form">
+        <input id="promote-dashboard-email" type="email" placeholder="correo@empresa.com" required />
+        <button type="submit">Hacer administrador</button>
+      </form>
+    </div>
+    <div class="settings-card apps-settings-card">
       <h3>Usuarios con acceso</h3>
       ${dashboardUsers.map((user) => dashboardUserCardHtml(user)).join('') || '<p class="settings-hint">No hay usuarios.</p>'}
     </div>
@@ -274,6 +281,13 @@ function renderDashboardUsers() {
       await dashboardUsersRequest({ action: 'create', email: document.getElementById('new-dashboard-email').value, password: document.getElementById('new-dashboard-password').value, role: document.getElementById('new-dashboard-role').value });
       await loadDashboardUsers();
     } catch (error) { feedback.textContent = error.message; feedback.className = 'settings-feedback error'; }
+  });
+  document.getElementById('promote-dashboard-user').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+      await dashboardUsersRequest({ action: 'grantAdmin', email: document.getElementById('promote-dashboard-email').value });
+      await loadDashboardUsers();
+    } catch (error) { alert(error.message); }
   });
   dashboardUsers.forEach((user) => bindDashboardUserControls(user));
 }
