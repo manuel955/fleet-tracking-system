@@ -30,19 +30,20 @@ const adminViewEl = document.getElementById('drivers-admin-view');
 const pendingBadgeEl = document.getElementById('pending-badge');
 const navTabs = document.querySelectorAll('.nav-tab');
 
-navTabs.forEach((tab) => {
-  tab.addEventListener('click', () => {
-    navTabs.forEach((t) => t.classList.toggle('active', t === tab));
-    const view = tab.getAttribute('data-view');
-    mapViewEl.classList.toggle('hidden', view !== 'map');
-    adminViewEl.classList.toggle('hidden', view !== 'drivers-admin');
-    placesViewEl.classList.toggle('hidden', view !== 'places');
-    settingsViewEl.classList.toggle('hidden', view !== 'settings');
-    if (view === 'drivers-admin') startDriversAdmin();
-    if (view === 'places') startPlaces();
-    if (view === 'settings') startSettings();
-  });
-});
+function openDashboardView(view) {
+  navTabs.forEach((tab) => tab.classList.toggle('active', tab.getAttribute('data-view') === view));
+  mapViewEl.classList.toggle('hidden', view !== 'map');
+  adminViewEl.classList.toggle('hidden', view !== 'drivers-admin');
+  placesViewEl.classList.toggle('hidden', view !== 'places');
+  settingsViewEl.classList.toggle('hidden', view !== 'settings');
+  if (view === 'drivers-admin') startDriversAdmin();
+  if (view === 'places') startPlaces();
+  if (view === 'settings') { startSettings(); renderSettings(); }
+  if (view === 'map' && map && window.google?.maps) window.google.maps.event.trigger(map, 'resize');
+}
+
+navTabs.forEach((tab) => tab.addEventListener('click', () => openDashboardView(tab.getAttribute('data-view'))));
+document.getElementById('dashboard-home-link').addEventListener('click', () => openDashboardView('map'));
 
 function startDriversAdmin() {
   if (adminSubscribed) return;

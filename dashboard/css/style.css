@@ -71,6 +71,8 @@ button, input { font-family: inherit; }
 
 /* ---------- Marca ---------- */
 .brand { display: flex; align-items: center; gap: 10px; }
+.brand-home { padding: 0; border: 0; background: transparent; cursor: pointer; text-align: left; }
+.brand-home:focus-visible { outline: 2px solid var(--white); outline-offset: 5px; border-radius: var(--radius-sm); }
 
 .brand-icon {
   width: 30px;
