@@ -433,15 +433,19 @@ exports.handleTripStatusChange = functions.database
 // Registra las conexiones y desconexiones para el historial del dashboard.
 exports.recordDriverConnection = functions.database
   .ref('/drivers/{driverId}/status')
-  .onUpdate(async (change, context) => {
+  .onWrite(async (change, context) => {
     const before = change.before.val();
     const after = change.after.val();
     if (before === after) return null;
-    if (!['online', 'offline'].includes(after)) return null;
+    // driver-app represents "fuera de turno" by deleting status. Treat that
+    // deletion as an offline event so attendance can close the open shift.
+    const nextStatus = after === 'online' ? 'online' : after === null ? 'offline' : null;
+    if (!nextStatus) return null;
+    if (before === 'online' && nextStatus === 'online') return null;
     const driverSnap = await admin.database().ref(`drivers/${context.params.driverId}`).once('value');
     const driver = driverSnap.val() || {};
     return admin.database().ref(`driverConnectionHistory/${context.params.driverId}`).push({
-      status: after,
+      status: nextStatus,
       driverName: driver.name || '',
       at: Date.now(),
     });

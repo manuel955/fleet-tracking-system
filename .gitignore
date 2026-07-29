@@ -21,3 +21,5 @@ npm-debug.log*
 # Logs / misc
 database-debug.log
 *.log
+scripts/load-test-100-trips/manifest-*.json
+scripts/load-test-100-trips/*.log.err

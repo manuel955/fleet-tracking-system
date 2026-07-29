@@ -27,6 +27,7 @@ const BRAND_APPS = [
 
 let currentBuilds = {}; // buildField -> numero
 let currentAppBranding = {};
+let appDownloadUrls = {};
 let currentDashboardName = 'Panel de Flota';
 let currentDashboardLogoUrl = '';
 let dashboardUsers = [];
@@ -79,6 +80,18 @@ function startSettings() {
     currentAppBranding = snapshot.val() || {};
     renderSettings();
   });
+  loadAppDownloadUrls();
+}
+
+async function loadAppDownloadUrls() {
+  await Promise.all(UPDATE_APPS.map(async (app) => {
+    try {
+      appDownloadUrls[app.key] = await storage.ref(app.storagePath).getDownloadURL();
+    } catch (_) {
+      appDownloadUrls[app.key] = '';
+    }
+  }));
+  if (settingsSection === 'apps') renderApps();
 }
 
 function renderSettings() {
@@ -391,7 +404,9 @@ function renderApps() {
         Define el nombre visible y el ícono de cada aplicación. Para cambiar
         el nombre o ícono que aparece en el teléfono, publica después un APK nuevo.
       </p>
-      ${BRAND_APPS.map((app) => appBrandingCardHtml(app)).join('<hr class="settings-divider" />')}
+      <div class="apps-branding-grid">
+        ${BRAND_APPS.map((app) => appBrandingCardHtml(app)).join('')}
+      </div>
     </div>
   `;
 
@@ -416,6 +431,8 @@ function renderApps() {
 
 function appBrandingCardHtml(app) {
   const branding = currentAppBranding[app.key] || {};
+  const build = currentBuilds[`${app.key}AppBuild`];
+  const downloadUrl = appDownloadUrls[app.key] || '';
   const icon = branding.iconUrl
     ? `<img class="app-branding-icon" src="${escapeHtml(branding.iconUrl)}" alt="Ícono de ${escapeHtml(app.label)}" />`
     : '<span class="app-branding-icon app-branding-icon-placeholder">▣</span>';
@@ -433,6 +450,15 @@ function appBrandingCardHtml(app) {
         Generar APK y enviar actualización
       </button>
       <p id="app-branding-feedback-${app.key}" class="settings-feedback"></p>
+      <div class="app-download-card">
+        <div>
+          <b>Descargar última actualización</b>
+          <small>${build ? `Build ${escapeHtml(String(build))}` : 'Todavía no hay una versión publicada'}</small>
+        </div>
+        ${downloadUrl
+          ? `<a class="app-download-btn" href="${escapeHtml(downloadUrl)}" download>Descargar APK</a>`
+          : '<span class="app-download-disabled">No disponible</span>'}
+      </div>
     </div>
   `;
 }

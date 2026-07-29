@@ -27,6 +27,13 @@ let openRejectFormId = null;
 let adminPlacesCache = { hotels: {}, sportVenues: {} };
 let adminTripHistory = {};
 let adminConnectionHistory = {};
+let attendanceDateFilter = { from: '', to: '' };
+let attendanceCalendarMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+let attendanceHoverDate = '';
+let attendanceClickTimer = null;
+let attendanceSearch = '';
+let attendanceOutsideListenerBound = false;
+let tripHistorySearch = '';
 
 const mapViewEl = document.getElementById('map-view');
 const adminViewEl = document.getElementById('drivers-admin-view');
@@ -170,7 +177,11 @@ function driverAdminCardHtml(driverId, d) {
 }
 
 function renderDriversAdmin() {
-  if (adminActiveFilter === 'trip-history' || adminActiveFilter === 'connection-history') {
+  if (adminActiveFilter === 'trip-history' || adminActiveFilter === 'attendance') {
+    if (adminActiveFilter === 'attendance') {
+      renderDriversAttendance();
+      return;
+    }
     renderDriversHistory();
     return;
   }
@@ -181,11 +192,11 @@ function renderDriversAdmin() {
 
   const toolbarHtml = `
     <div class="drivers-admin-toolbar">
-      ${['approved', 'pending_review', 'rejected', 'all', 'trip-history', 'connection-history']
+      ${['approved', 'pending_review', 'rejected', 'all', 'trip-history', 'attendance']
         .map(
           (f) => `
         <button type="button" class="filter-pill ${adminActiveFilter === f ? 'active' : ''}" data-admin-filter="${f}">
-          ${f === 'all' ? 'Todos' : f === 'trip-history' ? 'Historial de viajes' : f === 'connection-history' ? 'Conexiones' : APPROVAL_LABELS[f]}
+          ${f === 'all' ? 'Todos' : f === 'trip-history' ? 'Historial de viajes' : f === 'attendance' ? 'Asistencia' : APPROVAL_LABELS[f]}
         </button>
       `
         )
@@ -240,16 +251,237 @@ function renderDriversAdmin() {
 }
 
 function historyToolbarHtml() {
-  return `<div class="drivers-admin-toolbar">${['approved', 'pending_review', 'rejected', 'all', 'trip-history', 'connection-history'].map((f) => `<button type="button" class="filter-pill ${adminActiveFilter === f ? 'active' : ''}" data-admin-filter="${f}">${f === 'all' ? 'Todos' : f === 'trip-history' ? 'Historial de viajes' : f === 'connection-history' ? 'Conexiones' : APPROVAL_LABELS[f]}</button>`).join('')}</div>`;
+  return `<div class="drivers-admin-toolbar">${['approved', 'pending_review', 'rejected', 'all', 'trip-history', 'attendance'].map((f) => `<button type="button" class="filter-pill ${adminActiveFilter === f ? 'active' : ''}" data-admin-filter="${f}">${f === 'all' ? 'Todos' : f === 'trip-history' ? 'Historial de viajes' : f === 'attendance' ? 'Asistencia' : APPROVAL_LABELS[f]}</button>`).join('')}</div>`;
+}
+
+function attendanceSessions() {
+  return Object.entries(adminConnectionHistory).flatMap(([driverId, events]) => {
+    const driver = adminDriversCache[driverId] || {};
+    if (driver.approvalStatus === 'rejected') return [];
+    const sorted = Object.values(events || {})
+      .filter((event) => event && Number.isFinite(Number(event.at)))
+      .sort((a, b) => Number(a.at) - Number(b.at));
+    const sessions = [];
+    sorted.forEach((event, index) => {
+      if (event.status !== 'online') return;
+      const end = sorted.slice(index + 1).find((candidate) => candidate.status === 'offline');
+      const startAt = Number(event.at);
+      const explicitEndAt = end ? Number(end.at) : null;
+      const driverOnline = driver.status === 'online' || driver.status === 'busy';
+      // Older records may not have an `offline` event. If the driver's
+      // current node is no longer online, close the session at its last GPS
+      // update instead of leaving it permanently marked as active.
+      const endAt = explicitEndAt || (!driverOnline && driver.lastUpdate ? Number(driver.lastUpdate) : null);
+      sessions.push({
+        driverId,
+        driverName: event.driverName || driver.name || driverId,
+        startAt,
+        endAt,
+        active: !endAt && driverOnline,
+      });
+    });
+    return sessions;
+  }).filter((session) => {
+    const query = attendanceSearch.trim().toLowerCase();
+    if (query && ![session.driverName, session.driverId, adminDriversCache[session.driverId]?.plate].some((value) => String(value || '').toLowerCase().includes(query))) return false;
+    const key = attendanceDateKey(session.startAt);
+    if (!attendanceDateFilter.from || !attendanceDateFilter.to) return true;
+    return key >= attendanceDateFilter.from && key <= attendanceDateFilter.to;
+  }).sort((a, b) => b.startAt - a.startAt);
+}
+
+function attendanceDateKey(at) {
+  const date = new Date(at);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function attendanceDate(at) {
+  return new Date(at).toLocaleDateString('es-PE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
+function attendanceTime(at, active = false) {
+  if (!at) return active ? 'En curso' : 'Sin registro';
+  return new Date(at).toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
+}
+
+function attendanceDuration(startAt, endAt, active = false) {
+  if (!endAt) return active ? 'En curso' : 'Sin registro';
+  const minutes = Math.max(0, Math.round((endAt - startAt) / 60000));
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return hours ? `${hours} h ${String(rest).padStart(2, '0')} min` : `${rest} min`;
+}
+
+function attendanceDateLabel(value) {
+  if (!value) return '';
+  const [year, month, day] = value.split('-');
+  return `${day}/${month}/${year}`;
+}
+
+function localDateInputValue(date = new Date()) {
+  return attendanceDateKey(date.getTime());
+}
+
+function dateDaysAgo(days) {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() - days);
+  return localDateInputValue(date);
+}
+
+function setAttendanceRange(from, to) {
+  attendanceDateFilter = { from, to };
+  attendanceHoverDate = '';
+  renderDriversAttendance();
+}
+
+function markAttendanceStart(date) {
+  attendanceDateFilter = { from: date, to: '' };
+  attendanceHoverDate = '';
+  const label = document.querySelector('#attendance-date-toggle span');
+  if (label) label.textContent = `${attendanceDateLabel(date)} - …`;
+  document.querySelectorAll('[data-attendance-date]').forEach((button) => {
+    button.classList.toggle('selected', button.getAttribute('data-attendance-date') === date);
+    button.classList.remove('preview');
+  });
+}
+
+function attendanceRowsHtml(sessions) {
+  return sessions.map((session) => `<tr>
+    <td><strong>${escapeHtml(session.driverName)}</strong><small>${escapeHtml(session.driverId)}</small></td>
+    <td>${attendanceDate(session.startAt)}</td>
+    <td>${attendanceTime(session.startAt)}</td>
+    <td>${attendanceTime(session.endAt, session.active)}</td>
+    <td>${attendanceDuration(session.startAt, session.endAt, session.active)}</td>
+    <td><span class="attendance-status ${session.active ? 'active' : 'closed'}">${session.active ? 'En turno' : 'Turno cerrado'}</span></td>
+  </tr>`).join('');
+}
+
+function attendanceMonthHtml(monthDate) {
+  const year = monthDate.getFullYear();
+  const month = monthDate.getMonth();
+  const firstDay = (new Date(year, month, 1).getDay() + 6) % 7;
+  const days = new Date(year, month + 1, 0).getDate();
+  const weekdays = ['lu', 'ma', 'mi', 'ju', 'vi', 'sá', 'do'];
+  let cells = weekdays.map((day) => `<span class="attendance-weekday">${day}</span>`).join('');
+  for (let index = 0; index < 42; index += 1) {
+    const day = index - firstDay + 1;
+    if (day < 1 || day > days) {
+      cells += '<span class="attendance-day empty"></span>';
+      continue;
+    }
+    const date = new Date(year, month, day);
+    const key = localDateInputValue(date);
+    const selected = key === attendanceDateFilter.from || key === attendanceDateFilter.to;
+    const between = attendanceDateFilter.from && attendanceDateFilter.to && key > attendanceDateFilter.from && key < attendanceDateFilter.to;
+    cells += `<button type="button" class="attendance-day${selected ? ' selected' : ''}${between ? ' between' : ''}" data-attendance-date="${key}">${day}</button>`;
+  }
+  return `<section class="attendance-month"><h4>${monthDate.toLocaleDateString('es-PE', { month: 'short', year: 'numeric' })}</h4><div class="attendance-calendar-grid">${cells}</div></section>`;
+}
+
+function attendanceCalendarHtml() {
+  const nextMonth = new Date(attendanceCalendarMonth.getFullYear(), attendanceCalendarMonth.getMonth() + 1, 1);
+  return `<div class="attendance-calendar-toolbar"><button type="button" id="attendance-calendar-prev" aria-label="Mes anterior">‹</button><strong>${attendanceCalendarMonth.toLocaleDateString('es-PE', { month: 'long', year: 'numeric' })}</strong><strong>${nextMonth.toLocaleDateString('es-PE', { month: 'long', year: 'numeric' })}</strong><button type="button" id="attendance-calendar-next" aria-label="Mes siguiente">›</button></div><div class="attendance-calendar-months">${attendanceMonthHtml(attendanceCalendarMonth)}${attendanceMonthHtml(nextMonth)}</div>`;
+}
+
+function renderDriversAttendance() {
+  const sessions = attendanceSessions();
+  const rows = attendanceRowsHtml(sessions);
+  adminViewEl.innerHTML = `${historyToolbarHtml()}<div class="attendance-heading"><div><h3>Asistencia de conductores</h3><p>Inicio y término de cada turno registrados por la app.</p></div><span class="attendance-count">${sessions.length} turno${sessions.length === 1 ? '' : 's'}</span></div><div class="dashboard-users-table-wrap attendance-table-wrap"><table class="dashboard-users-table attendance-table"><thead><tr><th>Conductor</th><th>Día</th><th>Inicio de turno</th><th>Término de turno</th><th>Duración</th><th>Estado</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="dashboard-empty-row">Todavía no hay turnos registrados.</td></tr>'}</tbody></table></div>`;
+  const heading = adminViewEl.querySelector('.attendance-heading');
+  const dateLabel = attendanceDateFilter.from || attendanceDateFilter.to
+    ? `${attendanceDateLabel(attendanceDateFilter.from) || '…'} - ${attendanceDateLabel(attendanceDateFilter.to) || '…'}`
+    : 'Seleccionar fechas';
+  heading.insertAdjacentHTML('beforeend', `<div class="attendance-controls"><label class="attendance-search-label">Conductor<input type="search" id="attendance-search" value="${escapeHtml(attendanceSearch)}" placeholder="Nombre o placa..." /></label><div class="attendance-date-picker" id="attendance-date-picker"><button type="button" class="attendance-date-toggle" id="attendance-date-toggle">▣ <span>${dateLabel}</span></button><div class="attendance-date-popover hidden" id="attendance-date-popover"><div class="attendance-presets"><button type="button" data-attendance-preset="today">Hoy</button><button type="button" data-attendance-preset="yesterday">Ayer</button><button type="button" data-attendance-preset="7">Últimos 7 días</button><button type="button" data-attendance-preset="30">Últimos 30 días</button><button type="button" data-attendance-preset="month">Mes actual</button></div><div class="attendance-calendar">${attendanceCalendarHtml()}</div></div></div><button type="button" class="attendance-clear-btn" id="attendance-clear">Limpiar</button></div>`);
+  adminViewEl.querySelectorAll('[data-admin-filter]').forEach((btn) => btn.addEventListener('click', () => { adminActiveFilter = btn.getAttribute('data-admin-filter'); renderDriversAdmin(); }));
+  const dateToggle = document.getElementById('attendance-date-toggle');
+  const datePopover = document.getElementById('attendance-date-popover');
+  dateToggle.addEventListener('click', () => datePopover.classList.toggle('hidden'));
+  const attendanceSearchInput = document.getElementById('attendance-search');
+  attendanceSearchInput.addEventListener('input', () => {
+    attendanceSearch = attendanceSearchInput.value;
+    const filteredSessions = attendanceSessions();
+    const tbody = adminViewEl.querySelector('.attendance-table tbody');
+    tbody.innerHTML = attendanceRowsHtml(filteredSessions) || '<tr><td colspan="6" class="dashboard-empty-row">Sin resultados para esa búsqueda.</td></tr>';
+  });
+  if (!attendanceOutsideListenerBound) {
+    attendanceOutsideListenerBound = true;
+    document.addEventListener('click', (event) => {
+      const picker = document.getElementById('attendance-date-picker');
+      const popover = document.getElementById('attendance-date-popover');
+      if (popover && picker && !picker.contains(event.target)) popover.classList.add('hidden');
+    });
+  }
+  document.getElementById('attendance-calendar-prev').addEventListener('click', () => { attendanceCalendarMonth = new Date(attendanceCalendarMonth.getFullYear(), attendanceCalendarMonth.getMonth() - 1, 1); renderDriversAttendance(); });
+  document.getElementById('attendance-calendar-next').addEventListener('click', () => { attendanceCalendarMonth = new Date(attendanceCalendarMonth.getFullYear(), attendanceCalendarMonth.getMonth() + 1, 1); renderDriversAttendance(); });
+  adminViewEl.querySelectorAll('[data-attendance-date]').forEach((button) => button.addEventListener('click', () => {
+    const date = button.getAttribute('data-attendance-date');
+    if (!attendanceDateFilter.from || attendanceDateFilter.to) markAttendanceStart(date);
+    else setAttendanceRange(date < attendanceDateFilter.from ? date : attendanceDateFilter.from, date < attendanceDateFilter.from ? attendanceDateFilter.from : date);
+  }));
+  adminViewEl.querySelectorAll('[data-attendance-date]').forEach((button) => button.addEventListener('dblclick', () => {
+    clearTimeout(attendanceClickTimer);
+    const date = button.getAttribute('data-attendance-date');
+    setAttendanceRange(date, date);
+  }));
+  const updateDatePreview = (date) => {
+    attendanceHoverDate = date;
+    const from = attendanceDateFilter.from;
+    const to = attendanceDateFilter.to || date;
+    const low = from && to ? (from < to ? from : to) : '';
+    const high = from && to ? (from < to ? to : from) : '';
+    adminViewEl.querySelectorAll('[data-attendance-date]').forEach((button) => {
+      const key = button.getAttribute('data-attendance-date');
+      button.classList.toggle('preview', Boolean(low && high && key > low && key < high && !attendanceDateFilter.to));
+    });
+  };
+  adminViewEl.querySelectorAll('[data-attendance-date]').forEach((button) => button.addEventListener('mouseenter', () => {
+    if (attendanceDateFilter.from && !attendanceDateFilter.to) updateDatePreview(button.getAttribute('data-attendance-date'));
+  }));
+  document.getElementById('attendance-date-popover').addEventListener('mouseleave', () => {
+    if (!attendanceDateFilter.to) {
+      attendanceHoverDate = '';
+      adminViewEl.querySelectorAll('.attendance-day.preview').forEach((button) => button.classList.remove('preview'));
+    }
+  });
+  adminViewEl.querySelectorAll('[data-attendance-preset]').forEach((button) => button.addEventListener('click', () => {
+    const preset = button.getAttribute('data-attendance-preset');
+    const today = localDateInputValue();
+    if (preset === 'today') setAttendanceRange(today, today);
+    else if (preset === 'yesterday') setAttendanceRange(dateDaysAgo(1), dateDaysAgo(1));
+    else if (preset === 'month') setAttendanceRange(`${today.slice(0, 8)}01`, today);
+    else setAttendanceRange(dateDaysAgo(Number(preset) - 1), today);
+  }));
+  document.getElementById('attendance-clear').addEventListener('click', () => { attendanceDateFilter = { from: '', to: '' }; renderDriversAttendance(); });
 }
 
 function renderDriversHistory() {
   const isTrips = adminActiveFilter === 'trip-history';
+  const query = tripHistorySearch.trim().toLowerCase();
+  const tripEntries = Object.entries(adminTripHistory).filter(([, trip]) => {
+    if (!query) return true;
+    const driver = adminDriversCache[trip.driverId] || {};
+    return [trip.driverName, trip.driverPlate, driver.name, driver.plate].some((value) => String(value || '').toLowerCase().includes(query));
+  });
   const rows = isTrips
-    ? Object.entries(adminTripHistory).map(([id, trip]) => `<tr><td>${new Date(trip.completedAt || trip.cancelledAt || trip.archivedAt).toLocaleString('es-PE')}</td><td>${escapeHtml(trip.driverName || '-')}</td><td>${escapeHtml(trip.passengerName || '-')}</td><td>${escapeHtml(trip.pickupAddress || '-')}</td><td>${escapeHtml(trip.destinationAddress || '-')}</td><td>${escapeHtml(trip.status || '-')}</td></tr>`)
+    ? tripEntries.map(([id, trip]) => `<tr><td>${new Date(trip.completedAt || trip.cancelledAt || trip.archivedAt).toLocaleString('es-PE')}</td><td><strong>${escapeHtml(trip.driverName || adminDriversCache[trip.driverId]?.name || '-')}</strong><small>${escapeHtml(trip.driverPlate || adminDriversCache[trip.driverId]?.plate || '-')}</small></td><td>${escapeHtml(trip.passengerName || '-')}</td><td>${escapeHtml(trip.pickupAddress || '-')}</td><td>${escapeHtml(trip.destinationAddress || '-')}</td><td>${escapeHtml(trip.status || '-')}</td></tr>`)
     : Object.entries(adminConnectionHistory).flatMap(([driverId, events]) => Object.values(events || {}).map((event) => `<tr><td>${new Date(event.at).toLocaleString('es-PE')}</td><td>${escapeHtml(event.driverName || driverId)}</td><td>${event.status === 'online' ? 'Conectado' : 'Desconectado'}</td></tr>`));
-  adminViewEl.innerHTML = `${historyToolbarHtml()}<div class="dashboard-users-table-wrap"><table class="dashboard-users-table"><thead><tr>${isTrips ? '<th>Fecha</th><th>Conductor</th><th>Pasajero</th><th>Origen</th><th>Destino</th><th>Estado</th>' : '<th>Fecha</th><th>Conductor</th><th>Evento</th>'}</tr></thead><tbody>${rows.join('') || `<tr><td colspan="${isTrips ? 6 : 3}" class="dashboard-empty-row">Sin registros todavía.</td></tr>`}</tbody></table></div>`;
+  adminViewEl.innerHTML = `${historyToolbarHtml()}${isTrips ? `<div class="history-search-row"><label for="trip-history-search">Buscar conductor</label><input id="trip-history-search" type="search" value="${escapeHtml(tripHistorySearch)}" placeholder="Nombre o placa..." /></div>` : ''}<div class="dashboard-users-table-wrap"><table class="dashboard-users-table"><thead><tr>${isTrips ? '<th>Fecha</th><th>Conductor / placa</th><th>Pasajero</th><th>Origen</th><th>Destino</th><th>Estado</th>' : '<th>Fecha</th><th>Conductor</th><th>Evento</th>'}</tr></thead><tbody>${rows.join('') || `<tr><td colspan="${isTrips ? 6 : 3}" class="dashboard-empty-row">Sin registros todavía.</td></tr>`}</tbody></table></div>`;
   adminViewEl.querySelectorAll('[data-admin-filter]').forEach((btn) => btn.addEventListener('click', () => { adminActiveFilter = btn.getAttribute('data-admin-filter'); renderDriversAdmin(); }));
+  if (isTrips) {
+    const searchInput = document.getElementById('trip-history-search');
+    searchInput.addEventListener('input', () => {
+      tripHistorySearch = searchInput.value;
+      const nextQuery = tripHistorySearch.trim().toLowerCase();
+      const filtered = Object.entries(adminTripHistory).filter(([, trip]) => {
+        if (!nextQuery) return true;
+        const driver = adminDriversCache[trip.driverId] || {};
+        return [trip.driverName, trip.driverPlate, driver.name, driver.plate].some((value) => String(value || '').toLowerCase().includes(nextQuery));
+      });
+      const tbody = adminViewEl.querySelector('tbody');
+      tbody.innerHTML = filtered.map(([, trip]) => `<tr><td>${new Date(trip.completedAt || trip.cancelledAt || trip.archivedAt).toLocaleString('es-PE')}</td><td><strong>${escapeHtml(trip.driverName || adminDriversCache[trip.driverId]?.name || '-')}</strong><small>${escapeHtml(trip.driverPlate || adminDriversCache[trip.driverId]?.plate || '-')}</small></td><td>${escapeHtml(trip.passengerName || '-')}</td><td>${escapeHtml(trip.pickupAddress || '-')}</td><td>${escapeHtml(trip.destinationAddress || '-')}</td><td>${escapeHtml(trip.status || '-')}</td></tr>`).join('') || '<tr><td colspan="6" class="dashboard-empty-row">Sin resultados para esa búsqueda.</td></tr>';
+    });
+  }
 }
 
 async function manageDriver(payload) {

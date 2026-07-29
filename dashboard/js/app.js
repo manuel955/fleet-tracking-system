@@ -163,6 +163,7 @@ function initMap() {
     zoom: 12,
     mapTypeControl: false,
     streetViewControl: false,
+    fullscreenControl: false,
   });
 
 }
@@ -350,6 +351,10 @@ function syncActiveTripListeners(driversData) {
 // Crea/mueve el marcador si el conductor sigue reportando GPS reciente
 // (menos de OFFLINE_AFTER_MS); lo retira del mapa si dejo de reportar.
 function updateMarkerForDriver(driverId, d) {
+  if (d.approvalStatus === 'rejected') {
+    removeMarker(driverId);
+    return;
+  }
   if (typeof d.lat !== 'number' || typeof d.lng !== 'number') {
     removeMarker(driverId);
     return;
@@ -603,8 +608,27 @@ function formatEta(seconds) {
 
 const driverListEl = document.getElementById('driver-list');
 const driverCountEl = document.getElementById('driver-count');
+const mapViewFullscreenEl = document.getElementById('map-view');
+const mapFullscreenBtn = document.getElementById('map-fullscreen-btn');
 const searchInput = document.getElementById('search-input');
 const filterPillsEl = document.getElementById('status-filters');
+
+if (mapFullscreenBtn && mapViewFullscreenEl) {
+  mapFullscreenBtn.addEventListener('click', async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await mapViewFullscreenEl.requestFullscreen();
+    } catch (error) {
+      mapViewFullscreenEl.classList.toggle('map-fullscreen-fallback');
+    }
+  });
+  document.addEventListener('fullscreenchange', () => {
+    const active = document.fullscreenElement === mapViewFullscreenEl || mapViewFullscreenEl.classList.contains('map-fullscreen-fallback');
+    mapFullscreenBtn.textContent = active ? '×' : '⛶';
+    mapFullscreenBtn.setAttribute('aria-label', active ? 'Salir de pantalla completa' : 'Ver mapa en pantalla completa');
+    if (map) setTimeout(() => google.maps.event.trigger(map, 'resize'), 80);
+  });
+}
 
 searchInput.addEventListener('input', renderSidebar);
 
@@ -628,6 +652,7 @@ function renderSidebar() {
   const query = searchInput.value.trim().toLowerCase();
 
   const entries = Object.entries(driversCache).filter(([driverId, d]) => {
+    if (d.approvalStatus === 'rejected') return false;
     if (query) {
       const matches = [d.name, d.plate, d.hotel]
         .filter(Boolean)
@@ -638,7 +663,7 @@ function renderSidebar() {
     return true;
   });
 
-  driverCountEl.textContent = `${Object.keys(driversCache).length} vehículos`;
+  driverCountEl.textContent = `${Object.values(driversCache).filter((d) => d.approvalStatus !== 'rejected').length} vehículos`;
 
   driverListEl.innerHTML = entries.length
     ? entries.map(([driverId, d]) => driverCardHtml(driverId, d)).join('')
