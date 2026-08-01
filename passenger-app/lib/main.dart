@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter_android/google_maps_flutter_android.dart';
 import 'package:google_maps_flutter_platform_interface/google_maps_flutter_platform_interface.dart';
@@ -28,8 +29,12 @@ Future<void> main() async {
     mapsImplementation.useAndroidViewSurface = true;
   }
 
-  await NotificationService.initialize();
-  await PushService.initialize();
+  // En web solo necesitamos revisar la interfaz local. Estas integraciones
+  // dependen de Firebase/Android y no deben bloquear el arranque del preview.
+  if (!kIsWeb) {
+    await NotificationService.initialize();
+    await PushService.initialize();
+  }
   runApp(const FleetPassengerApp());
 }
 
@@ -159,6 +164,16 @@ class _UpdateGateState extends State<_UpdateGate> {
   }
 
   Future<void> _checkForUpdate() async {
+    if (kIsWeb) {
+      if (mounted) {
+        setState(() {
+          _checking = false;
+          _updateRequired = false;
+        });
+      }
+      return;
+    }
+
     final updateRequired = await UpdateService.isUpdateRequired();
     if (mounted) {
       setState(() {
@@ -238,13 +253,29 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
   void initState() {
     super.initState();
     _bootstrap();
-    _scheduledPollTimer = Timer.periodic(const Duration(seconds: 15), (_) => _pollScheduledTrip());
+    _scheduledPollTimer = Timer.periodic(
+      const Duration(seconds: 15),
+      (_) => _pollScheduledTrip(),
+    );
   }
 
   @override
   void dispose() {
     _scheduledPollTimer?.cancel();
     super.dispose();
+  }
+
+  bool _scheduledTripViewChanged(Map<String, dynamic> next) {
+    final current = _scheduledTrip;
+    if (current == null) return true;
+    const keys = [
+      'status',
+      'scheduledPickupLabel',
+      'scheduledPickupAt',
+      'pickupAddress',
+      'destinationAddress',
+    ];
+    return keys.any((key) => current[key] != next[key]);
   }
 
   // Revisa si el viaje programado ya fue despachado (Cloud Functions lo
@@ -261,9 +292,16 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
       return;
     }
     if (!mounted) return;
-    if (trip == null || trip['status'] == 'completed' || trip['status'] == 'cancelled') {
+    if (trip == null ||
+        trip['status'] == 'completed' ||
+        trip['status'] == 'cancelled') {
       await TripService.clearScheduledTrip();
-      if (mounted) setState(() { _scheduledTripId = null; _scheduledTrip = null; });
+      if (mounted) {
+        setState(() {
+          _scheduledTripId = null;
+          _scheduledTrip = null;
+        });
+      }
       return;
     }
     if (trip['status'] != 'scheduled') {
@@ -282,7 +320,9 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
       }
       return;
     }
-    if (mounted) setState(() => _scheduledTrip = trip);
+    if (mounted && _scheduledTripViewChanged(trip)) {
+      setState(() => _scheduledTrip = trip);
+    }
   }
 
   Future<void> _bootstrap() async {

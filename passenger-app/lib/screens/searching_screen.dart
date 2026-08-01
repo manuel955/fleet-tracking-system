@@ -48,6 +48,17 @@ class _SearchingScreenState extends State<SearchingScreen> {
     super.dispose();
   }
 
+  bool _tripViewChanged(Map<String, dynamic> next) {
+    const keys = [
+      'status',
+      'pickupLat',
+      'pickupLng',
+      'scheduledPickupLabel',
+      'scheduledPickupAt',
+    ];
+    return keys.any((key) => _trip[key] != next[key]);
+  }
+
   Future<void> _poll() async {
     try {
       final trip = await TripService.getTrip(widget.tripId);
@@ -56,7 +67,7 @@ class _SearchingScreenState extends State<SearchingScreen> {
         widget.onStatusChanged(trip);
         return;
       }
-      if (mounted) setState(() => _trip = trip);
+      if (mounted && _tripViewChanged(trip)) setState(() => _trip = trip);
     } catch (_) {
       // Reintenta en el siguiente tick.
     }
@@ -68,7 +79,9 @@ class _SearchingScreenState extends State<SearchingScreen> {
       await TripService.retrySearch(widget.tripId);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -82,7 +95,9 @@ class _SearchingScreenState extends State<SearchingScreen> {
       widget.onCancelled();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
         setState(() => _busy = false);
       }
     }
@@ -113,7 +128,9 @@ class _SearchingScreenState extends State<SearchingScreen> {
                 Marker(
                   markerId: const MarkerId('pickup'),
                   position: pickup,
-                  icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+                  icon: BitmapDescriptor.defaultMarkerWithHue(
+                    BitmapDescriptor.hueAzure,
+                  ),
                 ),
               },
             ),
@@ -125,10 +142,24 @@ class _SearchingScreenState extends State<SearchingScreen> {
             child: Container(
               decoration: const BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.only(topLeft: Radius.circular(24), topRight: Radius.circular(24)),
-                boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 16, offset: Offset(0, -4))],
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(24),
+                  topRight: Radius.circular(24),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black26,
+                    blurRadius: 16,
+                    offset: Offset(0, -4),
+                  ),
+                ],
               ),
-              padding: EdgeInsets.fromLTRB(24, 28, 24, MediaQuery.of(context).padding.bottom + 24),
+              padding: EdgeInsets.fromLTRB(
+                24,
+                28,
+                24,
+                MediaQuery.of(context).padding.bottom + 24,
+              ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -140,7 +171,10 @@ class _SearchingScreenState extends State<SearchingScreen> {
                           ? 'Viaje programado para las ${_trip['scheduledPickupLabel']}'
                           : 'Viaje programado',
                       textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     const SizedBox(height: 8),
                     const Text(
@@ -152,28 +186,43 @@ class _SearchingScreenState extends State<SearchingScreen> {
                     const SizedBox(
                       height: 40,
                       width: 40,
-                      child: CircularProgressIndicator(color: Colors.black, strokeWidth: 3),
+                      child: CircularProgressIndicator(
+                        color: Colors.black,
+                        strokeWidth: 3,
+                      ),
                     ),
                     const SizedBox(height: 20),
                     const Text(
                       'Buscando el conductor más cercano...',
                       textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ] else ...[
-                    const Icon(Icons.info_outline, size: 40, color: Colors.black54),
+                    const Icon(
+                      Icons.info_outline,
+                      size: 40,
+                      color: Colors.black54,
+                    ),
                     const SizedBox(height: 16),
                     const Text(
                       'No hay conductores disponibles en este momento.',
                       textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     const SizedBox(height: 20),
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
                         onPressed: _busy ? null : _retry,
-                        style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                        style: ElevatedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(48),
+                        ),
                         child: const Text('Reintentar'),
                       ),
                     ),
@@ -181,7 +230,10 @@ class _SearchingScreenState extends State<SearchingScreen> {
                   const SizedBox(height: 12),
                   TextButton(
                     onPressed: _busy ? null : _cancel,
-                    child: const Text('Cancelar viaje', style: TextStyle(color: Colors.red)),
+                    child: const Text(
+                      'Cancelar viaje',
+                      style: TextStyle(color: Colors.red),
+                    ),
                   ),
                 ],
               ),

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
@@ -23,6 +24,11 @@ import 'services/trip_service.dart';
 import 'services/update_service.dart';
 import 'widgets/support_button.dart';
 
+bool get _supportsMobileServices =>
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS);
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -36,9 +42,13 @@ Future<void> main() async {
     mapsImplementation.useAndroidViewSurface = true;
   }
 
-  await LocationService.initialize();
-  await NotificationService.initialize();
-  await PushService.initialize();
+  // En web solo necesitamos revisar la interfaz local. Estas integraciones
+  // dependen de Firebase/Android y no deben bloquear el arranque del preview.
+  if (_supportsMobileServices) {
+    await LocationService.initialize();
+    await NotificationService.initialize();
+    await PushService.initialize();
+  }
   runApp(const FleetDriverApp());
 }
 
@@ -145,6 +155,16 @@ class _UpdateGateState extends State<_UpdateGate> {
   }
 
   Future<void> _checkForUpdate() async {
+    if (kIsWeb) {
+      if (mounted) {
+        setState(() {
+          _checking = false;
+          _updateRequired = false;
+        });
+      }
+      return;
+    }
+
     final updateRequired = await UpdateService.isUpdateRequired();
     if (mounted) {
       setState(() {
@@ -231,12 +251,17 @@ class _DriverHomePageState extends State<DriverHomePage> {
 
   bool _editingProfile = false;
   bool _savingProfile = false;
+  bool _profileEditUsed = false;
   String _versionLabel = '';
 
   final _profileFormKey = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController();
   final _ageCtrl = TextEditingController();
   final _plateCtrl = TextEditingController();
+  final _vehicleBrandCtrl = TextEditingController();
+  final _vehicleTypeCtrl = TextEditingController();
+  final _vehicleColorCtrl = TextEditingController();
+  final _vehicleSeatsCtrl = TextEditingController();
   final _phoneCtrl = TextEditingController();
 
   // Estado de viajes: se consulta cada 5s si el conductor tiene un
@@ -258,29 +283,36 @@ class _DriverHomePageState extends State<DriverHomePage> {
     _bootstrap();
     _loadAppVersion();
 
-    FlutterBackgroundService().on('debug_log').listen((event) {
-      if (event == null) return;
-      _addLog(event['message'] as String);
-    });
-
-    FlutterBackgroundService().on('location_update').listen((event) {
-      if (event == null) return;
-      final lat = event['lat'] as double;
-      final lng = event['lng'] as double;
-      setState(() => _currentLatLng = LatLng(lat, lng));
-
-      // Si una pantalla de viaje (entrante o activo) reemplazo la pantalla
-      // principal, el GoogleMap de ahi ya fue destruido por Flutter aunque
-      // este listener (registrado una sola vez en initState) siga vivo.
-      // Sin este guard, animateCamera lanza "used after disposed".
-      if (!_showingMainScreen) return;
+    if (_supportsMobileServices) {
       try {
-        _mapController?.animateCamera(CameraUpdate.newLatLng(LatLng(lat, lng)));
+        FlutterBackgroundService().on('debug_log').listen((event) {
+          if (event == null) return;
+          _addLog(event['message'] as String);
+        });
+
+        FlutterBackgroundService().on('location_update').listen((event) {
+          if (event == null) return;
+          final lat = event['lat'] as double;
+          final lng = event['lng'] as double;
+          setState(() => _currentLatLng = LatLng(lat, lng));
+
+          // Si una pantalla de viaje (entrante o activo) reemplazo la pantalla
+          // principal, el GoogleMap de ahi ya fue destruido por Flutter aunque
+          // este listener (registrado una sola vez en initState) siga vivo.
+          // Sin este guard, animateCamera lanza "used after disposed".
+          if (!_showingMainScreen) return;
+          try {
+            _mapController
+                ?.animateCamera(CameraUpdate.newLatLng(LatLng(lat, lng)));
+          } catch (_) {
+            // El controller quedo obsoleto justo en la transicion; se ignora,
+            // el proximo update ya no entrara aqui gracias al guard de arriba.
+          }
+        });
       } catch (_) {
-        // El controller quedo obsoleto justo en la transicion; se ignora,
-        // el proximo update ya no entrara aqui gracias al guard de arriba.
+        // En previews de escritorio y tests el plugin no tiene plataforma.
       }
-    });
+    }
   }
 
   Future<void> _loadAppVersion() async {
@@ -313,6 +345,10 @@ class _DriverHomePageState extends State<DriverHomePage> {
     _nameCtrl.dispose();
     _ageCtrl.dispose();
     _plateCtrl.dispose();
+    _vehicleBrandCtrl.dispose();
+    _vehicleTypeCtrl.dispose();
+    _vehicleColorCtrl.dispose();
+    _vehicleSeatsCtrl.dispose();
     _phoneCtrl.dispose();
     super.dispose();
   }
@@ -324,52 +360,64 @@ class _DriverHomePageState extends State<DriverHomePage> {
     // esta aprobado (ver _afterAuthResolved -> _startShift) y sigue
     // corriendo sin intervencion hasta que el mismo presione "Terminar
     // turno".
-    if (await LocationService.isRunning()) {
-      LocationService.stop();
+    if (_supportsMobileServices) {
+      try {
+        if (await LocationService.isRunning()) LocationService.stop();
+      } catch (_) {
+        // El plugin no esta disponible fuera de Android/iOS.
+      }
     }
 
-    await _refreshPermissionStatus();
+    try {
+      await _refreshPermissionStatus();
+    } catch (_) {
+      // Los permisos nativos no existen en previews de escritorio/tests.
+    }
 
     // Con la app visible, el push llega por aqui (no por el handler de
     // background): en vez de esperar el proximo tick de 5s, se consulta el
     // viaje de inmediato. El aviso sonoro lo pone _pollForTrip, que ya
     // deduplica por tripId.
-    FirebaseMessaging.onMessage.listen((message) {
-      switch (message.data['type']) {
-        case 'trip_assigned':
-          _pollForTrip();
-          break;
-        case 'trip_updated':
-          _pollForTrip();
-          NotificationService.showTripUpdated();
-          break;
-        case 'place_assigned':
-          _refreshAssignedPlace(
-            message.data['placeName'] as String? ?? 'un lugar',
-            message.data['placeType'] as String? ?? 'Lugar',
-          );
-          break;
-        case 'approval_status':
-          // Refresca el perfil para que la pantalla de "pendiente de
-          // aprobacion" reaccione sin que el conductor tenga que reabrir
-          // la app.
-          _afterAuthResolved();
-          final status = message.data['status'];
-          if (status == 'approved') {
-            NotificationService.showSimple(
-              'Cuenta aprobada',
-              'Ya puedes empezar a recibir viajes.',
+    if (_supportsMobileServices) {
+      FirebaseMessaging.onMessage.listen((message) {
+        switch (message.data['type']) {
+          case 'trip_assigned':
+            _pollForTrip();
+            break;
+          case 'trip_updated':
+            _pollForTrip();
+            NotificationService.showTripUpdated();
+            break;
+          case 'place_assigned':
+            _refreshAssignedPlace(
+              message.data['placeName'] as String? ?? 'un lugar',
+              message.data['placeType'] as String? ?? 'Lugar',
             );
-          } else if (status == 'rejected') {
-            final reason = message.data['rejectionReason'] as String? ?? '';
-            NotificationService.showSimple(
-              'Registro rechazado',
-              reason.isNotEmpty ? reason : 'Revisa tus documentos e intenta de nuevo.',
-            );
-          }
-          break;
-      }
-    });
+            break;
+          case 'approval_status':
+            // Refresca el perfil para que la pantalla de "pendiente de
+            // aprobacion" reaccione sin que el conductor tenga que reabrir
+            // la app.
+            _afterAuthResolved();
+            final status = message.data['status'];
+            if (status == 'approved') {
+              NotificationService.showSimple(
+                'Cuenta aprobada',
+                'Ya puedes empezar a recibir viajes.',
+              );
+            } else if (status == 'rejected') {
+              final reason = message.data['rejectionReason'] as String? ?? '';
+              NotificationService.showSimple(
+                'Registro rechazado',
+                reason.isNotEmpty
+                    ? reason
+                    : 'Revisa tus documentos e intenta de nuevo.',
+              );
+            }
+            break;
+        }
+      });
+    }
 
     final loggedIn = await AuthService.isLoggedIn();
     if (!loggedIn) {
@@ -447,7 +495,12 @@ class _DriverHomePageState extends State<DriverHomePage> {
       _nameCtrl.text = profile['name']?.toString() ?? '';
       _ageCtrl.text = profile['age']?.toString() ?? '';
       _plateCtrl.text = profile['plate']?.toString() ?? '';
+      _vehicleBrandCtrl.text = profile['vehicleBrand']?.toString() ?? '';
+      _vehicleTypeCtrl.text = profile['vehicleType']?.toString() ?? '';
+      _vehicleColorCtrl.text = profile['vehicleColor']?.toString() ?? '';
+      _vehicleSeatsCtrl.text = profile['vehicleSeats']?.toString() ?? '';
       _phoneCtrl.text = profile['phone']?.toString() ?? '';
+      _profileEditUsed = profile['profileEditUsed'] == true;
 
       setState(() {
         _driverId = uid;
@@ -486,11 +539,18 @@ class _DriverHomePageState extends State<DriverHomePage> {
     try {
       final profile = await DriverProfileService.fetchProfile(_driverId!);
       if (profile != null && mounted) {
-        final oldPlace = ((_driverProfile?['assignedPlace'] as Map?)?['name'] ?? '').toString();
-        final newPlace = ((profile['assignedPlace'] as Map?)?['name'] ?? '').toString();
-        setState(() => _driverProfile = profile);
+        final oldPlace =
+            ((_driverProfile?['assignedPlace'] as Map?)?['name'] ?? '')
+                .toString();
+        final newPlace =
+            ((profile['assignedPlace'] as Map?)?['name'] ?? '').toString();
+        setState(() {
+          _driverProfile = profile;
+          _profileEditUsed = profile['profileEditUsed'] == true;
+        });
         if (newPlace.isNotEmpty && newPlace != oldPlace) {
-          final type = ((profile['assignedPlace'] as Map?)?['type'] ?? 'Lugar').toString();
+          final type = ((profile['assignedPlace'] as Map?)?['type'] ?? 'Lugar')
+              .toString();
           await NotificationService.showPlaceAssigned(newPlace, type);
         }
       }
@@ -520,6 +580,25 @@ class _DriverHomePageState extends State<DriverHomePage> {
     await NotificationService.showPlaceAssigned(name, type);
   }
 
+  bool _tripViewChanged(Map<String, dynamic> next) {
+    final current = _tripData;
+    if (current == null) return true;
+    const keys = [
+      'status',
+      'pickupLat',
+      'pickupLng',
+      'pickupAddress',
+      'destinationLat',
+      'destinationLng',
+      'destinationAddress',
+      'passengerName',
+      'passengerPhone',
+      'scheduledPickupLabel',
+      'driverId',
+    ];
+    return keys.any((key) => current[key] != next[key]);
+  }
+
   Future<void> _pollForTrip() async {
     if (_driverId == null) return;
     try {
@@ -527,21 +606,23 @@ class _DriverHomePageState extends State<DriverHomePage> {
       final tripId = driverNode?['currentTripId'] as String?;
 
       if (tripId == null) {
-        if (_tripId != null)
+        if (_tripId != null) {
           setState(() {
             _tripId = null;
             _tripData = null;
           });
+        }
         return;
       }
 
       final trip = await TripService.getTrip(tripId);
       if (trip == null) {
-        if (_tripId != null)
+        if (_tripId != null) {
           setState(() {
             _tripId = null;
             _tripData = null;
           });
+        }
         return;
       }
 
@@ -559,10 +640,12 @@ class _DriverHomePageState extends State<DriverHomePage> {
         );
       }
 
-      setState(() {
-        _tripId = tripId;
-        _tripData = trip;
-      });
+      if (_tripId != tripId || _tripViewChanged(trip)) {
+        setState(() {
+          _tripId = tripId;
+          _tripData = trip;
+        });
+      }
     } catch (_) {
       // Fallo de red puntual: se reintenta en el siguiente tick del timer.
     }
@@ -580,11 +663,30 @@ class _DriverHomePageState extends State<DriverHomePage> {
       phone = '${AppConfig.defaultPhoneCountryCode}$phone';
     }
     _phoneCtrl.text = phone;
+    final vehicleSeats = int.parse(_vehicleSeatsCtrl.text.trim());
+    final vehicleBrand = _vehicleBrandCtrl.text.trim();
+    final vehicleType = _vehicleTypeCtrl.text.trim();
+    final vehicleColor = _vehicleColorCtrl.text.trim();
 
     try {
-      await DriverProfileService.updatePhone(phone);
+      await DriverProfileService.updateProfile(
+        phone: phone,
+        vehicleBrand: vehicleBrand,
+        vehicleType: vehicleType,
+        vehicleColor: vehicleColor,
+        vehicleSeats: vehicleSeats,
+      );
       setState(() {
-        _driverProfile = {...?_driverProfile, 'phone': phone};
+        _driverProfile = {
+          ...?_driverProfile,
+          'phone': phone,
+          'vehicleBrand': vehicleBrand,
+          'vehicleType': vehicleType,
+          'vehicleColor': vehicleColor,
+          'vehicleSeats': vehicleSeats,
+          'profileEditUsed': true,
+        };
+        _profileEditUsed = true;
         _editingProfile = false;
         _savingProfile = false;
       });
@@ -599,6 +701,8 @@ class _DriverHomePageState extends State<DriverHomePage> {
   }
 
   Future<void> _refreshPermissionStatus() async {
+    if (!_supportsMobileServices) return;
+
     final whenInUse = await Permission.locationWhenInUse.status;
     final always = await Permission.locationAlways.status;
     final notification = await Permission.notification.status;
@@ -610,6 +714,8 @@ class _DriverHomePageState extends State<DriverHomePage> {
   }
 
   Future<bool> _requestPermissions() async {
+    if (!_supportsMobileServices) return true;
+
     final whenInUse = await Permission.locationWhenInUse.request();
     if (!whenInUse.isGranted) {
       _addLog('Permiso de ubicación "mientras se usa" denegado.');
@@ -653,7 +759,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
     final granted = await _requestPermissions();
     if (!granted) return;
 
-    await LocationService.start();
+    if (_supportsMobileServices) await LocationService.start();
     setState(() => _tracking = true);
     _addLog('Turno iniciado: rastreo en curso.');
     if (_driverId != null) {
@@ -693,7 +799,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
       return;
     }
 
-    LocationService.stop();
+    if (_supportsMobileServices) LocationService.stop();
     _addLog('Turno terminado por el conductor.');
     if (_driverId != null) {
       try {
@@ -766,7 +872,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
     _sessionCheckTimer?.cancel();
     _sessionCheckTimer = null;
 
-    LocationService.stop();
+    if (_supportsMobileServices) LocationService.stop();
     await NotificationService.cancelAll();
     await AuthService.logout();
     await SessionService.clear();
@@ -777,6 +883,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
       _loggedIn = false;
       _driverId = null;
       _driverProfile = null;
+      _profileEditUsed = false;
       _tripId = null;
       _tripData = null;
       _editingProfile = false;
@@ -917,8 +1024,19 @@ class _DriverHomePageState extends State<DriverHomePage> {
                       children: [
                         _circleIconButton(
                           icon: Icons.person,
-                          tooltip: 'Editar mis datos',
-                          onTap: () => setState(() => _editingProfile = true),
+                          tooltip: _profileEditUsed
+                              ? 'Datos ya corregidos'
+                              : 'Editar mis datos (una sola vez)',
+                          onTap: () => setState(() => _editingProfile =
+                              true), /*
+                              ? () =>
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                          'La edición de datos ya fue utilizada.'),
+                                    ),
+                                  )
+                              : () => setState(() => _editingProfile = true), */
                         ),
                         Padding(
                           padding: const EdgeInsets.only(top: 4),
@@ -942,7 +1060,8 @@ class _DriverHomePageState extends State<DriverHomePage> {
                       const SizedBox(height: 10),
                       _permissionBanner(_permissionWarning!),
                     ],
-                    if (((_driverProfile?['assignedPlace'] as Map?)?['name'] ?? '')
+                    if (((_driverProfile?['assignedPlace'] as Map?)?['name'] ??
+                            '')
                         .toString()
                         .isNotEmpty) ...[
                       const SizedBox(height: 10),
@@ -1175,17 +1294,24 @@ class _DriverHomePageState extends State<DriverHomePage> {
         padding: const EdgeInsets.all(20),
         children: [
           const Text(
-            'Solo puedes actualizar tu número de teléfono. Para corregir tu nombre, edad o placa, contacta a soporte.',
+            'Puedes corregir tu teléfono y los datos del vehículo una sola vez. Para corregir tu nombre, edad o placa, contacta a soporte.',
             style: TextStyle(color: Colors.grey, fontSize: 13),
           ),
           const SizedBox(height: 16),
           _profileField(_nameCtrl, 'Nombre completo', editable: false),
           _profileField(_ageCtrl, 'Edad', isNumber: true, editable: false),
+          _profileField(_vehicleColorCtrl, 'Color del vehículo',
+              editable: true),
+          _profileField(_vehicleBrandCtrl, 'Marca del vehÃ­culo',
+              editable: true),
+          _profileField(_vehicleTypeCtrl, 'Tipo de vehÃ­culo', editable: true),
+          _profileField(_vehicleSeatsCtrl, 'NÃºmero de asientos',
+              isNumber: true, editable: true),
           _profileField(_plateCtrl, 'Número de placa', editable: false),
           _profileField(_phoneCtrl, 'Teléfono (ej. +51987654321)'),
           const SizedBox(height: 20),
           ElevatedButton(
-            onPressed: _savingProfile ? null : _saveProfile,
+            onPressed: _savingProfile || _profileEditUsed ? null : _saveProfile,
             style: ElevatedButton.styleFrom(
                 minimumSize: const Size.fromHeight(48)),
             child: _savingProfile

@@ -37,6 +37,9 @@ let markers = {};        // driverId -> google.maps.Marker
 let selectionHalo = null; // aro de color detras del auto seleccionado
 let driversCache = {};   // driverId -> data
 let mapPlacesCache = { hotels: {}, sportVenues: {} };
+const carIconCache = new Map();
+const haloIconCache = new Map();
+let sidebarRenderFrame = null;
 
 let activeTripListeners = {}; // tripId -> callback, solo para conductores 'busy'
 let activeTripsCache = {};    // tripId -> trip data (viajes en curso)
@@ -139,7 +142,7 @@ function tryStartDashboard() {
     subscribeTodayTrips();
     ['hotels', 'sportVenues'].forEach((key) => db.ref(`config/${key}`).on('value', (snapshot) => {
       mapPlacesCache[key] = snapshot.val() || {};
-      renderSidebar();
+      scheduleSidebarRender();
     }));
     // Los marcadores y la lista ya se actualizan solos en tiempo real con
     // cada escritura de Firebase. Este timer detecta el paso del tiempo SIN
@@ -148,7 +151,7 @@ function tryStartDashboard() {
     setInterval(() => {
       if (!map) return;
       Object.entries(driversCache).forEach(([driverId, d]) => updateMarkerForDriver(driverId, d));
-      renderSidebar();
+      scheduleSidebarRender();
     }, 10000);
   }
 }
@@ -201,6 +204,7 @@ function driverState(d) {
 }
 
 function buildCarIcon(state) {
+  if (carIconCache.has(state)) return carIconCache.get(state);
   const color = STATE_COLORS[state] || STATE_COLORS.offline;
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">
@@ -213,27 +217,32 @@ function buildCarIcon(state) {
       </g>
     </svg>
   `;
-  return {
+  const icon = {
     url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
     scaledSize: new google.maps.Size(36, 36),
     anchor: new google.maps.Point(18, 18),
   };
+  carIconCache.set(state, icon);
+  return icon;
 }
 
 // Aro de color detras del auto seleccionado en el mapa (marca cual esta
 // activo sin abrir un InfoWindow encima).
 function buildHaloIcon(state) {
+  if (haloIconCache.has(state)) return haloIconCache.get(state);
   const color = STATE_COLORS[state] || STATE_COLORS.offline;
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="56" height="56" viewBox="0 0 56 56">
       <circle cx="28" cy="28" r="25" fill="${color}" fill-opacity="0.2" stroke="${color}" stroke-width="3"/>
     </svg>
   `;
-  return {
+  const icon = {
     url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
     scaledSize: new google.maps.Size(56, 56),
     anchor: new google.maps.Point(28, 28),
   };
+  haloIconCache.set(state, icon);
+  return icon;
 }
 
 // Crea/mueve/quita el aro segun cual conductor este seleccionado; se llama
@@ -297,6 +306,17 @@ function subscribeToDrivers() {
     syncActiveTripListeners(data);
     Object.entries(data).forEach(([driverId, d]) => updateMarkerForDriver(driverId, d));
 
+    scheduleSidebarRender();
+  });
+}
+
+// Agrupa varios eventos de Firebase que llegan en el mismo ciclo del
+// navegador. El mapa sigue actualizandose en cada evento; solo se evita
+// reconstruir el HTML completo varias veces seguidas.
+function scheduleSidebarRender() {
+  if (sidebarRenderFrame !== null) return;
+  sidebarRenderFrame = requestAnimationFrame(() => {
+    sidebarRenderFrame = null;
     renderSidebar();
   });
 }
@@ -311,7 +331,7 @@ function subscribeTodayTrips() {
     .startAt(todayStartMs)
     .on('value', (snapshot) => {
       todayTripsCache = snapshot.val() || {};
-      renderSidebar();
+      scheduleSidebarRender();
     });
 }
 
@@ -338,7 +358,7 @@ function syncActiveTripListeners(driversData) {
     const callback = (snapshot) => {
       activeTripsCache[tripId] = snapshot.val();
       Object.entries(driversCache).forEach(([id, d]) => updateMarkerForDriver(id, d));
-      renderSidebar();
+      scheduleSidebarRender();
 
       const expanded = expandedDriverId && driversCache[expandedDriverId];
       if (expanded && expanded.currentTripId === tripId) refreshRouteForSelected(true);
@@ -593,7 +613,7 @@ async function refreshRouteForSelected(force = false) {
     drawRoute([origin, destination], destination, targetType);
     lastRouteEtaSeconds = null;
   }
-  renderSidebar();
+  scheduleSidebarRender();
 }
 
 function formatEta(seconds) {

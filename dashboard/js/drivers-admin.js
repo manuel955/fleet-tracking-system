@@ -5,7 +5,9 @@
 // ---------------------------------------------------------------------------
 
 const DOC_FIELDS = [
-  { key: 'dniDocUrl', label: 'DNI' },
+  { key: 'dniDocUrl', label: 'DNI (PDF)' },
+  { key: 'dniFrontDocUrl', label: 'DNI (frente)' },
+  { key: 'dniBackDocUrl', label: 'DNI (dorso)' },
   { key: 'licenseDocUrl', label: 'Licencia' },
   { key: 'soatDocUrl', label: 'SOAT' },
   { key: 'circulationCardDocUrl', label: 'Tarjeta circ.' },
@@ -504,7 +506,12 @@ async function assignDriverPlace(driverId) {
 async function deleteDriver(driverId) {
   const driver = adminDriversCache[driverId];
   if (!driver || !confirm(`¿Eliminar definitivamente a ${driver.name || 'este conductor'}?`)) return;
-  try { await manageDriver({ action: 'delete', driverId }); } catch (error) { alert(error.message); }
+  try {
+    const result = await manageDriver({ action: 'delete', driverId });
+    if (!result.authDeleted) {
+      alert('Se eliminó el perfil, pero la cuenta de acceso ya no estaba disponible. Verifica Authentication si el correo continúa bloqueado.');
+    }
+  } catch (error) { alert(error.message); }
 }
 
 function approveDriver(driverId) {

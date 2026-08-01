@@ -9,11 +9,13 @@ class PickedDocument {
   final Uint8List bytes;
   final String extension; // 'jpg' o 'pdf'
   final String contentType; // 'image/jpeg' o 'application/pdf'
+  final String? displayName;
 
   PickedDocument({
     required this.bytes,
     required this.extension,
     required this.contentType,
+    this.displayName,
   });
 }
 
@@ -25,7 +27,6 @@ class PickedDocument {
 class DriverProfileService {
   static const _docFieldToUrlField = {
     'profile': 'profilePhotoUrl',
-    'dni': 'dniDocUrl',
     'license': 'licenseDocUrl',
     'soat': 'soatDocUrl',
     'circulationCard': 'circulationCardDocUrl',
@@ -41,14 +42,16 @@ class DriverProfileService {
     );
     final response = await http.get(uri);
     if (response.statusCode != 200) {
-      throw Exception('Firebase rechazo la consulta (${response.statusCode}): ${response.body}');
+      throw Exception(
+          'Firebase rechazo la consulta (${response.statusCode}): ${response.body}');
     }
     final data = jsonDecode(response.body);
     return data == null ? null : Map<String, dynamic>.from(data);
   }
 
-  /// Registro inicial: crea la cuenta, sube los documentos y escribe el
-  /// nodo `drivers/{uid}` completo con `approvalStatus: 'pending_review'`.
+  /// Registro inicial: crea la cuenta, sube los documentos que el conductor
+  /// haya elegido y escribe el nodo `drivers/{uid}` completo con
+  /// `approvalStatus: 'pending_review'`.
   static Future<void> registerDriver({
     required String email,
     required String password,
@@ -57,26 +60,43 @@ class DriverProfileService {
     required String phone,
     required String dni,
     required String plate,
-    required Map<String, PickedDocument> documents,
+    required String vehicleBrand,
+    required String vehicleType,
+    required String vehicleColor,
+    required int vehicleSeats,
+    required Map<String, List<PickedDocument>> documents,
   }) async {
-    final auth = await AuthService.registerWithEmail(email: email, password: password);
+    final dniFiles = documents['dni'] ?? const <PickedDocument>[];
+    if (!_isValidDniSelection(dniFiles)) {
+      throw Exception('El DNI requiere 2 fotos o 1 solo PDF.');
+    }
+
+    final auth =
+        await AuthService.registerWithEmail(email: email, password: password);
     final uid = auth['uid'] as String;
     final idToken = auth['idToken'] as String;
 
     final validation = await http.post(
-      Uri.parse('https://us-central1-rastreoflota-53052.cloudfunctions.net/reserveDriverIdentity'),
-      headers: {'Authorization': 'Bearer $idToken', 'Content-Type': 'application/json'},
+      Uri.parse(
+          'https://us-central1-rastreoflota-53052.cloudfunctions.net/reserveDriverIdentity'),
+      headers: {
+        'Authorization': 'Bearer $idToken',
+        'Content-Type': 'application/json'
+      },
       body: jsonEncode({'name': name, 'dni': dni, 'plate': plate}),
     );
     if (validation.statusCode != 200) {
       final response = jsonDecode(validation.body);
-      throw Exception(response is Map ? response['error'] ?? 'No se pudo validar el registro.' : 'No se pudo validar el registro.');
+      throw Exception(response is Map
+          ? response['error'] ?? 'No se pudo validar el registro.'
+          : 'No se pudo validar el registro.');
     }
 
     final docUrls = await _uploadAll(uid, idToken, documents);
     final now = DateTime.now().millisecondsSinceEpoch;
 
-    final uri = Uri.parse('${AppConfig.firebaseDbUrl}/drivers/$uid.json?auth=$idToken');
+    final uri =
+        Uri.parse('${AppConfig.firebaseDbUrl}/drivers/$uid.json?auth=$idToken');
     final response = await http.put(
       uri,
       headers: {'Content-Type': 'application/json'},
@@ -87,6 +107,11 @@ class DriverProfileService {
         'phone': phone,
         'dni': dni,
         'plate': plate,
+        'vehicleBrand': vehicleBrand,
+        'vehicleType': vehicleType,
+        'vehicleColor': vehicleColor,
+        'vehicleSeats': vehicleSeats,
+        'profileEditUsed': false,
         ...docUrls,
         'approvalStatus': 'pending_review',
         'registeredAt': now,
@@ -95,21 +120,29 @@ class DriverProfileService {
     );
 
     if (response.statusCode != 200) {
-      throw Exception('Firebase rechazo el registro (${response.statusCode}): ${response.body}');
+      throw Exception(
+          'Firebase rechazo el registro (${response.statusCode}): ${response.body}');
     }
   }
 
   /// Re-envio tras un rechazo: solo sube los documentos que el conductor
   /// volvio a elegir y regresa el estado a `pending_review`, sin tocar
   /// nombre/telefono/DNI/placa.
-  static Future<void> resubmitDocuments(Map<String, PickedDocument> documents) async {
+  static Future<void> resubmitDocuments(
+      Map<String, List<PickedDocument>> documents) async {
+    if (documents.containsKey('dni') &&
+        !_isValidDniSelection(documents['dni'] ?? const <PickedDocument>[])) {
+      throw Exception('El DNI requiere 2 fotos o 1 solo PDF.');
+    }
+
     final auth = await AuthService.currentSession();
     final uid = auth['uid'] as String;
     final idToken = auth['idToken'] as String;
 
     final docUrls = await _uploadAll(uid, idToken, documents);
 
-    final uri = Uri.parse('${AppConfig.firebaseDbUrl}/drivers/$uid.json?auth=$idToken');
+    final uri =
+        Uri.parse('${AppConfig.firebaseDbUrl}/drivers/$uid.json?auth=$idToken');
     final response = await http.patch(
       uri,
       headers: {'Content-Type': 'application/json'},
@@ -121,7 +154,8 @@ class DriverProfileService {
     );
 
     if (response.statusCode != 200) {
-      throw Exception('Firebase rechazo la actualizacion (${response.statusCode}): ${response.body}');
+      throw Exception(
+          'Firebase rechazo la actualizacion (${response.statusCode}): ${response.body}');
     }
   }
 
@@ -136,7 +170,8 @@ class DriverProfileService {
     final uid = auth['uid'] as String;
     final idToken = auth['idToken'] as String;
 
-    final uri = Uri.parse('${AppConfig.firebaseDbUrl}/drivers/$uid.json?auth=$idToken');
+    final uri =
+        Uri.parse('${AppConfig.firebaseDbUrl}/drivers/$uid.json?auth=$idToken');
     final response = await http.patch(
       uri,
       headers: {'Content-Type': 'application/json'},
@@ -144,42 +179,79 @@ class DriverProfileService {
     );
 
     if (response.statusCode != 200) {
-      throw Exception('Firebase rechazo la sesion (${response.statusCode}): ${response.body}');
+      throw Exception(
+          'Firebase rechazo la sesion (${response.statusCode}): ${response.body}');
     }
   }
 
-  /// El conductor solo puede editar su telefono despues de aprobado (mismo
-  /// criterio que la version anterior): nombre/edad/DNI/placa/documentos
-  /// requieren contactar a soporte o una resubida formal.
-  static Future<void> updatePhone(String phone) async {
+  /// Permite una sola correccion posterior al registro. La restriccion se
+  /// valida en Cloud Functions para que no dependa solo de la interfaz.
+  static Future<void> updateProfile({
+    required String phone,
+    required String vehicleBrand,
+    required String vehicleType,
+    required String vehicleColor,
+    required int vehicleSeats,
+  }) async {
     final auth = await AuthService.currentSession();
-    final uid = auth['uid'] as String;
     final idToken = auth['idToken'] as String;
 
-    final uri = Uri.parse('${AppConfig.firebaseDbUrl}/drivers/$uid.json?auth=$idToken');
-    final response = await http.patch(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'phone': phone}),
+    final response = await http.post(
+      Uri.parse(
+          'https://us-central1-rastreoflota-53052.cloudfunctions.net/updateDriverProfileOnce'),
+      headers: {
+        'Authorization': 'Bearer $idToken',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'phone': phone,
+        'vehicleBrand': vehicleBrand,
+        'vehicleType': vehicleType,
+        'vehicleColor': vehicleColor,
+        'vehicleSeats': vehicleSeats,
+      }),
     );
 
     if (response.statusCode != 200) {
-      throw Exception('Firebase rechazo la actualizacion (${response.statusCode}): ${response.body}');
+      throw Exception(
+          'Firebase rechazo la actualizacion (${response.statusCode}): ${response.body}');
     }
   }
 
   static Future<Map<String, String>> _uploadAll(
     String uid,
     String idToken,
-    Map<String, PickedDocument> documents,
+    Map<String, List<PickedDocument>> documents,
   ) async {
     final result = <String, String>{};
     for (final entry in documents.entries) {
+      final files = entry.value;
+      if (files.isEmpty) continue;
+
+      if (entry.key == 'dni') {
+        if (files.length == 1 && files.single.extension == 'pdf') {
+          result['dniDocUrl'] =
+              await _uploadDocument(uid, idToken, 'dni', files.single);
+        } else if (files.length == 2) {
+          result['dniFrontDocUrl'] =
+              await _uploadDocument(uid, idToken, 'dni_front', files[0]);
+          result['dniBackDocUrl'] =
+              await _uploadDocument(uid, idToken, 'dni_back', files[1]);
+        }
+        continue;
+      }
+
       final urlField = _docFieldToUrlField[entry.key];
       if (urlField == null) continue;
-      result[urlField] = await _uploadDocument(uid, idToken, entry.key, entry.value);
+      result[urlField] =
+          await _uploadDocument(uid, idToken, entry.key, files.last);
     }
     return result;
+  }
+
+  static bool _isValidDniSelection(List<PickedDocument> files) {
+    if (files.length == 1) return files.single.extension == 'pdf';
+    return files.length == 2 && files.every((file) => file.extension != 'pdf');
   }
 
   static Future<String> _uploadDocument(
@@ -205,7 +277,8 @@ class DriverProfileService {
     );
 
     if (response.statusCode != 200) {
-      throw Exception('No se pudo subir "$docKey" (${response.statusCode}): ${response.body}');
+      throw Exception(
+          'No se pudo subir "$docKey" (${response.statusCode}): ${response.body}');
     }
 
     final data = jsonDecode(response.body);

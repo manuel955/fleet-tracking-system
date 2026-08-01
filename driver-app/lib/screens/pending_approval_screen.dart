@@ -27,22 +27,54 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
   bool _resubmitting = false;
   bool _busy = false;
   String? _error;
-  final Map<String, PickedDocument> _documents = {};
+  final Map<String, List<PickedDocument>> _documents = {};
 
   static const _docs = [
-    ('profile', 'Foto de perfil', false, 'profilePhotoUrl'),
-    ('dni', 'DNI', true, 'dniDocUrl'),
-    ('license', 'Licencia de conducir', true, 'licenseDocUrl'),
-    ('soat', 'SOAT', true, 'soatDocUrl'),
-    ('circulationCard', 'Tarjeta única de circulación', true, 'circulationCardDocUrl'),
-    ('technicalReview', 'Revisión técnica vehicular', true, 'technicalReviewDocUrl'),
-    ('criminalRecord', 'Récord del conductor', true, 'criminalRecordDocUrl'),
-    ('workCertificate', 'Certificado único laboral', true, 'workCertificateDocUrl'),
+    ('profile', 'Foto de perfil', false, ['profilePhotoUrl']),
+    (
+      'dni',
+      'DNI (2 fotos o 1 PDF)',
+      true,
+      ['dniDocUrl', 'dniFrontDocUrl', 'dniBackDocUrl']
+    ),
+    ('license', 'Licencia de conducir', true, ['licenseDocUrl']),
+    ('soat', 'SOAT', true, ['soatDocUrl']),
+    (
+      'circulationCard',
+      'Tarjeta única de circulación',
+      true,
+      ['circulationCardDocUrl']
+    ),
+    (
+      'technicalReview',
+      'Revisión técnica vehicular',
+      true,
+      ['technicalReviewDocUrl']
+    ),
+    ('criminalRecord', 'Récord del conductor', true, ['criminalRecordDocUrl']),
+    (
+      'workCertificate',
+      'Certificado único laboral',
+      true,
+      ['workCertificateDocUrl']
+    ),
   ];
+
+  bool get _isDniSelectionValid {
+    final dni = _documents['dni'] ?? const <PickedDocument>[];
+    if (dni.isEmpty) return true;
+    if (dni.length == 1) return dni.single.extension == 'pdf';
+    return dni.length == 2 && dni.every((file) => file.extension != 'pdf');
+  }
 
   Future<void> _submitResubmission() async {
     if (_documents.isEmpty) {
-      setState(() => _error = 'Sube al menos un documento para volver a enviarlo.');
+      setState(
+          () => _error = 'Sube al menos un documento para volver a enviarlo.');
+      return;
+    }
+    if (!_isDniSelectionValid) {
+      setState(() => _error = 'El DNI requiere 2 fotos o 1 solo PDF.');
       return;
     }
     setState(() {
@@ -67,7 +99,8 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final status = widget.profile['approvalStatus'] as String? ?? 'pending_review';
+    final status =
+        widget.profile['approvalStatus'] as String? ?? 'pending_review';
     final rejected = status == 'rejected';
     final reason = widget.profile['rejectionReason'] as String?;
 
@@ -76,7 +109,10 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
         title: const Text('Estado de tu registro'),
         automaticallyImplyLeading: false,
         actions: [
-          IconButton(icon: const Icon(Icons.logout), tooltip: 'Cerrar sesión', onPressed: _logout),
+          IconButton(
+              icon: const Icon(Icons.logout),
+              tooltip: 'Cerrar sesión',
+              onPressed: _logout),
         ],
       ),
       body: SafeArea(
@@ -90,7 +126,9 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
             ),
             const SizedBox(height: 16),
             Text(
-              rejected ? 'Tu registro fue rechazado' : 'Tu registro está en revisión',
+              rejected
+                  ? 'Tu registro fue rechazado'
+                  : 'Tu registro está en revisión',
               style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
@@ -109,7 +147,8 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: Colors.red.shade200),
                 ),
-                child: Text('Motivo: $reason', style: TextStyle(color: Colors.red.shade900)),
+                child: Text('Motivo: $reason',
+                    style: TextStyle(color: Colors.red.shade900)),
               ),
             ],
             if (rejected) ...[
@@ -117,7 +156,8 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
               if (!_resubmitting)
                 ElevatedButton(
                   onPressed: () => setState(() => _resubmitting = true),
-                  style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                  style: ElevatedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(48)),
                   child: const Text('Volver a subir documentos'),
                 )
               else ...[
@@ -127,15 +167,25 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
                 ),
                 ..._docs.map(
                   (d) => DocumentUploadTile(
+                    key: ValueKey(d.$1),
                     label: d.$2,
                     allowPdf: d.$3,
-                    existingUrl: widget.profile[d.$4] as String?,
-                    onChanged: (file) {
-                      if (file != null) {
-                        _documents[d.$1] = file;
-                      } else {
-                        _documents.remove(d.$1);
-                      }
+                    dniMode: d.$1 == 'dni',
+                    files: _documents[d.$1] ?? const <PickedDocument>[],
+                    existingUrls: [
+                      for (final field in d.$4)
+                        if ((widget.profile[field]?.toString() ?? '')
+                            .isNotEmpty)
+                          widget.profile[field].toString(),
+                    ],
+                    onChanged: (files) {
+                      setState(() {
+                        if (files.isNotEmpty) {
+                          _documents[d.$1] = files;
+                        } else {
+                          _documents.remove(d.$1);
+                        }
+                      });
                     },
                   ),
                 ),
@@ -146,12 +196,14 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
                 const SizedBox(height: 16),
                 ElevatedButton(
                   onPressed: _busy ? null : _submitResubmission,
-                  style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                  style: ElevatedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(48)),
                   child: _busy
                       ? const SizedBox(
                           height: 20,
                           width: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white),
                         )
                       : const Text('Enviar de nuevo'),
                 ),

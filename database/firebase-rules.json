@@ -47,10 +47,16 @@
         "name": { ".validate": "newData.isString() && newData.val().length > 0" },
         "age": { ".validate": "newData.isNumber() && newData.val() > 17 && newData.val() < 100" },
         "plate": { ".validate": "newData.isString() && newData.val().length > 0" },
+        "vehicleBrand": { ".validate": "newData.isString() && newData.val().length > 0" },
+        "vehicleType": { ".validate": "newData.isString() && newData.val().length > 0" },
+        "vehicleColor": { ".validate": "newData.isString() && newData.val().length > 0" },
+        "vehicleSeats": { ".validate": "newData.isNumber() && newData.val() > 0 && newData.val() <= 100" },
         "phone": { ".validate": "newData.isString()" },
         "dni": { ".validate": "newData.isString()" },
         "profilePhotoUrl": { ".validate": "newData.isString()" },
         "dniDocUrl": { ".validate": "newData.isString()" },
+        "dniFrontDocUrl": { ".validate": "newData.isString()" },
+        "dniBackDocUrl": { ".validate": "newData.isString()" },
         "licenseDocUrl": { ".validate": "newData.isString()" },
         "soatDocUrl": { ".validate": "newData.isString()" },
         "circulationCardDocUrl": { ".validate": "newData.isString()" },
@@ -59,6 +65,8 @@
         "workCertificateDocUrl": { ".validate": "newData.isString()" },
         "registeredAt": { ".validate": "newData.isNumber() && (!data.exists() || newData.val() == data.val())" },
         "documentsSubmittedAt": { ".validate": "newData.isNumber()" },
+        "profileEditUsed": { ".validate": "newData.isBoolean()" },
+        "profileEditedAt": { ".validate": "newData.isNumber()" },
         "approvalStatus": {
           ".write": "auth != null && (auth.uid === $driverId || auth.token.firebase.sign_in_provider === 'password')",
           ".validate": "newData.isString() && ((auth.uid === $driverId && newData.val() == 'pending_review') || (auth.token.firebase.sign_in_provider === 'password' && (newData.val() == 'approved' || newData.val() == 'rejected')))"
@@ -125,6 +133,10 @@
         "driverName": { ".validate": "newData.isString()" },
         "driverPhone": { ".validate": "newData.isString()" },
         "driverPlate": { ".validate": "newData.isString()" },
+        "vehicleBrand": { ".validate": "newData.isString()" },
+        "vehicleType": { ".validate": "newData.isString()" },
+        "vehicleColor": { ".validate": "newData.isString()" },
+        "vehicleSeats": { ".validate": "newData.isNumber() && newData.val() > 0 && newData.val() <= 100" },
         "rejectedDriverIds": {
           "$rejectedId": { ".validate": "newData.isBoolean()" }
         },

@@ -4,17 +4,20 @@ import '../services/driver_profile_service.dart';
 import '../widgets/document_upload_tile.dart';
 
 /// Registro del conductor: cuenta (correo/contraseña) + datos de contacto +
-/// los 8 documentos que un admin revisara despues desde el dashboard. Al
-/// enviar, el conductor queda con `approvalStatus: 'pending_review'` y no
-/// puede operar hasta ser aprobado (ver PendingApprovalScreen).
+/// documentos opcionales que un admin puede revisar despues desde el
+/// dashboard. Al enviar, el conductor queda con
+/// `approvalStatus: 'pending_review'` y no puede operar hasta ser aprobado
+/// (ver PendingApprovalScreen).
 class DriverRegistrationScreen extends StatefulWidget {
   final VoidCallback onDone;
   final VoidCallback onGoToLogin;
 
-  const DriverRegistrationScreen({super.key, required this.onDone, required this.onGoToLogin});
+  const DriverRegistrationScreen(
+      {super.key, required this.onDone, required this.onGoToLogin});
 
   @override
-  State<DriverRegistrationScreen> createState() => _DriverRegistrationScreenState();
+  State<DriverRegistrationScreen> createState() =>
+      _DriverRegistrationScreenState();
 }
 
 class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
@@ -24,15 +27,55 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
   final _passwordConfirmCtrl = TextEditingController();
   final _nameCtrl = TextEditingController();
   final _ageCtrl = TextEditingController();
-  final _phoneCtrl = TextEditingController(text: AppConfig.defaultPhoneCountryCode);
+  final _phoneCtrl = TextEditingController();
   final _dniCtrl = TextEditingController();
   final _plateCtrl = TextEditingController();
+  final _vehicleBrandCtrl = TextEditingController();
+  final _vehicleColorCtrl = TextEditingController();
+  final _vehicleSeatsCtrl = TextEditingController();
+  String? _vehicleType;
+  String _phonePrefix = AppConfig.defaultPhoneCountryCode;
 
-  final Map<String, PickedDocument> _documents = {};
+  final Map<String, List<PickedDocument>> _documents = {};
   bool _busy = false;
   String? _error;
 
-  static const _requiredDocs = [
+  static const _vehicleTypes = [
+    'Auto',
+    'Mini van',
+    'Van',
+    'Bus',
+    'Camioneta',
+  ];
+
+  static const _phoneCountries = [
+    ('Argentina', '+54'),
+    ('Belice', '+501'),
+    ('Bolivia', '+591'),
+    ('Brasil', '+55'),
+    ('Chile', '+56'),
+    ('Colombia', '+57'),
+    ('Costa Rica', '+506'),
+    ('Cuba', '+53'),
+    ('Ecuador', '+593'),
+    ('El Salvador', '+503'),
+    ('Guatemala', '+502'),
+    ('Guyana', '+592'),
+    ('Haití', '+509'),
+    ('Honduras', '+504'),
+    ('México', '+52'),
+    ('Nicaragua', '+505'),
+    ('Panamá', '+507'),
+    ('Paraguay', '+595'),
+    ('Perú', '+51'),
+    ('Puerto Rico', '+1787'),
+    ('República Dominicana', '+1809'),
+    ('Surinam', '+597'),
+    ('Uruguay', '+598'),
+    ('Venezuela', '+58'),
+  ];
+
+  static const _documentFields = [
     ('profile', 'Foto de perfil', false),
     ('dni', 'DNI', true),
     ('license', 'Licencia de conducir', true),
@@ -53,30 +96,28 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
     _phoneCtrl.dispose();
     _dniCtrl.dispose();
     _plateCtrl.dispose();
+    _vehicleBrandCtrl.dispose();
+    _vehicleColorCtrl.dispose();
+    _vehicleSeatsCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
+    if (!_isDniSelectionValid) {
+      setState(() => _error = 'El DNI requiere 2 fotos o 1 solo PDF.');
+      return;
+    }
     if (_passwordCtrl.text != _passwordConfirmCtrl.text) {
       setState(() => _error = 'Las contraseñas no coinciden.');
       return;
     }
-    final missing = _requiredDocs.where((d) => !_documents.containsKey(d.$1)).toList();
-    if (missing.isNotEmpty) {
-      setState(() => _error = 'Falta subir: ${missing.map((d) => d.$2).join(", ")}.');
-      return;
-    }
-
     setState(() {
       _busy = true;
       _error = null;
     });
 
-    var phone = _phoneCtrl.text.trim();
-    if (!phone.startsWith('+')) {
-      phone = '${AppConfig.defaultPhoneCountryCode}$phone';
-    }
+    final phone = '$_phonePrefix${_phoneCtrl.text.trim()}';
 
     try {
       await DriverProfileService.registerDriver(
@@ -87,6 +128,10 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
         phone: phone,
         dni: _dniCtrl.text.trim(),
         plate: _plateCtrl.text.trim(),
+        vehicleBrand: _vehicleBrandCtrl.text.trim(),
+        vehicleType: _vehicleType!,
+        vehicleColor: _vehicleColorCtrl.text.trim(),
+        vehicleSeats: int.parse(_vehicleSeatsCtrl.text.trim()),
         documents: _documents,
       );
       widget.onDone();
@@ -96,6 +141,12 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
         _error = e.toString().replaceFirst('Exception: ', '');
       });
     }
+  }
+
+  bool get _isDniSelectionValid {
+    final dni = _documents['dni'] ?? const <PickedDocument>[];
+    if (dni.length == 1) return dni.single.extension == 'pdf';
+    return dni.length == 2 && dni.every((file) => file.extension != 'pdf');
   }
 
   @override
@@ -110,11 +161,14 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
             children: [
               const Text(
                 'Únete como conductor',
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, letterSpacing: -0.5),
+                style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.5),
               ),
               const SizedBox(height: 6),
               const Text(
-                'Completa tus datos y documentos. Un administrador revisará tu registro antes de que puedas empezar a trabajar.',
+                'Completa tus datos. El DNI es obligatorio: sube 2 fotos o 1 solo PDF. Los demás documentos pueden adjuntarse ahora.',
                 style: TextStyle(color: Colors.black54, fontSize: 14.5),
               ),
               const SizedBox(height: 28),
@@ -123,19 +177,22 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
                 controller: _emailCtrl,
                 decoration: const InputDecoration(labelText: 'Correo'),
                 keyboardType: TextInputType.emailAddress,
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Requerido' : null,
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Requerido' : null,
               ),
               const SizedBox(height: 12),
               TextFormField(
                 controller: _passwordCtrl,
                 decoration: const InputDecoration(labelText: 'Contraseña'),
                 obscureText: true,
-                validator: (v) => (v == null || v.length < 6) ? 'Mínimo 6 caracteres' : null,
+                validator: (v) =>
+                    (v == null || v.length < 6) ? 'Mínimo 6 caracteres' : null,
               ),
               const SizedBox(height: 12),
               TextFormField(
                 controller: _passwordConfirmCtrl,
-                decoration: const InputDecoration(labelText: 'Confirmar contraseña'),
+                decoration:
+                    const InputDecoration(labelText: 'Confirmar contraseña'),
                 obscureText: true,
                 validator: (v) => (v == null || v.isEmpty) ? 'Requerido' : null,
               ),
@@ -144,7 +201,8 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
               TextFormField(
                 controller: _nameCtrl,
                 decoration: const InputDecoration(labelText: 'Nombre completo'),
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Requerido' : null,
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Requerido' : null,
               ),
               const SizedBox(height: 12),
               TextFormField(
@@ -153,40 +211,130 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
                 keyboardType: TextInputType.number,
                 validator: (v) {
                   if (v == null || v.trim().isEmpty) return 'Requerido';
-                  if (int.tryParse(v.trim()) == null) return 'Debe ser un número';
+                  final age = int.tryParse(v.trim());
+                  if (age == null) return 'Debe ser un número';
+                  if (age <= 17 || age >= 100) {
+                    return 'La edad debe estar entre 18 y 99 años';
+                  }
                   return null;
                 },
               ),
               const SizedBox(height: 12),
-              TextFormField(
-                controller: _phoneCtrl,
-                decoration: const InputDecoration(labelText: 'Teléfono (ej. +51987654321)'),
-                keyboardType: TextInputType.phone,
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Requerido' : null,
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 148,
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _phonePrefix,
+                      decoration: const InputDecoration(labelText: 'Prefijo'),
+                      items: _phoneCountries
+                          .map((country) => DropdownMenuItem(
+                                value: country.$2,
+                                child: Text(
+                                  '${country.$1} ${country.$2}',
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ))
+                          .toList(),
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() => _phonePrefix = value);
+                        }
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _phoneCtrl,
+                      decoration: const InputDecoration(labelText: 'Número'),
+                      keyboardType: TextInputType.phone,
+                      validator: (v) {
+                        final value = v?.trim() ?? '';
+                        if (value.isEmpty) return 'Requerido';
+                        if (!RegExp(r'^\d{6,15}$').hasMatch(value)) {
+                          return 'Usa entre 6 y 15 dígitos';
+                        }
+                        return null;
+                      },
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 12),
               TextFormField(
                 controller: _dniCtrl,
                 decoration: const InputDecoration(labelText: 'DNI (número)'),
                 keyboardType: TextInputType.number,
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Requerido' : null,
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Requerido' : null,
               ),
               const SizedBox(height: 20),
               _sectionLabel('Vehículo'),
               TextFormField(
                 controller: _plateCtrl,
-                decoration: const InputDecoration(labelText: 'Placa del vehículo'),
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Requerido' : null,
+                decoration:
+                    const InputDecoration(labelText: 'Placa del vehículo'),
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Requerido' : null,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _vehicleBrandCtrl,
+                decoration: const InputDecoration(
+                    labelText: 'Marca del vehiculo (ej. Toyota)'),
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Requerido' : null,
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: _vehicleType,
+                decoration:
+                    const InputDecoration(labelText: 'Tipo de vehiculo'),
+                items: _vehicleTypes
+                    .map((type) => DropdownMenuItem(
+                          value: type,
+                          child: Text(type),
+                        ))
+                    .toList(),
+                onChanged: (value) => setState(() => _vehicleType = value),
+                validator: (value) => value == null ? 'Requerido' : null,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _vehicleColorCtrl,
+                decoration:
+                    const InputDecoration(labelText: 'Color del vehículo'),
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Requerido' : null,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _vehicleSeatsCtrl,
+                decoration:
+                    const InputDecoration(labelText: 'Numero de asientos'),
+                keyboardType: TextInputType.number,
+                validator: (v) {
+                  final seats = int.tryParse(v?.trim() ?? '');
+                  if (seats == null || seats < 1 || seats > 100) {
+                    return 'Ingresa entre 1 y 100 asientos';
+                  }
+                  return null;
+                },
               ),
               const SizedBox(height: 24),
               _sectionLabel('Documentos'),
-              ..._requiredDocs.map(
+              ..._documentFields.map(
                 (d) => DocumentUploadTile(
+                  key: ValueKey(d.$1),
                   label: d.$2,
                   allowPdf: d.$3,
+                  dniMode: d.$1 == 'dni',
+                  files: _documents[d.$1] ?? const <PickedDocument>[],
                   onChanged: (file) {
                     setState(() {
-                      if (file != null) {
+                      if (file.isNotEmpty) {
                         _documents[d.$1] = file;
                       } else {
                         _documents.remove(d.$1);
@@ -197,26 +345,32 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
               ),
               if (_error != null) ...[
                 const SizedBox(height: 16),
-                Text(_error!, style: TextStyle(color: Colors.red.shade700, fontSize: 13)),
+                Text(_error!,
+                    style: TextStyle(color: Colors.red.shade700, fontSize: 13)),
               ],
               const SizedBox(height: 28),
               ElevatedButton(
                 onPressed: _busy ? null : _submit,
-                style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                style: ElevatedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(52)),
                 child: _busy
                     ? const SizedBox(
                         height: 20,
                         width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white),
                       )
-                    : const Text('Enviar registro', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                    : const Text('Enviar registro',
+                        style: TextStyle(
+                            fontWeight: FontWeight.w700, fontSize: 15)),
               ),
               const SizedBox(height: 8),
               TextButton(
                 onPressed: widget.onGoToLogin,
                 child: const Text(
                   '¿Ya tienes cuenta? Inicia sesión',
-                  style: TextStyle(fontWeight: FontWeight.w600, color: Colors.black),
+                  style: TextStyle(
+                      fontWeight: FontWeight.w600, color: Colors.black),
                 ),
               ),
             ],

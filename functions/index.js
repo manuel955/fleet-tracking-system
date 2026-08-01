@@ -14,6 +14,7 @@ const BRANDING_APPS = {
 };
 const BRANDING_BUILD_TTL_MS = 3 * 60 * 60 * 1000;
 const OWNER_DASHBOARD_EMAIL = 'anfurex.3351@gmail.com';
+const DATABASE_URL = 'https://rastreoflota-53052-default-rtdb.firebaseio.com';
 
 function cors(res) {
   res.set('Access-Control-Allow-Origin', '*');
@@ -39,6 +40,11 @@ async function requireDashboardManager(req) {
 
 function requestTokenHash(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+async function functionsAccessToken() {
+  const token = await admin.app().options.credential.getAccessToken();
+  return token.access_token;
 }
 
 function normalizedIdentity(value) {
@@ -114,6 +120,17 @@ exports.manageDrivers = functions.https.onRequest(async (req, res) => {
       return res.json({ ok: true });
     }
     if (action === 'delete') {
+      let authDeleted = false;
+      try {
+        await admin.auth().deleteUser(driverId);
+        authDeleted = true;
+      } catch (error) {
+        // Si la cuenta ya no existe en Authentication, el borrado del
+        // perfil se puede completar. Otros errores no deben ocultarse:
+        // dejar el perfil visible permite reintentar y evita correos
+        // bloqueados sin avisar al administrador.
+        if (error?.code !== 'auth/user-not-found') throw error;
+      }
       await Promise.all([
         driverRef.remove(),
         admin.database().ref(`driverConnectionHistory/${driverId}`).remove(),
@@ -121,13 +138,102 @@ exports.manageDrivers = functions.https.onRequest(async (req, res) => {
         admin.database().ref(`driverUnique/dni/${identityKey(driver.dni)}`).remove(),
         admin.database().ref(`driverUnique/name/${identityKey(driver.name)}`).remove(),
       ]);
-      await admin.auth().deleteUser(driverId).catch(() => null);
-      return res.json({ ok: true });
+      return res.json({ ok: true, authDeleted });
     }
     return res.status(400).json({ error: 'Accion invalida' });
   } catch (error) {
     console.error('manageDrivers', error);
     return res.status(403).json({ error: error.message || 'No autorizado' });
+  }
+});
+
+// Permite una sola correccion posterior del telefono y los datos operativos
+// del vehiculo. La transaccion atomica evita que dos peticiones simultaneas
+// consuman dos veces la misma oportunidad de edicion.
+exports.updateDriverProfileOnce = functions.https.onRequest(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
+
+  try {
+    const header = req.get('Authorization') || '';
+    if (!header.startsWith('Bearer ')) throw new Error('No autorizado');
+    const user = await admin.auth().verifyIdToken(header.slice(7));
+    const { phone, vehicleBrand, vehicleType, vehicleColor, vehicleSeats } = req.body || {};
+    const cleanPhone = String(phone || '').trim();
+    const cleanBrand = String(vehicleBrand || '').trim();
+    const cleanType = String(vehicleType || '').trim();
+    const cleanColor = String(vehicleColor || '').trim();
+    const seats = Number(vehicleSeats);
+
+    if (!/^\+\d{8,19}$/.test(cleanPhone)) {
+      return res.status(400).json({ error: 'El teléfono no tiene un formato válido.' });
+    }
+    if (!cleanBrand || !cleanType || !cleanColor || !Number.isInteger(seats) || seats < 1 || seats > 100) {
+      return res.status(400).json({ error: 'Completa correctamente los datos del vehículo.' });
+    }
+
+    const token = await functionsAccessToken();
+    const headers = { Authorization: `Bearer ${token}` };
+    const profileUrl = `${DATABASE_URL}/drivers/${user.uid}.json`;
+    const getResponse = await fetch(profileUrl, {
+      headers: { ...headers, 'X-Firebase-ETag': 'true' },
+    });
+    if (!getResponse.ok) {
+      throw new Error(`No se pudo consultar el perfil (${getResponse.status})`);
+    }
+
+    const etag = getResponse.headers.get('ETag');
+    const current = await getResponse.json();
+    if (!current) return res.status(404).json({ error: 'Perfil de conductor no encontrado.' });
+    if (current.profileEditUsed === true) {
+      return res.status(409).json({ error: 'La ediciÃƒÂ³n ÃƒÂºnica de datos ya fue utilizada.' });
+    }
+    if (current.approvalStatus !== 'approved') {
+      return res.status(403).json({ error: 'El conductor todavÃ­a no estÃ¡ aprobado.' });
+    }
+
+    const updated = {
+      ...current,
+      phone: cleanPhone,
+      vehicleBrand: cleanBrand,
+      vehicleType: cleanType,
+      vehicleColor: cleanColor,
+      vehicleSeats: seats,
+      profileEditUsed: true,
+      profileEditedAt: Date.now(),
+    };
+    const putResponse = await fetch(profileUrl, {
+      method: 'PUT',
+      headers: {
+        ...headers,
+        'if-match': etag,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(updated),
+    });
+    if (putResponse.status === 412) {
+      return res.status(409).json({ error: 'El perfil cambiÃ³ mientras se guardaba. Intenta nuevamente.' });
+    }
+    if (!putResponse.ok) {
+      throw new Error(`No se pudo guardar el perfil (${putResponse.status})`);
+    }
+
+    /* Legacy transaction implementation removed.
+    if (false) {
+      const current = result.snapshot.val();
+      if (!current) return res.status(404).json({ error: 'Perfil de conductor no encontrado.' });
+      if (current.profileEditUsed === true) {
+        return res.status(409).json({ error: 'La edición única de datos ya fue utilizada.' });
+      }
+      return res.status(403).json({ error: 'El conductor todavía no está aprobado.' });
+    }
+
+    */
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('updateDriverProfileOnce', error);
+    return res.status(401).json({ error: error.message || 'No se pudo actualizar el perfil.' });
   }
 });
 

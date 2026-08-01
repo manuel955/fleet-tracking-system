@@ -92,6 +92,10 @@ async function attemptAssignment(tripId, pickupLat, pickupLng, excludeMap, sched
         driverName: c.driver.name || '',
         driverPhone: c.driver.phone || '',
         driverPlate: c.driver.plate || '',
+        vehicleBrand: c.driver.vehicleBrand || '',
+        vehicleType: c.driver.vehicleType || '',
+        vehicleColor: c.driver.vehicleColor || '',
+        vehicleSeats: c.driver.vehicleSeats || 0,
         assignedAt: now,
         acceptedAt: now,
       });

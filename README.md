@@ -142,7 +142,7 @@ En esta maquina, despues de modificar cualquier archivo dentro de
 powershell -ExecutionPolicy Bypass -File .\scripts\publicar-dashboard.ps1
 ```
 
-El script publica solamente el dashboard en `http://86.48.19.189/flota/`,
+El script publica solamente el dashboard en `http://86.48.19.189:8081/`,
 sin reiniciar los contenedores ni modificar los servicios de Sistema POS.
 Tambien puedes hacer doble clic en `scripts/publicar-dashboard.cmd`.
 
