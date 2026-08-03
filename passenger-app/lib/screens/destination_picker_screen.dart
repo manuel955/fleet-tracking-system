@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../services/places_service.dart';
+import '../theme/app_theme.dart';
 import '../services/trip_service.dart';
 
 class DestinationPickerResult {
@@ -202,7 +203,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.paper,
       body: Stack(
         children: [
           if (_showMap)
@@ -239,8 +240,8 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
           if (!_mapReady)
             const Positioned.fill(
               child: ColoredBox(
-                color: Colors.white,
-                child: Center(child: CircularProgressIndicator(color: Colors.black)),
+                color: AppColors.paper,
+                child: Center(child: CircularProgressIndicator(color: AppColors.ink)),
               ),
             ),
           if (_pinningMode)
@@ -248,7 +249,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
               child: Center(
                 child: Transform.translate(
                   offset: const Offset(0, -24),
-                  child: const Icon(Icons.location_on, size: 48, color: Colors.black),
+                  child: const Icon(Icons.location_on, size: 48, color: AppColors.ink),
                 ),
               ),
             ),
@@ -289,11 +290,11 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
   Widget _circleButton({required IconData icon, required VoidCallback onPressed}) {
     return Container(
       decoration: const BoxDecoration(
-        color: Colors.white,
+        color: AppColors.paper,
         shape: BoxShape.circle,
         boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 2))],
       ),
-      child: IconButton(icon: Icon(icon, color: Colors.black87), onPressed: onPressed),
+      child: IconButton(icon: Icon(icon, color: AppColors.ink), onPressed: onPressed),
     );
   }
 
@@ -353,8 +354,8 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
             // real.
             onPressed: (_pin == null || _pinLabel == null) ? null : _confirm,
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.black,
-              foregroundColor: Colors.white,
+              backgroundColor: AppColors.ink,
+              foregroundColor: AppColors.paper,
               minimumSize: const Size.fromHeight(52),
             ),
             child: Text(
@@ -372,7 +373,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
       width: double.infinity,
       padding: padding,
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.paper,
         borderRadius: BorderRadius.circular(20),
         boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 16, offset: Offset(0, 4))],
       ),
@@ -389,7 +390,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
           Row(
             children: [
               IconButton(
-                icon: const Icon(Icons.arrow_back, color: Colors.black87),
+                icon: const Icon(Icons.arrow_back, color: AppColors.ink),
                 onPressed: () => Navigator.pop(context),
               ),
               const Expanded(
@@ -406,7 +407,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Container(
               decoration: BoxDecoration(
-                color: Colors.grey.shade100,
+                color: AppColors.paperMuted,
                 borderRadius: BorderRadius.circular(14),
               ),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
@@ -481,8 +482,8 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
         child: ElevatedButton(
           onPressed: _confirm,
           style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.black,
-            foregroundColor: Colors.white,
+            backgroundColor: AppColors.ink,
+            foregroundColor: AppColors.paper,
             minimumSize: const Size.fromHeight(52),
           ),
           child: const Text('Confirmar destino', style: TextStyle(fontWeight: FontWeight.w600)),
@@ -502,7 +503,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
     if (_loading) {
       return const Padding(
         padding: EdgeInsets.all(24),
-        child: Center(child: CircularProgressIndicator(color: Colors.black)),
+        child: Center(child: CircularProgressIndicator(color: AppColors.ink)),
       );
     }
     if (_error != null) {
@@ -515,7 +516,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
       return ListView.separated(
         padding: EdgeInsets.zero,
         itemCount: _suggestions.length,
-        separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.black12),
+        separatorBuilder: (_, _) => const Divider(height: 1, color: Colors.black12),
         itemBuilder: (context, index) {
           final s = _suggestions[index];
           return ListTile(

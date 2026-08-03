@@ -4,6 +4,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/directions_service.dart';
 import '../services/trip_service.dart';
+import '../theme/app_theme.dart';
 import '../widgets/labeled_icon_button.dart';
 import '../widgets/support_button.dart';
 import '../widgets/swipe_to_confirm.dart';
@@ -132,7 +133,8 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
     final here = widget.currentLatLng;
     final target = _proximityTarget;
     if (here == null || target == null) return null;
-    return Geolocator.distanceBetween(here.latitude, here.longitude, target.lat, target.lng);
+    return Geolocator.distanceBetween(
+        here.latitude, here.longitude, target.lat, target.lng);
   }
 
   // Si todavia no hay una posicion GPS disponible (recien se abrio la
@@ -149,11 +151,26 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
   ({String label, String nextStatus, Color color, IconData icon})? get _action {
     switch (widget.trip['status'] as String?) {
       case 'accepted':
-        return (label: 'Desliza: he llegado', nextStatus: 'arrived_at_pickup', color: const Color(0xFFFF9500), icon: Icons.place);
+        return (
+          label: 'Desliza: he llegado',
+          nextStatus: 'arrived_at_pickup',
+          color: AppColors.amber,
+          icon: Icons.place
+        );
       case 'arrived_at_pickup':
-        return (label: 'Desliza: pasajero a bordo', nextStatus: 'in_progress', color: const Color(0xFF276EF1), icon: Icons.person);
+        return (
+          label: 'Desliza: pasajero a bordo',
+          nextStatus: 'in_progress',
+          color: AppColors.blue,
+          icon: Icons.person
+        );
       case 'in_progress':
-        return (label: 'Desliza: finalizar viaje', nextStatus: 'completed', color: const Color(0xFF06C167), icon: Icons.flag);
+        return (
+          label: 'Desliza: finalizar viaje',
+          nextStatus: 'completed',
+          color: AppColors.green,
+          icon: Icons.flag
+        );
       default:
         return null;
     }
@@ -185,7 +202,10 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
       final destLat = trip['destinationLat'];
       final destLng = trip['destinationLng'];
       if (destLat == null || destLng == null) return null;
-      return (lat: (destLat as num).toDouble(), lng: (destLng as num).toDouble());
+      return (
+        lat: (destLat as num).toDouble(),
+        lng: (destLng as num).toDouble()
+      );
     }
     return (
       lat: (trip['pickupLat'] as num).toDouble(),
@@ -201,7 +221,8 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
   }
 
   Future<void> _openInGoogleMaps(double lat, double lng) async {
-    final uri = Uri.parse('https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving');
+    final uri = Uri.parse(
+        'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving');
     final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!ok && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -211,7 +232,9 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
   }
 
   String _distanceHint() {
-    final label = widget.trip['status'] == 'in_progress' ? 'destino' : 'punto de recogida';
+    final label = widget.trip['status'] == 'in_progress'
+        ? 'destino'
+        : 'punto de recogida';
     final distance = _distanceToTargetMeters;
     if (distance == null) return 'Acércate al $label para poder confirmar.';
     final rounded = (distance / 10).round() * 10;
@@ -257,17 +280,21 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
     final navTarget = _navTarget;
     final markerPosition = navTarget != null
         ? LatLng(navTarget.lat, navTarget.lng)
-        : LatLng((trip['pickupLat'] as num).toDouble(), (trip['pickupLng'] as num).toDouble());
+        : LatLng((trip['pickupLat'] as num).toDouble(),
+            (trip['pickupLng'] as num).toDouble());
     final action = _action;
     final passengerName = trip['passengerName'] as String? ?? 'Pasajero';
-    final initial = passengerName.isNotEmpty ? passengerName[0].toUpperCase() : '?';
+    final initial =
+        passengerName.isNotEmpty ? passengerName[0].toUpperCase() : '?';
+    final passengerCount = (trip['passengerCount'] as num?)?.toInt();
 
     return Scaffold(
       body: Stack(
         children: [
           Positioned.fill(
             child: GoogleMap(
-              initialCameraPosition: CameraPosition(target: markerPosition, zoom: 15),
+              initialCameraPosition:
+                  CameraPosition(target: markerPosition, zoom: 15),
               onMapCreated: (controller) => _mapController = controller,
               myLocationEnabled: true,
               myLocationButtonEnabled: false,
@@ -278,9 +305,13 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
                   markerId: const MarkerId('target'),
                   position: markerPosition,
                   icon: BitmapDescriptor.defaultMarkerWithHue(
-                    _headingToPickup ? BitmapDescriptor.hueAzure : BitmapDescriptor.hueViolet,
+                    _headingToPickup
+                        ? BitmapDescriptor.hueAzure
+                        : BitmapDescriptor.hueViolet,
                   ),
-                  infoWindow: InfoWindow(title: _headingToPickup ? 'Punto de recogida' : 'Destino'),
+                  infoWindow: InfoWindow(
+                      title:
+                          _headingToPickup ? 'Punto de recogida' : 'Destino'),
                 ),
               },
               polylines: {
@@ -288,7 +319,7 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
                   Polyline(
                     polylineId: const PolylineId('route'),
                     points: _routePoints,
-                    color: const Color(0xFF276EF1),
+                    color: AppColors.blue,
                     width: 5,
                   ),
               },
@@ -311,11 +342,11 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
               child: Padding(
                 padding: const EdgeInsets.only(top: 12),
                 child: Material(
-                  color: Colors.white,
+                  color: AppColors.paper,
                   shape: const CircleBorder(),
                   elevation: 2,
                   child: IconButton(
-                    icon: const Icon(Icons.my_location, color: Colors.black87),
+                    icon: const Icon(Icons.my_location, color: AppColors.ink),
                     tooltip: 'Actualizar posición',
                     onPressed: _recenterToMyLocation,
                   ),
@@ -329,21 +360,39 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
             bottom: 0,
             child: Container(
               decoration: const BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.only(topLeft: Radius.circular(24), topRight: Radius.circular(24)),
-                boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 16, offset: Offset(0, -4))],
+                color: AppColors.paper,
+                borderRadius: BorderRadius.only(
+                    topLeft: Radius.circular(24),
+                    topRight: Radius.circular(24)),
+                boxShadow: [
+                  BoxShadow(
+                      color: Colors.black26,
+                      blurRadius: 16,
+                      offset: Offset(0, -4))
+                ],
               ),
-              padding: EdgeInsets.fromLTRB(20, 20, 20, MediaQuery.of(context).padding.bottom + 20),
+              padding: EdgeInsets.fromLTRB(
+                  20, 20, 20, MediaQuery.of(context).padding.bottom + 20),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(_statusLabel, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  if ((trip['scheduledPickupLabel'] as String?)?.isNotEmpty == true) ...[
+                  Text(_statusLabel,
+                      style: const TextStyle(
+                          fontSize: 18, fontWeight: FontWeight.bold)),
+                  if ((trip['scheduledPickupLabel'] as String?)?.isNotEmpty ==
+                      true) ...[
                     const SizedBox(height: 4),
                     Text(
                       'Viaje programado para las ${trip['scheduledPickupLabel']}',
-                      style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                      style: const TextStyle(fontSize: 13, color: AppColors.muted),
+                    ),
+                  ],
+                  if (passengerCount != null && passengerCount > 0) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      'Viaje para $passengerCount ${passengerCount == 1 ? 'pasajero' : 'pasajeros'}',
+                      style: const TextStyle(fontSize: 13, color: AppColors.muted),
                     ),
                   ],
                   const SizedBox(height: 16),
@@ -351,10 +400,13 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
                     children: [
                       CircleAvatar(
                         radius: 26,
-                        backgroundColor: Colors.black,
+                        backgroundColor: AppColors.ink,
                         child: Text(
                           initial,
-                          style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                          style: const TextStyle(
+                              color: AppColors.paper,
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold),
                         ),
                       ),
                       const SizedBox(width: 14),
@@ -362,11 +414,14 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(passengerName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                            Text(passengerName,
+                                style: const TextStyle(
+                                    fontSize: 16, fontWeight: FontWeight.w600)),
                             const SizedBox(height: 2),
                             Text(
                               trip['passengerPhone'] as String? ?? '-',
-                              style: TextStyle(color: Colors.grey.shade600, fontSize: 14),
+                              style: const TextStyle(
+                                  color: AppColors.muted, fontSize: 14),
                             ),
                           ],
                         ),
@@ -374,7 +429,7 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
                       LabeledIconButton(
                         icon: Icons.phone,
                         label: 'Llamar',
-                        color: const Color(0xFF06C167),
+                        color: AppColors.green,
                         onTap: _callPassenger,
                       ),
                       if (navTarget != null) ...[
@@ -382,8 +437,9 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
                         LabeledIconButton(
                           icon: Icons.navigation,
                           label: 'Ruta',
-                          color: const Color(0xFF276EF1),
-                          onTap: () => _openInGoogleMaps(navTarget.lat, navTarget.lng),
+                          color: AppColors.blue,
+                          onTap: () =>
+                              _openInGoogleMaps(navTarget.lat, navTarget.lng),
                         ),
                       ],
                     ],
@@ -393,7 +449,8 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
                       const SizedBox(height: 12),
                       Text(
                         _distanceHint(),
-                        style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                                style: const TextStyle(
+                            color: AppColors.muted, fontSize: 13),
                       ),
                     ],
                     const SizedBox(height: 20),
@@ -414,5 +471,4 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
       ),
     );
   }
-
 }

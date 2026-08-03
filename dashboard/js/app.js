@@ -171,6 +171,38 @@ function initMap() {
 
 }
 
+function centerMapOnFleet() {
+  if (!map) return;
+
+  const points = Object.values(driversCache)
+    .filter((driver) => (
+      driver?.approvalStatus === 'approved'
+      && typeof driver.lat === 'number'
+      && typeof driver.lng === 'number'
+      && freshnessStatus(driver.lastUpdate || 0) !== 'offline'
+    ))
+    .map((driver) => ({ lat: driver.lat, lng: driver.lng }));
+
+  if (!points.length) {
+    map.panTo({ lat: -12.0464, lng: -77.0428 });
+    map.setZoom(12);
+    return;
+  }
+
+  if (points.length === 1) {
+    map.panTo(points[0]);
+    map.setZoom(15);
+    return;
+  }
+
+  const bounds = new google.maps.LatLngBounds();
+  points.forEach((point) => bounds.extend(point));
+  map.fitBounds(bounds, 72);
+  google.maps.event.addListenerOnce(map, 'idle', () => {
+    if ((map.getZoom() || 0) > 16) map.setZoom(16);
+  });
+}
+
 function freshnessStatus(lastUpdate) {
   const age = Date.now() - lastUpdate;
   if (age <= STALE_AFTER_MS) return 'online';
@@ -287,9 +319,14 @@ function escapeHtml(str) {
 function subscribeToDrivers() {
   db.ref('drivers').on('value', (snapshot) => {
     const data = snapshot.val() || {};
-    driversCache = data;
+    // El mapa y la lista operativa solo muestran conductores aprobados. La
+    // revision documental vive en la seccion Conductores y no debe aparecer
+    // como conectado aunque conserve un estado antiguo en Firebase.
+    driversCache = Object.fromEntries(
+      Object.entries(data).filter(([, driver]) => driver?.approvalStatus === 'approved')
+    );
 
-    const seenIds = new Set(Object.keys(data));
+    const seenIds = new Set(Object.keys(driversCache));
 
     // Elimina marcadores de conductores que ya no existen
     Object.keys(markers).forEach((id) => {
@@ -303,8 +340,8 @@ function subscribeToDrivers() {
       clearRoute();
     }
 
-    syncActiveTripListeners(data);
-    Object.entries(data).forEach(([driverId, d]) => updateMarkerForDriver(driverId, d));
+    syncActiveTripListeners(driversCache);
+    Object.entries(driversCache).forEach(([driverId, d]) => updateMarkerForDriver(driverId, d));
 
     scheduleSidebarRender();
   });
@@ -371,7 +408,7 @@ function syncActiveTripListeners(driversData) {
 // Crea/mueve el marcador si el conductor sigue reportando GPS reciente
 // (menos de OFFLINE_AFTER_MS); lo retira del mapa si dejo de reportar.
 function updateMarkerForDriver(driverId, d) {
-  if (d.approvalStatus === 'rejected') {
+  if (d.approvalStatus !== 'approved') {
     removeMarker(driverId);
     return;
   }
@@ -630,16 +667,34 @@ const driverListEl = document.getElementById('driver-list');
 const driverCountEl = document.getElementById('driver-count');
 const mapViewFullscreenEl = document.getElementById('map-view');
 const mapFullscreenBtn = document.getElementById('map-fullscreen-btn');
+const mapCenterBtn = document.getElementById('map-center-btn');
 const searchInput = document.getElementById('search-input');
 const filterPillsEl = document.getElementById('status-filters');
+const overviewActiveCountEl = document.getElementById('overview-active-count');
+const overviewAvailableCountEl = document.getElementById('overview-available-count');
+const overviewTripsCountEl = document.getElementById('overview-trips-count');
+const overviewEtaCountEl = document.getElementById('overview-eta-count');
+const overviewClockEl = document.getElementById('overview-clock');
+
+if (mapCenterBtn) mapCenterBtn.addEventListener('click', centerMapOnFleet);
 
 if (mapFullscreenBtn && mapViewFullscreenEl) {
+  function syncMapFullscreenFallbackButton() {
+    const active = mapViewFullscreenEl.classList.contains('map-fullscreen-fallback');
+    mapFullscreenBtn.textContent = active ? 'X' : '⛶';
+    mapFullscreenBtn.setAttribute('aria-label', active ? 'Salir de pantalla completa' : 'Ver mapa en pantalla completa');
+    mapFullscreenBtn.setAttribute('title', active ? 'Salir de pantalla completa' : 'Ver mapa en pantalla completa');
+    if (map) setTimeout(() => google.maps.event.trigger(map, 'resize'), 80);
+  }
+
   mapFullscreenBtn.addEventListener('click', async () => {
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
-      else await mapViewFullscreenEl.requestFullscreen();
+      else if (typeof mapViewFullscreenEl.requestFullscreen === 'function') await mapViewFullscreenEl.requestFullscreen();
+      else throw new Error('Fullscreen API no disponible');
     } catch (error) {
       mapViewFullscreenEl.classList.toggle('map-fullscreen-fallback');
+      syncMapFullscreenFallbackButton();
     }
   });
   document.addEventListener('fullscreenchange', () => {
@@ -668,11 +723,28 @@ function completedTripsToday(driverId) {
   ).length;
 }
 
+function updateOverviewStats() {
+  const approved = Object.values(driversCache).filter((d) => d.approvalStatus === 'approved');
+  const active = approved.filter((d) => driverState(d) !== 'offline');
+  const available = approved.filter((d) => driverState(d) === 'available');
+  const trips = Object.values(todayTripsCache).filter((trip) => trip.status !== 'cancelled');
+
+  if (overviewActiveCountEl) overviewActiveCountEl.textContent = String(active.length).padStart(2, '0');
+  if (overviewAvailableCountEl) overviewAvailableCountEl.textContent = String(available.length).padStart(2, '0');
+  if (overviewTripsCountEl) overviewTripsCountEl.textContent = String(trips.length).padStart(2, '0');
+  if (overviewEtaCountEl) overviewEtaCountEl.textContent = lastRouteEtaSeconds == null ? '--:--' : formatEta(lastRouteEtaSeconds);
+  if (overviewClockEl) {
+    overviewClockEl.textContent = new Intl.DateTimeFormat('es-PE', {
+      day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(new Date()).replace(',', ' ·');
+  }
+}
+
 function renderSidebar() {
   const query = searchInput.value.trim().toLowerCase();
 
   const entries = Object.entries(driversCache).filter(([driverId, d]) => {
-    if (d.approvalStatus === 'rejected') return false;
+    if (d.approvalStatus !== 'approved') return false;
     if (query) {
       const matches = [d.name, d.plate, d.hotel]
         .filter(Boolean)
@@ -683,7 +755,8 @@ function renderSidebar() {
     return true;
   });
 
-  driverCountEl.textContent = `${Object.values(driversCache).filter((d) => d.approvalStatus !== 'rejected').length} vehículos`;
+  driverCountEl.textContent = `${Object.values(driversCache).filter((d) => d.approvalStatus === 'approved').length} vehículos`;
+  updateOverviewStats();
 
   driverListEl.innerHTML = entries.length
     ? entries.map(([driverId, d]) => driverCardHtml(driverId, d)).join('')

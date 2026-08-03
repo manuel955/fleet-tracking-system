@@ -42,11 +42,28 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
 
   static const _vehicleTypes = [
     'Auto',
+    'SUV',
     'Mini van',
     'Van',
+    'Mini bus',
     'Bus',
-    'Camioneta',
   ];
+
+  static const _vehicleColors = [
+    'Negro',
+    'Gris',
+    'Plata',
+    'Blanco',
+  ];
+
+  static const _passengerRanges = <String, List<int>>{
+    'Auto': [1, 4],
+    'SUV': [5, 7],
+    'Mini van': [8, 17],
+    'Van': [18, 20],
+    'Mini bus': [21, 38],
+    'Bus': [39, 45],
+  };
 
   static const _phoneCountries = [
     ('Argentina', '+54'),
@@ -298,27 +315,46 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
                           child: Text(type),
                         ))
                     .toList(),
-                onChanged: (value) => setState(() => _vehicleType = value),
+                onChanged: (value) => setState(() {
+                  _vehicleType = value;
+                  _vehicleSeatsCtrl.clear();
+                }),
                 validator: (value) => value == null ? 'Requerido' : null,
               ),
               const SizedBox(height: 12),
-              TextFormField(
-                controller: _vehicleColorCtrl,
+              DropdownButtonFormField<String>(
+                initialValue: _vehicleColorCtrl.text.isEmpty
+                    ? null
+                    : _vehicleColorCtrl.text,
                 decoration:
-                    const InputDecoration(labelText: 'Color del vehículo'),
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? 'Requerido' : null,
+                    const InputDecoration(labelText: 'Color del vehiculo'),
+                items: _vehicleColors
+                    .map((color) => DropdownMenuItem(
+                          value: color,
+                          child: Text(color),
+                        ))
+                    .toList(),
+                onChanged: (value) => setState(
+                    () => _vehicleColorCtrl.text = value ?? ''),
+                validator: (value) => value == null ? 'Requerido' : null,
               ),
               const SizedBox(height: 12),
               TextFormField(
                 controller: _vehicleSeatsCtrl,
                 decoration:
-                    const InputDecoration(labelText: 'Numero de asientos'),
+                    InputDecoration(
+                      labelText: 'Numero de asientos',
+                      helperText: _vehicleType == null
+                          ? 'Selecciona primero el tipo de vehiculo'
+                          : 'Guia: ${_passengerRanges[_vehicleType]![0]} a ${_passengerRanges[_vehicleType]![1]} pasajeros',
+                    ),
                 keyboardType: TextInputType.number,
                 validator: (v) {
+                  final range = _passengerRanges[_vehicleType];
                   final seats = int.tryParse(v?.trim() ?? '');
-                  if (seats == null || seats < 1 || seats > 100) {
-                    return 'Ingresa entre 1 y 100 asientos';
+                  if (range == null) return 'Selecciona el tipo de vehiculo';
+                  if (seats == null || seats < range[0] || seats > range[1]) {
+                    return 'Ingresa entre ${range[0]} y ${range[1]} pasajeros';
                   }
                   return null;
                 },

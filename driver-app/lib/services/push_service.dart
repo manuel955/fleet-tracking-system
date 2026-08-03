@@ -5,6 +5,8 @@ import 'package:http/http.dart' as http;
 import '../config.dart';
 import 'auth_service.dart';
 import 'notification_service.dart';
+import 'notification_inbox_service.dart';
+import 'trip_service.dart';
 
 // Corre en un isolate propio cuando llega un mensaje FCM con la app
 // minimizada o cerrada. Cloud Functions manda mensajes solo-datos (sin
@@ -17,12 +19,16 @@ import 'notification_service.dart';
 Future<void> pushBackgroundHandler(RemoteMessage message) async {
   switch (message.data['type']) {
     case 'trip_assigned':
-      await NotificationService.showTripAssigned(
-        scheduledPickupLabel: message.data['scheduledPickupLabel'] as String?,
-      );
+      if (await _isActiveTrip(message.data['tripId']?.toString())) {
+        await NotificationService.showTripAssigned(
+          scheduledPickupLabel: message.data['scheduledPickupLabel'] as String?,
+        );
+      }
       break;
     case 'trip_updated':
-      await NotificationService.showTripUpdated();
+      if (await _isActiveTrip(message.data['tripId']?.toString())) {
+        await NotificationService.showTripUpdated();
+      }
       break;
     case 'place_assigned':
       await NotificationService.showPlaceAssigned(
@@ -32,6 +38,13 @@ Future<void> pushBackgroundHandler(RemoteMessage message) async {
       break;
     case 'approval_status':
       final status = message.data['status'];
+      await NotificationInboxService.recordApproval(
+        status: status?.toString() ?? '',
+        reason: message.data['rejectionReason']?.toString() ?? '',
+        rejectionFieldKeys:
+            message.data['rejectionFieldKeys']?.toString() ?? '',
+        reviewedAt: message.data['reviewedAt']?.toString() ?? '',
+      );
       if (status == 'approved') {
         await NotificationService.showSimple(
           'Cuenta aprobada',
@@ -41,10 +54,31 @@ Future<void> pushBackgroundHandler(RemoteMessage message) async {
         final reason = message.data['rejectionReason'] as String? ?? '';
         await NotificationService.showSimple(
           'Registro rechazado',
-          reason.isNotEmpty ? reason : 'Revisa tus documentos e intenta de nuevo.',
+          reason.isNotEmpty
+              ? reason
+              : 'Revisa tus documentos e intenta de nuevo.',
         );
       }
       break;
+  }
+}
+
+Future<bool> _isActiveTrip(String? tripId) async {
+  if (tripId == null || tripId.isEmpty) return false;
+  try {
+    final auth = await AuthService.currentSession();
+    final driver = await TripService.getMyDriverNode(auth['uid'] as String);
+    if (driver?['currentTripId'] != tripId || driver?['status'] != 'busy') {
+      return false;
+    }
+    final trip = await TripService.getTrip(tripId);
+    return trip?['driverId'] == auth['uid'] &&
+        const ['accepted', 'arrived_at_pickup', 'in_progress']
+            .contains(trip?['status']);
+  } catch (_) {
+    // Si no se puede confirmar el estado, no se muestra una alerta atrasada.
+    // El polling la recupera al abrir la app.
+    return false;
   }
 }
 
@@ -53,6 +87,8 @@ Future<void> pushBackgroundHandler(RemoteMessage message) async {
 /// conductor de un viaje nuevo aunque la app este minimizada o cerrada
 /// (el polling de 5s solo funciona con el proceso vivo).
 class PushService {
+  static bool _tokenRefreshListenerRegistered = false;
+
   static Future<void> initialize() async {
     await Firebase.initializeApp();
     FirebaseMessaging.onBackgroundMessage(pushBackgroundHandler);
@@ -65,9 +101,10 @@ class PushService {
     try {
       final token = await FirebaseMessaging.instance.getToken();
       if (token != null) await _saveToken(token);
-      FirebaseMessaging.instance.onTokenRefresh.listen((t) {
-        _saveToken(t);
-      });
+      if (!_tokenRefreshListenerRegistered) {
+        _tokenRefreshListenerRegistered = true;
+        FirebaseMessaging.instance.onTokenRefresh.listen(_saveToken);
+      }
     } catch (_) {
       // Sin Google Play Services o sin red: el conductor sigue operativo
       // via polling; solo pierde el aviso con la app cerrada.

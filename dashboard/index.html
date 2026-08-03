@@ -8,8 +8,8 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23000'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23fff'/%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="css/style.css" />
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&family=Instrument+Sans:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css?v=20260803h" />
 </head>
 <body>
 
@@ -41,7 +41,10 @@
       <span class="brand-icon" data-dashboard-icon>F</span>
       <span class="brand-text" data-dashboard-name>Panel de Flota</span>
     </button>
-    <h1 data-dashboard-name>Panel de Flota</h1>
+    <div class="control-copy">
+      <span class="control-eyebrow">Centro de control</span>
+      <strong>Todo en movimiento</strong>
+    </div>
     <nav class="top-nav">
       <button type="button" class="nav-tab active" data-view="map">Mapa</button>
       <button type="button" class="nav-tab" data-view="drivers-admin">
@@ -60,20 +63,59 @@
 
   <div id="map-view" class="layout">
     <aside class="sidebar">
-      <input type="text" id="search-input" placeholder="Buscar por nombre, placa u hotel..." />
-      <div id="status-filters" class="status-filters">
+      <div class="fleet-heading">
+        <h2>Flota en operación</h2>
+        <span>Tiempo real</span>
+      </div>
+      <details class="fleet-filter-drawer">
+        <summary>Buscar y filtrar</summary>
+        <input type="text" id="search-input" placeholder="Nombre, placa u hotel..." />
+        <div id="status-filters" class="status-filters">
         <button type="button" class="filter-pill active" data-filter="all">Todos</button>
         <button type="button" class="filter-pill" data-filter="available">Disponibles</button>
         <button type="button" class="filter-pill" data-filter="to_pickup">En ruta</button>
         <button type="button" class="filter-pill" data-filter="on_trip">En viaje</button>
         <button type="button" class="filter-pill" data-filter="offline">Desconectados</button>
-      </div>
+        </div>
+      </details>
       <ul id="driver-list" class="driver-list"></ul>
     </aside>
 
     <main class="map-panel">
-      <button type="button" id="map-fullscreen-btn" class="map-fullscreen-btn" aria-label="Ver mapa en pantalla completa" title="Ver mapa en pantalla completa">⛶</button>
-      <div id="map"></div>
+      <div class="overview-heading">
+        <div>
+          <span class="overview-eyebrow">Operaciones</span>
+          <h2>Vista general</h2>
+        </div>
+        <time id="overview-clock">--</time>
+      </div>
+      <div class="overview-stats" aria-label="Resumen de la operación">
+        <article class="stat-card">
+          <span>Vehículos activos</span>
+          <strong id="overview-active-count">00</strong>
+          <em id="overview-active-delta">En vivo</em>
+        </article>
+        <article class="stat-card">
+          <span>Disponibles</span>
+          <strong id="overview-available-count">00</strong>
+          <em>Ahora</em>
+        </article>
+        <article class="stat-card">
+          <span>Viajes hoy</span>
+          <strong id="overview-trips-count">00</strong>
+          <em id="overview-trips-delta">Actualizado</em>
+        </article>
+        <article class="stat-card">
+          <span>Tiempo medio</span>
+          <strong id="overview-eta-count">--:--</strong>
+          <em>Operativo</em>
+        </article>
+      </div>
+      <div class="map-stage">
+        <button type="button" id="map-fullscreen-btn" class="map-fullscreen-btn" aria-label="Ver mapa en pantalla completa" title="Ver mapa en pantalla completa">⛶</button>
+        <button type="button" id="map-center-btn" class="map-center-btn" aria-label="Centrar mapa en los conductores activos" title="Centrar mapa en los conductores activos">◎</button>
+        <div id="map"></div>
+      </div>
       <footer class="map-legend">
         <span class="legend-item"><span class="legend-dot state-available"></span>Disponible</span>
         <span class="legend-item"><span class="legend-dot state-to_pickup"></span>En ruta de recogida</span>
@@ -102,9 +144,9 @@
 </script>
 <script src="js/firebase-config.js"></script>
 <script src="js/google-maps-config.js"></script>
-<script src="js/app.js"></script>
-<script src="js/drivers-admin.js"></script>
-<script src="js/settings.js?v=20260728a"></script>
+<script src="js/app.js?v=20260803e"></script>
+<script src="js/drivers-admin.js?v=20260802e"></script>
+<script src="js/settings.js?v=20260803a"></script>
 <script src="js/places-admin.js"></script>
 <script>
   (function loadGoogleMaps() {

@@ -7,6 +7,15 @@ const { sendPush } = require('./notifications');
 const STALE_LOCATION_MS = 3 * 60 * 1000;
 
 const DB_URL = 'https://rastreoflota-53052-default-rtdb.firebaseio.com';
+const CATEGORY_RADIUS_KM = 2;
+const VEHICLE_CATEGORIES = [
+  { type: 'Auto', maxSeats: 4 },
+  { type: 'SUV', maxSeats: 7 },
+  { type: 'Mini van', maxSeats: 17 },
+  { type: 'Van', maxSeats: 20 },
+  { type: 'Mini bus', maxSeats: 38 },
+  { type: 'Bus', maxSeats: 45 },
+];
 
 function haversineKm(lat1, lng1, lat2, lng2) {
   const R = 6371;
@@ -42,7 +51,13 @@ async function claimDriver(driverId, tripId) {
   });
   const etag = getRes.headers.get('ETag');
   const current = await getRes.json();
-  if (!current || current.status !== 'online') return false;
+  if (
+    !current ||
+    current.status !== 'online' ||
+    current.approvalStatus !== 'approved'
+  ) {
+    return false;
+  }
 
   const updated = { ...current, status: 'busy', currentTripId: tripId };
   const putRes = await fetch(`${DB_URL}/drivers/${driverId}.json`, {
@@ -53,12 +68,98 @@ async function claimDriver(driverId, tripId) {
   return putRes.status === 200;
 }
 
+function categoryIndexForDriver(driver) {
+  const typeIndex = VEHICLE_CATEGORIES.findIndex(
+    (category) => category.type === driver.vehicleType,
+  );
+  if (typeIndex >= 0) return typeIndex;
+
+  const seats = Number(driver.vehicleSeats);
+  return VEHICLE_CATEGORIES.findIndex((category) => seats <= category.maxSeats);
+}
+
+function sortByDistance(a, b) {
+  return a.dist - b.dist;
+}
+
+function rankCandidates(candidates, requestedPassengers) {
+  const minimumCategory = VEHICLE_CATEGORIES.findIndex(
+    (category) => requestedPassengers <= category.maxSeats,
+  );
+  if (minimumCategory < 0) return [];
+
+  const minimumNearby = candidates
+    .filter(
+      (candidate) =>
+        candidate.categoryIndex === minimumCategory &&
+        candidate.dist <= CATEGORY_RADIUS_KM,
+    )
+    .sort(sortByDistance);
+
+  const nextCategory = candidates
+    .filter((candidate) => candidate.categoryIndex > minimumCategory)
+    .sort(
+      (a, b) =>
+        a.categoryIndex - b.categoryIndex || sortByDistance(a, b),
+    );
+
+  const minimumFar = candidates
+    .filter(
+      (candidate) =>
+        candidate.categoryIndex === minimumCategory &&
+        candidate.dist > CATEGORY_RADIUS_KM,
+    )
+    .sort(sortByDistance);
+
+  return [...minimumNearby, ...nextCategory, ...minimumFar];
+}
+
+function selectCandidate(candidates, requestedPassengers) {
+  return rankCandidates(candidates, requestedPassengers)[0] || null;
+}
+
+function buildNoDriversReason(requestedPassengers, stats) {
+  if (
+    !Number.isInteger(requestedPassengers) ||
+    requestedPassengers < 1 ||
+    requestedPassengers > 45
+  ) {
+    return 'La cantidad de pasajeros solicitada no es válida. Elige entre 1 y 45 pasajeros.';
+  }
+  if (stats.onlineApproved === 0) {
+    return 'No hay conductores aprobados disponibles en este momento.';
+  }
+  if (stats.freshLocation === 0) {
+    return 'Hay conductores aprobados, pero ninguno está enviando su ubicación actualizada.';
+  }
+  if (stats.capacity === 0) {
+    return `Hay conductores disponibles, pero ninguno tiene capacidad para ${requestedPassengers} pasajeros.`;
+  }
+  return `No encontramos un vehículo disponible cerca para ${requestedPassengers} pasajeros. Puedes reintentar en unos segundos.`;
+}
+
 // Busca al conductor disponible mas cercano y lo reclama de forma atomica
 // antes de asignarlo al viaje. Si dos viajes intentan reclamar al mismo
 // conductor casi al mismo tiempo, solo uno gana el "if-match"; el otro
 // simplemente sigue probando con el siguiente candidato mas cercano.
-async function attemptAssignment(tripId, pickupLat, pickupLng, excludeMap, scheduledPickupLabel) {
+async function attemptAssignment(
+  tripId,
+  pickupLat,
+  pickupLng,
+  excludeMap,
+  scheduledPickupLabel,
+  passengerCount = 1,
+) {
   const db = admin.database();
+  const requestedPassengers = Number(passengerCount);
+  const stats = { onlineApproved: 0, freshLocation: 0, capacity: 0 };
+  if (!Number.isInteger(requestedPassengers) || requestedPassengers < 1 || requestedPassengers > 45) {
+    await db.ref(`trips/${tripId}`).update({
+      status: 'no_drivers_available',
+      noDriversReason: buildNoDriversReason(requestedPassengers, stats),
+    });
+    return;
+  }
   const snap = await db
     .ref('drivers')
     .orderByChild('status')
@@ -70,17 +171,25 @@ async function attemptAssignment(tripId, pickupLat, pickupLng, excludeMap, sched
     const id = child.key;
     if (excludeMap && excludeMap[id]) return;
     const d = child.val();
+    if (d.approvalStatus !== 'approved') return;
+    stats.onlineApproved += 1;
     if (typeof d.lat !== 'number' || typeof d.lng !== 'number') return;
     if (!d.lastUpdate || Date.now() - d.lastUpdate > STALE_LOCATION_MS) return;
+    stats.freshLocation += 1;
+    const seats = Number(d.vehicleSeats);
+    if (!Number.isInteger(seats) || seats < requestedPassengers) return;
+    stats.capacity += 1;
+    const categoryIndex = categoryIndexForDriver(d);
+    if (categoryIndex < 0) return;
     candidates.push({
       id,
       driver: d,
       dist: haversineKm(pickupLat, pickupLng, d.lat, d.lng),
+      categoryIndex,
     });
   });
-  candidates.sort((a, b) => a.dist - b.dist);
 
-  for (const c of candidates) {
+  for (const c of rankCandidates(candidates, requestedPassengers)) {
     const claimed = await claimDriver(c.id, tripId);
     if (claimed) {
       // Asignacion automatica: no hay paso de aceptar/rechazar por parte
@@ -96,6 +205,8 @@ async function attemptAssignment(tripId, pickupLat, pickupLng, excludeMap, sched
         vehicleType: c.driver.vehicleType || '',
         vehicleColor: c.driver.vehicleColor || '',
         vehicleSeats: c.driver.vehicleSeats || 0,
+        passengerCount: requestedPassengers,
+        noDriversReason: null,
         assignedAt: now,
         acceptedAt: now,
       });
@@ -110,10 +221,14 @@ async function attemptAssignment(tripId, pickupLat, pickupLng, excludeMap, sched
       );
       return;
     }
-    // Perdi la carrera contra otra asignacion; sigo con el siguiente candidato.
+    // Perdi la carrera contra otra asignacion; sigo con el siguiente
+    // candidato elegible respetando el orden de prioridad.
   }
 
-  await db.ref(`trips/${tripId}`).update({ status: 'no_drivers_available' });
+  await db.ref(`trips/${tripId}`).update({
+    status: 'no_drivers_available',
+    noDriversReason: buildNoDriversReason(requestedPassengers, stats),
+  });
 }
 
 // Libera al conductor (vuelve a 'online') solo si sigue ligado a este
@@ -138,4 +253,12 @@ async function releaseDriver(driverId, tripId) {
   });
 }
 
-module.exports = { haversineKm, attemptAssignment, releaseDriver };
+module.exports = {
+  haversineKm,
+  attemptAssignment,
+  releaseDriver,
+  categoryIndexForDriver,
+  buildNoDriversReason,
+  rankCandidates,
+  selectCandidate,
+};

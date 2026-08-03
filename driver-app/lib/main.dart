@@ -14,15 +14,18 @@ import 'screens/active_trip_screen.dart';
 import 'screens/driver_registration_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/pending_approval_screen.dart';
+import 'screens/notifications_screen.dart';
 import 'services/auth_service.dart';
 import 'services/driver_profile_service.dart';
 import 'services/location_service.dart';
 import 'services/notification_service.dart';
+import 'services/notification_inbox_service.dart';
 import 'services/push_service.dart';
 import 'services/session_service.dart';
 import 'services/trip_service.dart';
 import 'services/update_service.dart';
 import 'widgets/support_button.dart';
+import 'theme/app_theme.dart';
 
 bool get _supportsMobileServices =>
     !kIsWeb &&
@@ -59,72 +62,7 @@ class FleetDriverApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Fleet Driver App',
-      // Mismo tema blanco/negro estilo Uber que passenger-app (ver
-      // passenger-app/lib/main.dart) para que ambas apps se sientan parte
-      // del mismo producto.
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.black,
-          primary: Colors.black,
-          brightness: Brightness.light,
-        ),
-        scaffoldBackgroundColor: Colors.white,
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Colors.white,
-          foregroundColor: Colors.black,
-          elevation: 0,
-          surfaceTintColor: Colors.transparent,
-        ),
-        elevatedButtonTheme: ElevatedButtonThemeData(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.black,
-            foregroundColor: Colors.white,
-            elevation: 0,
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
-        ),
-        outlinedButtonTheme: OutlinedButtonThemeData(
-          style: OutlinedButton.styleFrom(
-            foregroundColor: Colors.black,
-            side: const BorderSide(color: Colors.black26),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
-        ),
-        progressIndicatorTheme: const ProgressIndicatorThemeData(
-          color: Colors.black,
-          linearTrackColor: Colors.black12,
-        ),
-        inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: Colors.grey.shade50,
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          labelStyle: TextStyle(color: Colors.grey.shade600),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(color: Colors.grey.shade300),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(color: Colors.grey.shade300),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: const BorderSide(color: Colors.black, width: 1.6),
-          ),
-          errorBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(color: Colors.red.shade400, width: 1.3),
-          ),
-          focusedErrorBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(color: Colors.red.shade600, width: 1.6),
-          ),
-        ),
-      ),
+      theme: buildAppTheme(),
       home: const _UpdateGate(
         appName: 'la app de conductores',
         child: DriverHomePage(),
@@ -251,7 +189,6 @@ class _DriverHomePageState extends State<DriverHomePage> {
 
   bool _editingProfile = false;
   bool _savingProfile = false;
-  bool _profileEditUsed = false;
   String _versionLabel = '';
 
   final _profileFormKey = GlobalKey<FormState>();
@@ -269,6 +206,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
   // confirmacion), y se muestra la pantalla de "viaje activo" (He llegado
   // -> Pasajero a bordo -> Finalizar).
   Timer? _tripPollTimer;
+  bool _tripPollInFlight = false;
   String? _tripId;
   Map<String, dynamic>? _tripData;
 
@@ -379,14 +317,18 @@ class _DriverHomePageState extends State<DriverHomePage> {
     // viaje de inmediato. El aviso sonoro lo pone _pollForTrip, que ya
     // deduplica por tripId.
     if (_supportsMobileServices) {
-      FirebaseMessaging.onMessage.listen((message) {
+      FirebaseMessaging.onMessage.listen((message) async {
         switch (message.data['type']) {
           case 'trip_assigned':
             _pollForTrip();
             break;
           case 'trip_updated':
-            _pollForTrip();
-            NotificationService.showTripUpdated();
+            await _pollForTrip();
+            if (_tripId == message.data['tripId'] &&
+                const ['accepted', 'arrived_at_pickup', 'in_progress']
+                    .contains(_tripData?['status'])) {
+              NotificationService.showTripUpdated();
+            }
             break;
           case 'place_assigned':
             _refreshAssignedPlace(
@@ -395,6 +337,13 @@ class _DriverHomePageState extends State<DriverHomePage> {
             );
             break;
           case 'approval_status':
+            await NotificationInboxService.recordApproval(
+              status: message.data['status']?.toString() ?? '',
+              reason: message.data['rejectionReason']?.toString() ?? '',
+              rejectionFieldKeys:
+                  message.data['rejectionFieldKeys']?.toString() ?? '',
+              reviewedAt: message.data['reviewedAt']?.toString() ?? '',
+            );
             // Refresca el perfil para que la pantalla de "pendiente de
             // aprobacion" reaccione sin que el conductor tenga que reabrir
             // la app.
@@ -492,6 +441,16 @@ class _DriverHomePageState extends State<DriverHomePage> {
         }
       }
 
+      await NotificationInboxService.recordApproval(
+        status: profile['approvalStatus']?.toString() ?? '',
+        reason: profile['rejectionReason']?.toString() ?? '',
+        rejectionFieldKeys: profile['rejectionFieldKeys']?.toString() ?? '',
+        reviewedAt: profile['reviewedAt']?.toString() ?? '',
+      );
+      await NotificationInboxService.rememberDriverUid(uid);
+
+      if (_supportsMobileServices) await PushService.registerToken();
+
       _nameCtrl.text = profile['name']?.toString() ?? '';
       _ageCtrl.text = profile['age']?.toString() ?? '';
       _plateCtrl.text = profile['plate']?.toString() ?? '';
@@ -500,7 +459,6 @@ class _DriverHomePageState extends State<DriverHomePage> {
       _vehicleColorCtrl.text = profile['vehicleColor']?.toString() ?? '';
       _vehicleSeatsCtrl.text = profile['vehicleSeats']?.toString() ?? '';
       _phoneCtrl.text = profile['phone']?.toString() ?? '';
-      _profileEditUsed = profile['profileEditUsed'] == true;
 
       setState(() {
         _driverId = uid;
@@ -518,13 +476,39 @@ class _DriverHomePageState extends State<DriverHomePage> {
         _tripPollTimer =
             Timer.periodic(const Duration(seconds: 5), (_) => _pollForTrip());
         _pollForTrip();
-        PushService.registerToken();
+      } else {
+        await _lockUnapprovedDriver(uid);
       }
     } catch (e) {
       setState(() {
         _loggedIn = false;
         _loading = false;
       });
+    }
+  }
+
+  // Un conductor pendiente o rechazado conserva la sesion para poder leer el
+  // motivo y volver a enviar documentos, pero nunca puede conservar estado
+  // operativo, GPS ni polling de viajes.
+  Future<void> _lockUnapprovedDriver(String uid) async {
+    _tripPollTimer?.cancel();
+    _tripPollTimer = null;
+    if (_supportsMobileServices) LocationService.stop();
+
+    if (_tracking || _tripId != null || _tripData != null) {
+      if (mounted) {
+        setState(() {
+          _tracking = false;
+          _tripId = null;
+          _tripData = null;
+        });
+      }
+    }
+
+    try {
+      await TripService.setAvailability(uid, online: false);
+    } catch (_) {
+      // El backend tambien limpia el estado al procesar un rechazo.
     }
   }
 
@@ -537,17 +521,26 @@ class _DriverHomePageState extends State<DriverHomePage> {
   Future<void> _checkSessionStillActive() async {
     if (_driverId == null) return;
     try {
+      final wasApproved = _driverProfile?['approvalStatus'] == 'approved';
       final profile = await DriverProfileService.fetchProfile(_driverId!);
-      if (profile != null && mounted) {
+      if (profile != null) {
         final oldPlace =
             ((_driverProfile?['assignedPlace'] as Map?)?['name'] ?? '')
                 .toString();
         final newPlace =
             ((profile['assignedPlace'] as Map?)?['name'] ?? '').toString();
-        setState(() {
-          _driverProfile = profile;
-          _profileEditUsed = profile['profileEditUsed'] == true;
-        });
+        if (mounted) setState(() => _driverProfile = profile);
+
+        if (wasApproved && profile['approvalStatus'] != 'approved') {
+          await _lockUnapprovedDriver(_driverId!);
+        } else if (!wasApproved && profile['approvalStatus'] == 'approved') {
+          _tripPollTimer?.cancel();
+          _tripPollTimer =
+              Timer.periodic(const Duration(seconds: 5), (_) => _pollForTrip());
+          _pollForTrip();
+          PushService.registerToken();
+        }
+
         if (newPlace.isNotEmpty && newPlace != oldPlace) {
           final type = ((profile['assignedPlace'] as Map?)?['type'] ?? 'Lugar')
               .toString();
@@ -593,6 +586,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
       'destinationAddress',
       'passengerName',
       'passengerPhone',
+      'passengerCount',
       'scheduledPickupLabel',
       'driverId',
     ];
@@ -600,7 +594,11 @@ class _DriverHomePageState extends State<DriverHomePage> {
   }
 
   Future<void> _pollForTrip() async {
-    if (_driverId == null) return;
+    if (_driverId == null || _driverProfile?['approvalStatus'] != 'approved') {
+      return;
+    }
+    if (_tripPollInFlight) return;
+    _tripPollInFlight = true;
     try {
       final driverNode = await TripService.getMyDriverNode(_driverId!);
       final tripId = driverNode?['currentTripId'] as String?;
@@ -617,6 +615,23 @@ class _DriverHomePageState extends State<DriverHomePage> {
 
       final trip = await TripService.getTrip(tripId);
       if (trip == null) {
+        if (_tripId != null) {
+          setState(() {
+            _tripId = null;
+            _tripData = null;
+          });
+        }
+        return;
+      }
+
+      const activeStatuses = [
+        'accepted',
+        'arrived_at_pickup',
+        'in_progress',
+      ];
+      if (trip['driverId'] != _driverId ||
+          !activeStatuses.contains(trip['status']) ||
+          _driverProfile?['approvalStatus'] != 'approved') {
         if (_tripId != null) {
           setState(() {
             _tripId = null;
@@ -648,6 +663,8 @@ class _DriverHomePageState extends State<DriverHomePage> {
       }
     } catch (_) {
       // Fallo de red puntual: se reintenta en el siguiente tick del timer.
+    } finally {
+      _tripPollInFlight = false;
     }
   }
 
@@ -663,30 +680,14 @@ class _DriverHomePageState extends State<DriverHomePage> {
       phone = '${AppConfig.defaultPhoneCountryCode}$phone';
     }
     _phoneCtrl.text = phone;
-    final vehicleSeats = int.parse(_vehicleSeatsCtrl.text.trim());
-    final vehicleBrand = _vehicleBrandCtrl.text.trim();
-    final vehicleType = _vehicleTypeCtrl.text.trim();
-    final vehicleColor = _vehicleColorCtrl.text.trim();
 
     try {
-      await DriverProfileService.updateProfile(
-        phone: phone,
-        vehicleBrand: vehicleBrand,
-        vehicleType: vehicleType,
-        vehicleColor: vehicleColor,
-        vehicleSeats: vehicleSeats,
-      );
+      await DriverProfileService.updatePhone(phone: phone);
       setState(() {
         _driverProfile = {
           ...?_driverProfile,
           'phone': phone,
-          'vehicleBrand': vehicleBrand,
-          'vehicleType': vehicleType,
-          'vehicleColor': vehicleColor,
-          'vehicleSeats': vehicleSeats,
-          'profileEditUsed': true,
         };
-        _profileEditUsed = true;
         _editingProfile = false;
         _savingProfile = false;
       });
@@ -881,9 +882,9 @@ class _DriverHomePageState extends State<DriverHomePage> {
     setState(() {
       _tracking = false;
       _loggedIn = false;
+      _showRegister = false;
       _driverId = null;
       _driverProfile = null;
-      _profileEditUsed = false;
       _tripId = null;
       _tripData = null;
       _editingProfile = false;
@@ -1024,19 +1025,8 @@ class _DriverHomePageState extends State<DriverHomePage> {
                       children: [
                         _circleIconButton(
                           icon: Icons.person,
-                          tooltip: _profileEditUsed
-                              ? 'Datos ya corregidos'
-                              : 'Editar mis datos (una sola vez)',
-                          onTap: () => setState(() => _editingProfile =
-                              true), /*
-                              ? () =>
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                          'La edición de datos ya fue utilizada.'),
-                                    ),
-                                  )
-                              : () => setState(() => _editingProfile = true), */
+                          tooltip: 'Editar numero telefonico',
+                          onTap: () => setState(() => _editingProfile = true),
                         ),
                         Padding(
                           padding: const EdgeInsets.only(top: 4),
@@ -1050,6 +1040,8 @@ class _DriverHomePageState extends State<DriverHomePage> {
                               tooltip: 'Registro de actividad',
                               onTap: _showActivityLog,
                             ),
+                            const SizedBox(height: 8),
+                            const NotificationBellButton(floating: true),
                             const SizedBox(height: 8),
                             const SupportButton(),
                           ],
@@ -1094,11 +1086,11 @@ class _DriverHomePageState extends State<DriverHomePage> {
       required String tooltip,
       required VoidCallback onTap}) {
     return Material(
-      color: Colors.white,
+      color: AppColors.paper,
       shape: const CircleBorder(),
       elevation: 3,
       child: IconButton(
-        icon: Icon(icon, color: Colors.black87),
+        icon: Icon(icon, color: AppColors.ink),
         tooltip: tooltip,
         onPressed: onTap,
       ),
@@ -1110,7 +1102,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.paper,
         borderRadius: BorderRadius.circular(999),
         boxShadow: const [
           BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 2))
@@ -1124,7 +1116,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
             height: 8,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: online ? Colors.green : Colors.grey,
+              color: online ? AppColors.green : AppColors.muted,
             ),
           ),
           const SizedBox(width: 8),
@@ -1186,7 +1178,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.deepPurple.shade700,
+        color: AppColors.inkSurface,
         borderRadius: BorderRadius.circular(14),
         boxShadow: const [
           BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 2)),
@@ -1194,7 +1186,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
       ),
       child: Row(
         children: [
-          const Icon(Icons.location_on, color: Colors.white, size: 26),
+          const Icon(Icons.location_on, color: AppColors.lime, size: 26),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -1229,11 +1221,11 @@ class _DriverHomePageState extends State<DriverHomePage> {
           label: const Text('Terminar turno',
               style: TextStyle(fontWeight: FontWeight.w600)),
           style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.black,
-            foregroundColor: Colors.white,
+            backgroundColor: AppColors.ink,
+            foregroundColor: AppColors.paper,
             minimumSize: const Size.fromHeight(56),
             shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
             elevation: 4,
           ),
         ),
@@ -1247,11 +1239,12 @@ class _DriverHomePageState extends State<DriverHomePage> {
         label: const Text('Iniciar turno',
             style: TextStyle(fontWeight: FontWeight.w600)),
         style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.orange.shade800,
-          foregroundColor: Colors.white,
+          backgroundColor: Colors.white,
+          foregroundColor: AppColors.ink,
+          side: const BorderSide(color: AppColors.line),
           minimumSize: const Size.fromHeight(56),
           shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           elevation: 4,
         ),
       ),
@@ -1294,24 +1287,24 @@ class _DriverHomePageState extends State<DriverHomePage> {
         padding: const EdgeInsets.all(20),
         children: [
           const Text(
-            'Puedes corregir tu teléfono y los datos del vehículo una sola vez. Para corregir tu nombre, edad o placa, contacta a soporte.',
+            'Solo puedes editar tu número telefónico. Para corregir otros datos, contacta a soporte.',
             style: TextStyle(color: Colors.grey, fontSize: 13),
           ),
           const SizedBox(height: 16),
           _profileField(_nameCtrl, 'Nombre completo', editable: false),
           _profileField(_ageCtrl, 'Edad', isNumber: true, editable: false),
           _profileField(_vehicleColorCtrl, 'Color del vehículo',
-              editable: true),
-          _profileField(_vehicleBrandCtrl, 'Marca del vehÃ­culo',
-              editable: true),
-          _profileField(_vehicleTypeCtrl, 'Tipo de vehÃ­culo', editable: true),
-          _profileField(_vehicleSeatsCtrl, 'NÃºmero de asientos',
-              isNumber: true, editable: true),
+              editable: false),
+          _profileField(_vehicleBrandCtrl, 'Marca del vehículo',
+              editable: false),
+          _profileField(_vehicleTypeCtrl, 'Tipo de vehículo', editable: false),
+          _profileField(_vehicleSeatsCtrl, 'Número de asientos',
+              isNumber: true, editable: false),
           _profileField(_plateCtrl, 'Número de placa', editable: false),
           _profileField(_phoneCtrl, 'Teléfono (ej. +51987654321)'),
           const SizedBox(height: 20),
           ElevatedButton(
-            onPressed: _savingProfile || _profileEditUsed ? null : _saveProfile,
+            onPressed: _savingProfile ? null : _saveProfile,
             style: ElevatedButton.styleFrom(
                 minimumSize: const Size.fromHeight(48)),
             child: _savingProfile
@@ -1343,8 +1336,9 @@ class _DriverHomePageState extends State<DriverHomePage> {
         ),
         validator: (v) {
           if (v == null || v.trim().isEmpty) return 'Requerido';
-          if (isNumber && int.tryParse(v.trim()) == null)
+          if (isNumber && int.tryParse(v.trim()) == null) {
             return 'Debe ser un número';
+          }
           return null;
         },
       ),

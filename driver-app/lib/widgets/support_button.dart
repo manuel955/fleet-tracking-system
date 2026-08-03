@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/support_config_service.dart';
+import '../theme/app_theme.dart';
 import 'labeled_icon_button.dart';
 
 /// Boton de soporte, pensado para estar siempre visible (antes, durante y
@@ -51,7 +52,7 @@ class SupportButton extends StatelessWidget {
                 child: Text('Contactar a soporte', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
               ),
               ListTile(
-                leading: const Icon(Icons.call, color: Colors.black87),
+                leading: const Icon(Icons.call, color: AppColors.ink),
                 title: const Text('Llamar'),
                 onTap: () {
                   Navigator.pop(sheetContext);
@@ -59,7 +60,7 @@ class SupportButton extends StatelessWidget {
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.chat, color: Colors.black87),
+                leading: const Icon(Icons.chat, color: AppColors.ink),
                 title: const Text('Escribir por WhatsApp'),
                 onTap: () {
                   Navigator.pop(sheetContext);

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/places_service.dart';
+import '../theme/app_theme.dart';
 
 class PlaceSearchResult {
   final String description;
@@ -74,7 +75,7 @@ class _PlaceSearchScreenState extends State<PlaceSearchScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.paper,
       appBar: AppBar(
         titleSpacing: 0,
         title: Container(
@@ -82,12 +83,12 @@ class _PlaceSearchScreenState extends State<PlaceSearchScreen> {
           margin: const EdgeInsets.only(right: 16),
           padding: const EdgeInsets.symmetric(horizontal: 14),
           decoration: BoxDecoration(
-            color: Colors.grey.shade100,
+            color: AppColors.paperMuted,
             borderRadius: BorderRadius.circular(12),
           ),
           child: Row(
             children: [
-              Icon(Icons.search, size: 18, color: Colors.grey.shade600),
+              Icon(Icons.search, size: 18, color: AppColors.muted),
               const SizedBox(width: 10),
               Expanded(
                 child: TextField(
@@ -95,11 +96,11 @@ class _PlaceSearchScreenState extends State<PlaceSearchScreen> {
                   autofocus: true,
                   decoration: InputDecoration(
                     hintText: widget.hint,
-                    hintStyle: TextStyle(color: Colors.grey.shade500),
+                    hintStyle: const TextStyle(color: AppColors.muted),
                     border: InputBorder.none,
                     isDense: true,
                   ),
-                  style: const TextStyle(fontSize: 15, color: Colors.black),
+                  style: const TextStyle(fontSize: 15, color: AppColors.ink),
                   onChanged: _onChanged,
                 ),
               ),
@@ -109,7 +110,7 @@ class _PlaceSearchScreenState extends State<PlaceSearchScreen> {
       ),
       body: Column(
         children: [
-          if (_loading) const LinearProgressIndicator(color: Colors.black, backgroundColor: Colors.black12),
+          if (_loading) const LinearProgressIndicator(color: AppColors.ink, backgroundColor: AppColors.paperMuted),
           if (_error != null)
             Padding(
               padding: const EdgeInsets.all(16),
@@ -119,7 +120,7 @@ class _PlaceSearchScreenState extends State<PlaceSearchScreen> {
             child: ListView.separated(
               padding: const EdgeInsets.symmetric(vertical: 4),
               itemCount: _suggestions.length,
-              separatorBuilder: (_, __) => Divider(height: 1, color: Colors.grey.shade200, indent: 20, endIndent: 20),
+              separatorBuilder: (_, _) => Divider(height: 1, color: Colors.grey.shade200, indent: 20, endIndent: 20),
               itemBuilder: (context, index) {
                 final s = _suggestions[index];
                 return ListTile(

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 
 /// Boton flotante circular-cuadrado con icono + etiqueta chica debajo,
 /// para las acciones rapidas que flotan sobre el mapa o en las tarjetas de
@@ -19,9 +20,9 @@ class LabeledIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final c = color ?? Colors.black87;
+    final c = color ?? AppColors.ink;
     return Material(
-      color: Colors.white,
+      color: AppColors.paper,
       borderRadius: BorderRadius.circular(14),
       elevation: 3,
       child: InkWell(

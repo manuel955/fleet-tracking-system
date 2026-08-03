@@ -36,7 +36,7 @@ class NotificationService {
       enableVibration: true,
       vibrationPattern: _vibrationPattern,
     );
-    final generalChannel = AndroidNotificationChannel(
+    const generalChannel = AndroidNotificationChannel(
       _generalChannelId,
       'Avisos generales',
       description: 'Aprobacion de cuenta, cambios de viaje, etc.',
@@ -152,7 +152,7 @@ class NotificationService {
       901,
       '$type asignado',
       name,
-      NotificationDetails(
+      const NotificationDetails(
         android: AndroidNotificationDetails(
           _generalChannelId,
           'Avisos generales',
@@ -174,7 +174,7 @@ class NotificationService {
       DateTime.now().millisecondsSinceEpoch.remainder(100000),
       title,
       body,
-      NotificationDetails(
+      const NotificationDetails(
         android: AndroidNotificationDetails(
           _generalChannelId,
           'Avisos generales',

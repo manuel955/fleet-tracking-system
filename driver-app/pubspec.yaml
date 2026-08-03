@@ -1,7 +1,7 @@
 name: fleet_driver_app
 description: App del conductor - envia ubicacion GPS en segundo plano cada 30s
 publish_to: "none"
-version: 1.0.0+16
+version: 1.0.0+22
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -19,12 +19,12 @@ dependencies:
   google_maps_flutter_platform_interface: ^2.9.0
   flutter_local_notifications: ^17.2.3
   image_picker: ^1.1.2
-  file_picker: ^9.0.2
+  file_picker: ^12.0.0-beta.7
   url_launcher: ^6.3.0
   flutter_tts: ^4.0.2
   firebase_core: ^4.12.1
   firebase_messaging: ^16.4.3
-  package_info_plus: ^8.0.0
+  package_info_plus: ^10.2.1
 
 dev_dependencies:
   flutter_test:

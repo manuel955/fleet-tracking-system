@@ -1,7 +1,7 @@
 name: fleet_passenger_app
 description: App del pasajero - pide viajes y seguimiento en vivo del conductor asignado
 publish_to: "none"
-version: 1.0.0+15
+version: 1.0.0+21
 
 environment:
   sdk: ^3.12.2
@@ -18,7 +18,7 @@ dependencies:
   google_maps_flutter_platform_interface: ^2.9.0
   image_picker: ^1.1.2
   url_launcher: ^6.3.0
-  package_info_plus: ^8.0.0
+  package_info_plus: ^10.2.1
   firebase_core: ^4.12.1
   firebase_messaging: ^16.4.3
   flutter_local_notifications: ^17.2.3
@@ -32,6 +32,8 @@ flutter:
   uses-material-design: true
   assets:
     - assets/vehicles/vehicle-car.png
+    - assets/vehicles/vehicle-suv.png
+    - assets/vehicles/vehicle-minivan.png
     - assets/vehicles/vehicle-van.png
+    - assets/vehicles/vehicle-minibus.png
     - assets/vehicles/vehicle-bus.png
-    - assets/vehicles/vehicle-pickup.png

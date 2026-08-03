@@ -16,6 +16,21 @@ const DOC_FIELDS = [
   { key: 'workCertificateDocUrl', label: 'Cert. laboral' },
 ];
 
+const REJECTION_FIELDS = [
+  { key: 'profile', label: 'Foto de perfil' },
+  { key: 'dni', label: 'DNI' },
+  { key: 'license', label: 'Licencia' },
+  { key: 'soat', label: 'SOAT' },
+  { key: 'circulationCard', label: 'Tarjeta de circulaciÃ³n' },
+  { key: 'technicalReview', label: 'RevisiÃ³n tÃ©cnica' },
+  { key: 'criminalRecord', label: 'RÃ©cord del conductor' },
+  { key: 'workCertificate', label: 'Certificado laboral' },
+];
+
+const REJECTION_FIELD_LABELS = Object.fromEntries(
+  REJECTION_FIELDS.map((field) => [field.key, field.label])
+);
+
 const APPROVAL_LABELS = {
   pending_review: 'Pendiente',
   approved: 'Aprobado',
@@ -124,14 +139,21 @@ function docCellHtml(driverId, field, url) {
 function driverAdminCardHtml(driverId, d) {
   const status = d.approvalStatus || 'pending_review';
   const rejectFormOpen = openRejectFormId === driverId;
+  const rejectionLabels = String(d.rejectionFieldKeys || '')
+    .split(',')
+    .map((key) => REJECTION_FIELD_LABELS[key.trim()])
+    .filter(Boolean);
 
   const rejectionBlock =
-    status === 'rejected' && d.rejectionReason
-      ? `<div class="rejection-note"><b>Motivo del rechazo:</b> ${escapeHtml(d.rejectionReason)}</div>`
+    status === 'rejected'
+      ? `<div class="rejection-note">
+          ${d.rejectionReason ? `<div><b>Motivo del rechazo:</b> ${escapeHtml(d.rejectionReason)}</div>` : ''}
+          ${rejectionLabels.length ? `<div><b>Debe corregir:</b> ${escapeHtml(rejectionLabels.join(', '))}</div>` : ''}
+        </div>`
       : '';
 
   const actionsHtml =
-    status === 'pending_review' || status === 'rejected'
+    status === 'pending_review'
       ? `
         <div class="driver-admin-actions">
           <button type="button" class="approve-btn" data-action="approve" data-id="${driverId}">Aprobar</button>
@@ -141,7 +163,13 @@ function driverAdminCardHtml(driverId, d) {
           rejectFormOpen
             ? `
           <form class="reject-form" data-reject-form="${driverId}">
-            <input type="text" placeholder="Motivo del rechazo (ej. SOAT vencido)" required />
+            <div class="reject-fields">
+              <strong>Documentos que debe corregir:</strong>
+              <div class="reject-fields-grid">
+                ${REJECTION_FIELDS.map((field) => `<label><input type="checkbox" name="rejectionField" value="${field.key}" /> ${field.label}</label>`).join('')}
+              </div>
+            </div>
+            <input name="rejectionReason" type="text" placeholder="Motivo del rechazo (ej. SOAT vencido)" required />
             <button type="submit" class="reject-btn">Confirmar</button>
           </form>
         `
@@ -167,12 +195,18 @@ function driverAdminCardHtml(driverId, d) {
         <div class="row"><b>Lugar asignado:</b> ${escapeHtml(d.assignedPlace?.name || '-')}</div>
       </div>
       ${rejectionBlock}
-      <div class="driver-admin-actions">
-        <button type="button" class="view-file-btn" data-action="view-file" data-id="${driverId}">Ver archivo completo</button>
-        <select class="assign-place-select" data-place-select="${driverId}">${driverPlaceOptions(d)}</select>
-        <button type="button" class="view-file-btn" data-action="assign-place" data-id="${driverId}">Asignar lugar</button>
-        <button type="button" class="delete-driver-btn" data-action="delete-driver" data-id="${driverId}">Eliminar conductor</button>
-      </div>
+      ${
+        status !== 'rejected'
+          ? `
+        <div class="driver-admin-actions">
+          <button type="button" class="view-file-btn" data-action="view-file" data-id="${driverId}">Ver archivo completo</button>
+          <select class="assign-place-select" data-place-select="${driverId}">${driverPlaceOptions(d)}</select>
+          <button type="button" class="view-file-btn" data-action="assign-place" data-id="${driverId}">Asignar lugar</button>
+          <button type="button" class="delete-driver-btn" data-action="delete-driver" data-id="${driverId}">Eliminar conductor</button>
+        </div>
+      `
+          : ''
+      }
       ${actionsHtml}
     </div>
   `;
@@ -242,12 +276,15 @@ function renderDriversAdmin() {
   });
 
   adminViewEl.querySelectorAll('[data-reject-form]').forEach((form) => {
-    form.addEventListener('submit', (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const driverId = form.getAttribute('data-reject-form');
-      const reason = form.querySelector('input').value.trim();
-      if (!reason) return;
-      rejectDriver(driverId, reason);
+      const reason = form.querySelector('input[name="rejectionReason"]').value.trim();
+      const rejectionFields = [...form.querySelectorAll('input[name="rejectionField"]:checked')]
+        .map((input) => input.value);
+      if (!reason) return alert('Escribe el motivo del rechazo.');
+      if (!rejectionFields.length) return alert('Selecciona al menos un documento que deba corregirse.');
+      await rejectDriver(driverId, reason, rejectionFields);
     });
   });
 }
@@ -518,19 +555,24 @@ function approveDriver(driverId) {
   db.ref(`drivers/${driverId}`).update({
     approvalStatus: 'approved',
     rejectionReason: null,
+    rejectionFieldKeys: null,
     reviewedAt: Date.now(),
     reviewedBy: auth.currentUser ? auth.currentUser.email : null,
   });
 }
 
-function rejectDriver(driverId, reason) {
-  db.ref(`drivers/${driverId}`).update({
-    approvalStatus: 'rejected',
-    rejectionReason: reason,
-    reviewedAt: Date.now(),
-    reviewedBy: auth.currentUser ? auth.currentUser.email : null,
-  });
-  openRejectFormId = null;
+async function rejectDriver(driverId, reason, rejectionFields) {
+  try {
+    await manageDriver({
+      action: 'reject',
+      driverId,
+      reason,
+      rejectionFields,
+    });
+    openRejectFormId = null;
+  } catch (error) {
+    alert(error.message);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -632,6 +674,11 @@ async function downloadDriverPdf(button) {
       ['Teléfono', d.phone],
       ['Placa', d.plate],
       ['Edad', d.age != null ? String(d.age) : null],
+      ['Marca vehiculo', d.vehicleBrand],
+      ['Tipo de vehiculo', d.vehicleType],
+      ['Color del vehiculo', d.vehicleColor],
+      ['Pasajeros', d.vehicleSeats != null ? `${d.vehicleSeats} pasajeros` : null],
+      ['Estado operativo', d.status || 'Fuera de turno'],
       ['Registrado', d.registeredAt ? new Date(d.registeredAt).toLocaleString() : null],
       ['Documentos enviados', d.documentsSubmittedAt ? new Date(d.documentsSubmittedAt).toLocaleString() : null],
       ['Revisado', d.reviewedAt ? new Date(d.reviewedAt).toLocaleString() : null],
@@ -642,19 +689,21 @@ async function downloadDriverPdf(button) {
     }
 
     doc.setFontSize(11);
+    const displayValue = (value) => value == null || value === '' ? '-' : String(value);
     fields.forEach(([label, value]) => {
       ensureSpace(18);
       doc.setFont(undefined, 'bold');
       doc.text(`${label}:`, margin, y);
       doc.setFont(undefined, 'normal');
-      doc.text(value || '-', margin + 150, y);
+      doc.text(displayValue(value), margin + 150, y);
       y += 18;
     });
 
     // Un documento por hoja, con su nombre como titulo arriba de la
     // imagen -- mas facil de revisar/imprimir uno por uno que la
     // cuadricula compartiendo pagina de antes.
-    for (const field of DOC_FIELDS) {
+    const uploadedDocFields = DOC_FIELDS.filter((field) => d[field.key]);
+    for (const field of uploadedDocFields) {
       const url = d[field.key];
       doc.addPage();
       y = margin;
@@ -665,13 +714,6 @@ async function downloadDriverPdf(button) {
       y += 28;
       doc.setFont(undefined, 'normal');
       doc.setFontSize(11);
-
-      if (!url) {
-        doc.setTextColor(150);
-        doc.text('No subido', margin, y);
-        doc.setTextColor(0);
-        continue;
-      }
 
       try {
         const dataUrl = await documentAsDataUrl(url);

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../services/passenger_service.dart';
+import '../theme/app_theme.dart';
 
 /// Pestaña "Cuenta": datos del perfil del pasajero.
 class AccountTabScreen extends StatefulWidget {
@@ -54,7 +55,7 @@ class _AccountTabScreenState extends State<AccountTabScreen> {
             onPressed: () => Navigator.pop(context, true),
             child: const Text(
               'Cerrar sesión',
-              style: TextStyle(color: Colors.red),
+              style: TextStyle(color: AppColors.red),
             ),
           ),
         ],
@@ -85,11 +86,11 @@ class _AccountTabScreenState extends State<AccountTabScreen> {
             children: [
               CircleAvatar(
                 radius: 32,
-                backgroundColor: Colors.black,
+                backgroundColor: AppColors.ink,
                 child: Text(
                   initial,
                   style: const TextStyle(
-                    color: Colors.white,
+                    color: AppColors.paper,
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
                   ),
@@ -112,7 +113,7 @@ class _AccountTabScreenState extends State<AccountTabScreen> {
                       phone,
                       style: TextStyle(
                         fontSize: 14,
-                        color: Colors.grey.shade600,
+                        color: AppColors.muted,
                       ),
                     ),
                   ],
@@ -138,10 +139,10 @@ class _AccountTabScreenState extends State<AccountTabScreen> {
           const Divider(),
           ListTile(
             contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.logout, color: Colors.red),
+            leading: const Icon(Icons.logout, color: AppColors.red),
             title: const Text(
               'Cerrar sesión',
-              style: TextStyle(color: Colors.red),
+              style: TextStyle(color: AppColors.red),
             ),
             onTap: _logout,
           ),
@@ -151,7 +152,7 @@ class _AccountTabScreenState extends State<AccountTabScreen> {
               child: Text(
                 _versionLabel,
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                style: const TextStyle(fontSize: 12, color: AppColors.muted),
               ),
             ),
         ],

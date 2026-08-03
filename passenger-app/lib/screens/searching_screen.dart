@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../services/trip_service.dart';
 import '../widgets/support_button.dart';
+import '../theme/app_theme.dart';
 
 /// Se muestra mientras el viaje esta en 'searching' (buscando conductor) o
 /// 'no_drivers_available'. La asignacion es automatica: en cuanto Cloud
@@ -108,6 +109,7 @@ class _SearchingScreenState extends State<SearchingScreen> {
     final status = _trip['status'] as String?;
     final noDrivers = status == 'no_drivers_available';
     final scheduled = status == 'scheduled';
+    final noDriversReason = _trip['noDriversReason']?.toString().trim();
     final pickup = LatLng(
       (_trip['pickupLat'] as num).toDouble(),
       (_trip['pickupLng'] as num).toDouble(),
@@ -141,7 +143,7 @@ class _SearchingScreenState extends State<SearchingScreen> {
             bottom: 0,
             child: Container(
               decoration: const BoxDecoration(
-                color: Colors.white,
+                color: AppColors.paper,
                 borderRadius: BorderRadius.only(
                   topLeft: Radius.circular(24),
                   topRight: Radius.circular(24),
@@ -164,7 +166,7 @@ class _SearchingScreenState extends State<SearchingScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   if (scheduled) ...[
-                    const Icon(Icons.schedule, size: 40, color: Colors.black87),
+                    const Icon(Icons.schedule, size: 40, color: AppColors.ink),
                     const SizedBox(height: 16),
                     Text(
                       (_trip['scheduledPickupLabel'] as String?) != null
@@ -180,14 +182,14 @@ class _SearchingScreenState extends State<SearchingScreen> {
                     const Text(
                       'Vamos a buscar tu conductor automáticamente cerca de esa hora.',
                       textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 13, color: Colors.black54),
+                      style: TextStyle(fontSize: 13, color: AppColors.muted),
                     ),
                   ] else if (!noDrivers) ...[
                     const SizedBox(
                       height: 40,
                       width: 40,
                       child: CircularProgressIndicator(
-                        color: Colors.black,
+                        color: AppColors.ink,
                         strokeWidth: 3,
                       ),
                     ),
@@ -204,11 +206,13 @@ class _SearchingScreenState extends State<SearchingScreen> {
                     const Icon(
                       Icons.info_outline,
                       size: 40,
-                      color: Colors.black54,
+                      color: AppColors.muted,
                     ),
                     const SizedBox(height: 16),
-                    const Text(
-                      'No hay conductores disponibles en este momento.',
+                    Text(
+                      noDriversReason?.isNotEmpty == true
+                          ? noDriversReason!
+                          : 'No hay conductores disponibles en este momento.',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 16,
@@ -232,7 +236,7 @@ class _SearchingScreenState extends State<SearchingScreen> {
                     onPressed: _busy ? null : _cancel,
                     child: const Text(
                       'Cancelar viaje',
-                      style: TextStyle(color: Colors.red),
+                      style: TextStyle(color: AppColors.red),
                     ),
                   ),
                 ],

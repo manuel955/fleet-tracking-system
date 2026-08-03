@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../services/car_icon.dart';
 import '../services/directions_service.dart';
 import '../services/trip_service.dart';
+import '../theme/app_theme.dart';
 import '../widgets/support_button.dart';
 import 'destination_picker_screen.dart';
 
@@ -106,64 +107,20 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
 
   Color get _driverVehicleIconColor {
     final color = _driverVehicleColor.toLowerCase();
-    if (color.contains('negro') || color.contains('black')) {
-      return Colors.black;
+    switch (color) {
+      case 'negro':
+        return const Color(0xFF1F2937);
+      case 'gris':
+        return const Color(0xFF6B7280);
+      case 'plata':
+        return const Color(0xFFB8C0CC);
+      case 'blanco':
+        return Colors.white;
+      default:
+        // El registro solo permite estos cuatro colores. Si llega un valor
+        // antiguo o invalido, mostramos el vehiculo en blanco.
+        return Colors.white;
     }
-    if (color.contains('blanco') || color.contains('white')) {
-      return Colors.grey.shade300;
-    }
-    if (color.contains('rojo') || color.contains('red')) {
-      return Colors.red.shade700;
-    }
-    if (color.contains('azul') || color.contains('blue')) {
-      return Colors.blue.shade700;
-    }
-    if (color.contains('verde') || color.contains('green')) {
-      return Colors.green.shade700;
-    }
-    if (color.contains('amarillo') || color.contains('yellow')) {
-      return Colors.amber.shade700;
-    }
-    if (color.contains('beige') ||
-        color.contains('beis') ||
-        color.contains('arena') ||
-        color.contains('tan')) {
-      return const Color(0xFFC7AD82);
-    }
-    if (color.contains('naranja') || color.contains('orange')) {
-      return Colors.orange.shade800;
-    }
-    if (color.contains('marron') ||
-        color.contains('marrón') ||
-        color.contains('cafe') ||
-        color.contains('café') ||
-        color.contains('brown')) {
-      return Colors.brown.shade600;
-    }
-    if (color.contains('morado') ||
-        color.contains('purpura') ||
-        color.contains('púrpura') ||
-        color.contains('purple')) {
-      return Colors.deepPurple.shade600;
-    }
-    if (color.contains('rosa') ||
-        color.contains('rosado') ||
-        color.contains('pink')) {
-      return Colors.pink.shade400;
-    }
-    if (color.contains('celeste') ||
-        color.contains('turquesa') ||
-        color.contains('cyan')) {
-      return Colors.cyan.shade600;
-    }
-    if (color.contains('gris') ||
-        color.contains('gray') ||
-        color.contains('grey') ||
-        color.contains('plata') ||
-        color.contains('silver')) {
-      return Colors.grey.shade600;
-    }
-    return Colors.grey.shade500;
   }
 
   String get _driverVehicleAssetPath {
@@ -174,11 +131,20 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
     if (type == 'bus' || type.contains('ómnibus') || type.contains('omnibus')) {
       return 'assets/vehicles/vehicle-bus.png';
     }
-    if (type == 'van' || type == 'mini van' || type == 'minivan') {
+    if (type == 'mini bus' || type == 'minibus') {
+      return 'assets/vehicles/vehicle-minibus.png';
+    }
+    if (type == 'mini van' || type == 'minivan') {
+      return 'assets/vehicles/vehicle-minivan.png';
+    }
+    if (type == 'van') {
       return 'assets/vehicles/vehicle-van.png';
     }
-    if (type == 'camioneta' || type == 'pickup' || type == 'pick-up') {
-      return 'assets/vehicles/vehicle-pickup.png';
+    if (type == 'suv' ||
+        type == 'camioneta' ||
+        type == 'pickup' ||
+        type == 'pick-up') {
+      return 'assets/vehicles/vehicle-suv.png';
     }
     return 'assets/vehicles/vehicle-car.png';
   }
@@ -187,16 +153,20 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
     // Las imágenes parten de un acabado neutro y se modulan con el color
     // declarado en el registro. Así se conserva el volumen real del vehículo
     // sin volver a mostrar el color como texto en la tarjeta.
-    final tint = Color.lerp(Colors.white, _driverVehicleIconColor, 0.78)!;
-    return ColorFiltered(
-      colorFilter: ColorFilter.mode(tint, BlendMode.modulate),
-      child: Image.asset(
-        _driverVehicleAssetPath,
-        cacheWidth: 320,
-        cacheHeight: 180,
-        width: 100,
-        height: 70,
-        fit: BoxFit.contain,
+    return SizedBox(
+      width: double.infinity,
+      height: 92,
+      child: ColorFiltered(
+        colorFilter: ColorFilter.mode(
+          _driverVehicleIconColor,
+          BlendMode.modulate,
+        ),
+        child: Image.asset(
+          _driverVehicleAssetPath,
+          cacheWidth: 480,
+          cacheHeight: 280,
+          fit: BoxFit.contain,
+        ),
       ),
     );
   }
@@ -214,6 +184,7 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
       'destinationLat',
       'destinationLng',
       'destinationAddress',
+      'passengerCount',
       'scheduledPickupLabel',
       'driverId',
       'driverName',
@@ -497,27 +468,34 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
     }
   }
 
+  String get _passengerCountLabel {
+    final raw = _trip['passengerCount'];
+    final count = raw is num ? raw.toInt() : int.tryParse('$raw');
+    if (count == null || count < 1) return '';
+    return 'Viaje para $count ${count == 1 ? 'pasajero' : 'pasajeros'}';
+  }
+
   Widget _driverAvatar(String initial) {
     final photoUrl = _driverPhotoUrl;
     final fallback = Container(
-      color: const Color(0xFF303030),
+      color: AppColors.inkSurface,
       alignment: Alignment.center,
       child: Text(
         initial,
         style: const TextStyle(
-          color: Colors.white,
-          fontSize: 24,
+          color: AppColors.paper,
+          fontSize: 30,
           fontWeight: FontWeight.w700,
         ),
       ),
     );
 
     return Container(
-      width: 64,
-      height: 64,
+      width: 82,
+      height: 82,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        border: Border.all(color: const Color(0xFF555555), width: 2),
+        border: Border.all(color: AppColors.lime, width: 2),
       ),
       child: ClipOval(
         child: photoUrl == null
@@ -525,8 +503,8 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
             : Image.network(
                 photoUrl,
                 fit: BoxFit.cover,
-                cacheWidth: 192,
-                cacheHeight: 192,
+                cacheWidth: 246,
+                cacheHeight: 246,
                 errorBuilder: (_, _, _) => fallback,
               ),
       ),
@@ -535,7 +513,7 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
 
   Widget _callButton() {
     return Material(
-      color: const Color(0xFF2A2A2A),
+      color: AppColors.ink,
       borderRadius: BorderRadius.circular(14),
       child: InkWell(
         borderRadius: BorderRadius.circular(14),
@@ -545,12 +523,12 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.phone, color: Color(0xFF63D391), size: 24),
+              Icon(Icons.phone, color: AppColors.lime, size: 24),
               SizedBox(width: 10),
               Text(
                 'Llamar al conductor',
                 style: TextStyle(
-                  color: Colors.white,
+                  color: AppColors.paper,
                   fontSize: 16,
                   fontWeight: FontWeight.w700,
                 ),
@@ -623,7 +601,7 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
                   Polyline(
                     polylineId: const PolylineId('route'),
                     points: _routePoints,
-                    color: const Color(0xFF276EF1),
+                    color: AppColors.blue,
                     width: 5,
                   ),
               },
@@ -640,184 +618,210 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
             ),
           ),
           Positioned(
-            top: 145,
-            right: 16,
-            child: SafeArea(
-              child: Material(
-                color: _followDriver ? const Color(0xFF276EF1) : Colors.white,
-                shape: const CircleBorder(),
-                elevation: 4,
-                child: IconButton(
-                  tooltip: _followDriver
-                      ? 'Dejar de seguir al conductor'
-                      : 'Centrar mapa',
-                  onPressed: () {
-                    if (_followDriver) {
-                      setState(() => _followDriver = false);
-                    } else {
-                      _centerMap(pickup);
-                    }
-                  },
-                  color: _followDriver ? Colors.white : const Color(0xFF276EF1),
-                  icon: Icon(
-                    _followDriver ? Icons.gps_fixed : Icons.my_location,
-                  ),
-                ),
-              ),
-            ),
-          ),
-          Positioned(
             left: 0,
             right: 0,
             bottom: 0,
-            child: Container(
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.only(
-                  topLeft: Radius.circular(24),
-                  topRight: Radius.circular(24),
-                ),
-                border: Border.fromBorderSide(
-                  BorderSide(color: Colors.black12),
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black26,
-                    blurRadius: 16,
-                    offset: Offset(0, -4),
-                  ),
-                ],
-              ),
-              padding: EdgeInsets.fromLTRB(
-                16,
-                8,
-                16,
-                MediaQuery.of(context).padding.bottom + 10,
-              ),
+            child: SafeArea(
+              top: false,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Center(
-                    child: Container(
-                      width: 48,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF9E9E9E),
-                        borderRadius: BorderRadius.circular(4),
+                  Padding(
+                    padding: const EdgeInsets.only(right: 16, bottom: 10),
+                    child: Material(
+                      color: _followDriver
+                          ? AppColors.blue
+                          : AppColors.paper,
+                      shape: const CircleBorder(),
+                      elevation: 4,
+                      child: IconButton(
+                        tooltip: _followDriver
+                            ? 'Dejar de seguir al conductor'
+                            : 'Centrar mapa',
+                        onPressed: () {
+                          if (_followDriver) {
+                            setState(() => _followDriver = false);
+                          } else {
+                            _centerMap(pickup);
+                          }
+                        },
+                        color: _followDriver
+                            ? AppColors.paper
+                            : AppColors.blue,
+                        icon: Icon(
+                          _followDriver ? Icons.gps_fixed : Icons.my_location,
+                        ),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _statusLabel,
-                    style: const TextStyle(
-                      color: Colors.black,
-                      fontSize: 17,
-                      fontWeight: FontWeight.w700,
+                  Container(
+                    decoration: const BoxDecoration(
+                      color: AppColors.paper,
+                      borderRadius: BorderRadius.only(
+                        topLeft: Radius.circular(24),
+                        topRight: Radius.circular(24),
+                      ),
+                      border: Border.fromBorderSide(
+                        BorderSide(color: Colors.black12),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black26,
+                          blurRadius: 16,
+                          offset: Offset(0, -4),
+                        ),
+                      ],
                     ),
-                  ),
-                  if ((_trip['scheduledPickupLabel'] as String?)?.isNotEmpty ==
-                      true) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      'Recogida programada: ${_trip['scheduledPickupLabel']}',
-                      style: const TextStyle(fontSize: 13, color: Colors.grey),
-                    ),
-                  ],
-                  const SizedBox(height: 10),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _driverAvatar(initial),
-                      const SizedBox(width: 12),
-                      Expanded(child: Center(child: _vehicleImage())),
-                      const SizedBox(width: 12),
-                      SizedBox(
-                        width: 136,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text(
-                              _driverPlate,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.black,
-                                fontSize: 22,
-                                fontWeight: FontWeight.w800,
-                              ),
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Center(
+                          child: Container(
+                            width: 48,
+                            height: 4,
+                            decoration: BoxDecoration(
+                        color: AppColors.muted,
+                              borderRadius: BorderRadius.circular(4),
                             ),
-                            const SizedBox(height: 3),
-                            SizedBox(
-                              width: 136,
-                              height: 22,
-                              child: FittedBox(
-                                fit: BoxFit.scaleDown,
-                                alignment: Alignment.centerRight,
-                                child: Text(
-                                  _driverVehicleLabel,
-                                  maxLines: 1,
-                                  softWrap: false,
-                                  textAlign: TextAlign.right,
-                                  style: const TextStyle(
-                                    color: Color(0xFF4F4F4F),
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          _statusLabel,
+                          style: const TextStyle(
+                            color: AppColors.ink,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        if ((_trip['scheduledPickupLabel'] as String?)
+                                ?.isNotEmpty ==
+                            true) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            'Recogida programada: ${_trip['scheduledPickupLabel']}',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: AppColors.muted,
+                            ),
+                          ),
+                        ],
+                        if (_passengerCountLabel.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            _passengerCountLabel,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: AppColors.muted,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 10),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _driverAvatar(initial),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              flex: 3,
+                              child: Center(child: _vehicleImage()),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              flex: 2,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Text(
+                                    _driverPlate,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    textAlign: TextAlign.right,
+                                    style: const TextStyle(
+                                      color: AppColors.ink,
+                                      fontSize: 22,
+                                      fontWeight: FontWeight.w800,
+                                    ),
                                   ),
-                                ),
+                                  const SizedBox(height: 3),
+                                  SizedBox(
+                                    width: double.infinity,
+                                    height: 22,
+                                    child: FittedBox(
+                                      fit: BoxFit.scaleDown,
+                                      alignment: Alignment.centerRight,
+                                      child: Text(
+                                        _driverVehicleLabel,
+                                        maxLines: 1,
+                                        softWrap: false,
+                                        textAlign: TextAlign.right,
+                                        style: const TextStyle(
+                                          color: AppColors.muted,
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ],
                         ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    driverName,
-                    style: const TextStyle(
-                      color: Colors.black,
-                      fontSize: 19,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  const Text(
-                    'Conductor asignado',
-                    style: TextStyle(color: Color(0xFF9D9D9D), fontSize: 12),
-                  ),
-                  const SizedBox(height: 10),
-                  SizedBox(width: double.infinity, child: _callButton()),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: _busy ? null : _modifyDestination,
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.black,
-                            side: const BorderSide(color: Colors.black26),
-                            minimumSize: const Size.fromHeight(40),
+                        const SizedBox(height: 6),
+                        Text(
+                          driverName,
+                          style: const TextStyle(
+                            color: AppColors.ink,
+                            fontSize: 19,
+                            fontWeight: FontWeight.w700,
                           ),
-                          child: const Text('Modificar viaje'),
                         ),
-                      ),
-                      if (_canCancel) ...[
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: _busy ? null : _cancel,
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: const Color(0xFFFF7777),
-                              side: const BorderSide(color: Color(0xFF8F3E3E)),
-                              minimumSize: const Size.fromHeight(40),
-                            ),
-                            child: const Text('Cancelar viaje'),
+                        const SizedBox(height: 2),
+                        const Text(
+                          'Conductor asignado',
+                          style: TextStyle(
+                            color: AppColors.muted,
+                            fontSize: 12,
                           ),
+                        ),
+                        const SizedBox(height: 10),
+                        SizedBox(width: double.infinity, child: _callButton()),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: _busy ? null : _modifyDestination,
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: AppColors.ink,
+                                  side: const BorderSide(color: AppColors.line),
+                                  minimumSize: const Size.fromHeight(40),
+                                ),
+                                child: const Text('Modificar viaje'),
+                              ),
+                            ),
+                            if (_canCancel) ...[
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: OutlinedButton(
+                                  onPressed: _busy ? null : _cancel,
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: AppColors.red,
+                                    side: const BorderSide(color: AppColors.red),
+                                    minimumSize: const Size.fromHeight(40),
+                                  ),
+                                  child: const Text('Cancelar viaje'),
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                       ],
-                    ],
+                    ),
                   ),
                 ],
               ),

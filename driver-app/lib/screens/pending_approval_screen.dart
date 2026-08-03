@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../services/driver_profile_service.dart';
+import '../theme/app_theme.dart';
 import '../widgets/document_upload_tile.dart';
+import 'notifications_screen.dart';
 
 /// Se muestra mientras `approvalStatus` sigue en 'pending_review', o si fue
 /// 'rejected' (con motivo de texto libre escrito por el admin desde el
@@ -60,6 +62,24 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
     ),
   ];
 
+  Set<String> get _rejectedDocumentKeys {
+    final raw = widget.profile['rejectionFieldKeys']?.toString() ?? '';
+    return raw
+        .split(',')
+        .map((key) => key.trim())
+        .where((key) => key.isNotEmpty)
+        .toSet();
+  }
+
+  Iterable<dynamic> get _visibleDocs {
+    final keys = _rejectedDocumentKeys;
+    if (keys.isEmpty) return _docs;
+    return _docs.where((document) => keys.contains(document.$1));
+  }
+
+  String get _visibleDocumentLabels =>
+      _visibleDocs.map((document) => document.$2).join(', ');
+
   bool get _isDniSelectionValid {
     final dni = _documents['dni'] ?? const <PickedDocument>[];
     if (dni.isEmpty) return true;
@@ -106,9 +126,12 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Estado de tu registro'),
+        title: Text(rejected ? 'Registro rechazado' : 'Registro enviado'),
         automaticallyImplyLeading: false,
         actions: [
+          NotificationBellButton(
+            onCorrect: () => setState(() => _resubmitting = true),
+          ),
           IconButton(
               icon: const Icon(Icons.logout),
               tooltip: 'Cerrar sesión',
@@ -122,7 +145,7 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
             Icon(
               rejected ? Icons.error_outline : Icons.hourglass_top,
               size: 56,
-              color: rejected ? Colors.red : Colors.orange,
+              color: rejected ? AppColors.red : AppColors.amber,
             ),
             const SizedBox(height: 16),
             Text(
@@ -134,21 +157,28 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
             const SizedBox(height: 8),
             Text(
               rejected
-                  ? 'Corrige lo indicado y vuelve a subir los documentos necesarios.'
+                  ? 'Corrige lo indicado y vuelve a subir los documentos necesarios. Mientras tu registro estÃ© rechazado no puedes conectarte, enviar ubicaciÃ³n ni recibir viajes.'
                   : 'Un administrador está revisando tus documentos. Te avisaremos cuando puedas empezar a trabajar.',
-              style: const TextStyle(color: Colors.black54),
+              style: const TextStyle(color: AppColors.muted),
             ),
             if (rejected && reason != null && reason.isNotEmpty) ...[
               const SizedBox(height: 16),
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.red.shade50,
+                  color: AppColors.red.withValues(alpha: .10),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.red.shade200),
+                  border: Border.all(color: AppColors.red.withValues(alpha: .35)),
                 ),
                 child: Text('Motivo: $reason',
-                    style: TextStyle(color: Colors.red.shade900)),
+                    style: const TextStyle(color: AppColors.red)),
+              ),
+            ],
+            if (rejected && _rejectedDocumentKeys.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(
+                'Documentos que debes corregir: $_visibleDocumentLabels',
+                style: const TextStyle(fontWeight: FontWeight.w600),
               ),
             ],
             if (rejected) ...[
@@ -165,7 +195,7 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
                   'Sube de nuevo los documentos que necesitan corrección:',
                   style: TextStyle(fontWeight: FontWeight.w600),
                 ),
-                ..._docs.map(
+                ..._visibleDocs.map(
                   (d) => DocumentUploadTile(
                     key: ValueKey(d.$1),
                     label: d.$2,
@@ -191,7 +221,7 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
                 ),
                 if (_error != null) ...[
                   const SizedBox(height: 12),
-                  Text(_error!, style: const TextStyle(color: Colors.red)),
+                  Text(_error!, style: const TextStyle(color: AppColors.red)),
                 ],
                 const SizedBox(height: 16),
                 ElevatedButton(

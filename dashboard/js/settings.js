@@ -401,8 +401,9 @@ function renderApps() {
     <div class="settings-card apps-settings-card">
       <h3>Apps</h3>
       <p class="settings-hint">
-        Define el nombre visible y el ícono de cada aplicación. Para cambiar
-        el nombre o ícono que aparece en el teléfono, publica después un APK nuevo.
+        Define el nombre visible y el ícono de cada aplicación. Al guardar,
+        se genera automáticamente un APK nuevo y los teléfonos recibirán el
+        aviso para instalarlo y aplicar la marca.
       </p>
       <div class="apps-branding-grid">
         ${BRAND_APPS.map((app) => appBrandingCardHtml(app)).join('')}
@@ -444,10 +445,10 @@ function appBrandingCardHtml(app) {
         <input id="app-name-${app.key}" maxlength="40" value="${escapeHtml(branding.name || app.defaultName)}" required />
         <label for="app-icon-${app.key}">Ícono (PNG, JPG o WebP)</label>
         <input id="app-icon-${app.key}" type="file" accept="image/png,image/jpeg,image/webp" />
-        <button type="submit">Guardar cambios</button>
+        <button type="submit">Guardar y generar APK</button>
       </form>
       <button type="button" id="build-branded-app-${app.key}" class="build-branded-app-btn">
-        Generar APK y enviar actualización
+        Volver a generar APK
       </button>
       <p id="app-branding-feedback-${app.key}" class="settings-feedback"></p>
       <div class="app-download-card">
@@ -475,8 +476,9 @@ async function saveAppBranding(app, name, icon) {
       changes.iconUrl = await iconRef.getDownloadURL();
     }
     await db.ref(`config/appBranding/${app.key}`).update(changes);
-    feedback.textContent = 'Guardado. Publica un APK nuevo para aplicarlo en los teléfonos.';
+    feedback.textContent = 'Guardado. Iniciando APK con el nombre e ícono nuevos…';
     feedback.className = 'settings-feedback success';
+    await requestBrandedAppBuild(app);
   } catch (error) {
     feedback.textContent = `Error al guardar: ${error.message || error}`;
     feedback.className = 'settings-feedback error';

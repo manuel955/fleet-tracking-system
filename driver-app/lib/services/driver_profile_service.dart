@@ -83,7 +83,16 @@ class DriverProfileService {
         'Authorization': 'Bearer $idToken',
         'Content-Type': 'application/json'
       },
-      body: jsonEncode({'name': name, 'dni': dni, 'plate': plate}),
+      body: jsonEncode({
+        'email': email,
+        'phone': phone,
+        'name': name,
+        'dni': dni,
+        'plate': plate,
+        'vehicleType': vehicleType,
+        'vehicleColor': vehicleColor,
+        'vehicleSeats': vehicleSeats,
+      }),
     );
     if (validation.statusCode != 200) {
       final response = jsonDecode(validation.body);
@@ -111,7 +120,6 @@ class DriverProfileService {
         'vehicleType': vehicleType,
         'vehicleColor': vehicleColor,
         'vehicleSeats': vehicleSeats,
-        'profileEditUsed': false,
         ...docUrls,
         'approvalStatus': 'pending_review',
         'registeredAt': now,
@@ -184,15 +192,9 @@ class DriverProfileService {
     }
   }
 
-  /// Permite una sola correccion posterior al registro. La restriccion se
-  /// valida en Cloud Functions para que no dependa solo de la interfaz.
-  static Future<void> updateProfile({
-    required String phone,
-    required String vehicleBrand,
-    required String vehicleType,
-    required String vehicleColor,
-    required int vehicleSeats,
-  }) async {
+  /// Permite corregir el telefono del conductor sin limite de veces. La
+  /// validacion se hace en Cloud Functions y no depende solo de la interfaz.
+  static Future<void> updatePhone({required String phone}) async {
     final auth = await AuthService.currentSession();
     final idToken = auth['idToken'] as String;
 
@@ -205,10 +207,6 @@ class DriverProfileService {
       },
       body: jsonEncode({
         'phone': phone,
-        'vehicleBrand': vehicleBrand,
-        'vehicleType': vehicleType,
-        'vehicleColor': vehicleColor,
-        'vehicleSeats': vehicleSeats,
       }),
     );
 

@@ -15,6 +15,15 @@ const BRANDING_APPS = {
 const BRANDING_BUILD_TTL_MS = 3 * 60 * 60 * 1000;
 const OWNER_DASHBOARD_EMAIL = 'anfurex.3351@gmail.com';
 const DATABASE_URL = 'https://rastreoflota-53052-default-rtdb.firebaseio.com';
+const VEHICLE_PASSENGER_RANGES = {
+  Auto: [1, 4],
+  SUV: [5, 7],
+  'Mini van': [8, 17],
+  Van: [18, 20],
+  'Mini bus': [21, 38],
+  Bus: [39, 45],
+};
+const VEHICLE_COLORS = new Set(['Negro', 'Gris', 'Plata', 'Blanco']);
 
 function cors(res) {
   res.set('Access-Control-Allow-Origin', '*');
@@ -55,8 +64,72 @@ function identityKey(value) {
   return crypto.createHash('sha256').update(normalizedIdentity(value)).digest('hex');
 }
 
+const DRIVER_UNIQUE_FIELDS = ['email', 'phone', 'plate', 'dni', 'name'];
+const DRIVER_REJECTION_FIELDS = new Set([
+  'profile',
+  'dni',
+  'license',
+  'soat',
+  'circulationCard',
+  'technicalReview',
+  'criminalRecord',
+  'workCertificate',
+]);
+
+async function releaseUniqueDriverValue(field, value, uid) {
+  if (!value) return;
+  const ref = admin.database().ref(`driverUnique/${field}/${identityKey(value)}`);
+  await ref.transaction((current) => {
+    if (current?.uid === uid) return null;
+    return current;
+  });
+}
+
+async function releaseDriverIdentityReservations(driverId, driver = {}) {
+  await Promise.all(DRIVER_UNIQUE_FIELDS.map(async (field) => {
+    const ref = admin.database().ref(`driverUnique/${field}`);
+    const snapshot = await ref.once('value');
+    const reservations = snapshot.val() || {};
+    const removals = {};
+
+    for (const [key, reservation] of Object.entries(reservations)) {
+      if (reservation?.uid === driverId) removals[key] = null;
+    }
+    if (driver[field]) removals[identityKey(driver[field])] = null;
+    if (Object.keys(removals).length) await ref.update(removals);
+  }));
+}
+
+function isValidVehicleData(vehicleType, vehicleColor, vehicleSeats) {
+  const range = VEHICLE_PASSENGER_RANGES[vehicleType];
+  const seats = Number(vehicleSeats);
+  return Boolean(
+    range &&
+      VEHICLE_COLORS.has(vehicleColor) &&
+      Number.isInteger(seats) &&
+      seats >= range[0] &&
+      seats <= range[1]
+  );
+}
+
+async function deleteDriverDocuments(driverId) {
+  const bucket = admin.storage().bucket(BRANDING_BUCKET);
+  const [files] = await bucket.getFiles({ prefix: `driver_documents/${driverId}/` });
+  await Promise.all(files.map((file) => file.delete()));
+  return files.length;
+}
+
 async function reserveUniqueDriverValue(field, value, uid) {
   const ref = admin.database().ref(`driverUnique/${field}/${identityKey(value)}`);
+  const current = (await ref.once('value')).val();
+  if (current?.uid && current.uid !== uid) {
+    const activeDriver = await admin.database().ref(`drivers/${current.uid}`).once('value');
+    if (!activeDriver.exists()) {
+      await ref.transaction((reservation) => (
+        reservation?.uid === current.uid ? null : reservation
+      ));
+    }
+  }
   const result = await ref.transaction((current) => current || { uid, value: normalizedIdentity(value), reservedAt: Date.now() });
   return result.committed && result.snapshot.val()?.uid === uid;
 }
@@ -69,9 +142,26 @@ exports.reserveDriverIdentity = functions.https.onRequest(async (req, res) => {
     const header = req.get('Authorization') || '';
     if (!header.startsWith('Bearer ')) throw new Error('No autorizado');
     const user = await admin.auth().verifyIdToken(header.slice(7));
-    const { plate, dni, name } = req.body || {};
-    if (!plate || !dni || !name) return res.status(400).json({ error: 'Completa placa, DNI y nombre.' });
-    const fields = [['plate', plate, 'placa'], ['dni', dni, 'DNI'], ['name', name, 'nombre completo']];
+    const { email, phone, plate, dni, name, vehicleType, vehicleColor, vehicleSeats } = req.body || {};
+    if (!email || !phone || !plate || !dni || !name) {
+      return res.status(400).json({ error: 'Completa correo, teléfono, placa, DNI y nombre.' });
+    }
+    if (normalizedIdentity(email) !== normalizedIdentity(user.email)) {
+      return res.status(400).json({ error: 'El correo del registro no coincide con la cuenta creada.' });
+    }
+    if (!/^\+\d{8,19}$/.test(String(phone).trim())) {
+      return res.status(400).json({ error: 'El teléfono no tiene un formato válido.' });
+    }
+    if (!isValidVehicleData(vehicleType, vehicleColor, vehicleSeats)) {
+      return res.status(400).json({ error: 'Selecciona un tipo, color y cantidad de pasajeros válidos.' });
+    }
+    const fields = [
+      ['email', email, 'correo'],
+      ['phone', phone, 'teléfono'],
+      ['plate', plate, 'placa'],
+      ['dni', dni, 'DNI'],
+      ['name', name, 'nombre completo'],
+    ];
     const existingDrivers = (await admin.database().ref('drivers').once('value')).val() || {};
     for (const [, driver] of Object.entries(existingDrivers)) {
       for (const [field, value, label] of fields) {
@@ -85,7 +175,7 @@ exports.reserveDriverIdentity = functions.https.onRequest(async (req, res) => {
     for (const [field, value, label] of fields) {
       const ok = await reserveUniqueDriverValue(field, value, user.uid);
       if (!ok) {
-        await Promise.all(reserved.map(([reservedField, reservedValue]) => admin.database().ref(`driverUnique/${reservedField}/${identityKey(reservedValue)}`).remove()));
+        await Promise.all(reserved.map(([reservedField, reservedValue]) => releaseUniqueDriverValue(reservedField, reservedValue, user.uid)));
         await admin.auth().deleteUser(user.uid).catch(() => null);
         return res.status(409).json({ error: `Ya existe un conductor con ese ${label}.` });
       }
@@ -103,7 +193,7 @@ exports.manageDrivers = functions.https.onRequest(async (req, res) => {
   if (req.method === 'OPTIONS') return res.status(204).send('');
   if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
   try {
-    await requireDashboardManager(req);
+    const manager = await requireDashboardManager(req);
     const { action, driverId, place } = req.body || {};
     if (!driverId) return res.status(400).json({ error: 'Conductor requerido' });
     const driverRef = admin.database().ref(`drivers/${driverId}`);
@@ -119,6 +209,29 @@ exports.manageDrivers = functions.https.onRequest(async (req, res) => {
       });
       return res.json({ ok: true });
     }
+    if (action === 'reject') {
+      const reason = String(req.body?.reason || '').trim();
+      const rejectionFields = Array.isArray(req.body?.rejectionFields)
+        ? [...new Set(req.body.rejectionFields.map((field) => String(field)))]
+        : [];
+      if (!reason) return res.status(400).json({ error: 'Escribe el motivo del rechazo.' });
+      if (!rejectionFields.length || rejectionFields.some((field) => !DRIVER_REJECTION_FIELDS.has(field))) {
+        return res.status(400).json({ error: 'Selecciona al menos un documento que deba corregirse.' });
+      }
+      if (driver.currentTripId || driver.status === 'busy') {
+        return res.status(409).json({ error: 'No puedes rechazar a un conductor con un viaje activo.' });
+      }
+      await driverRef.update({
+        approvalStatus: 'rejected',
+        rejectionReason: reason,
+        rejectionFieldKeys: rejectionFields.join(','),
+        reviewedAt: Date.now(),
+        reviewedBy: manager.email || '',
+        status: null,
+        currentTripId: null,
+      });
+      return res.json({ ok: true });
+    }
     if (action === 'delete') {
       let authDeleted = false;
       try {
@@ -131,12 +244,14 @@ exports.manageDrivers = functions.https.onRequest(async (req, res) => {
         // bloqueados sin avisar al administrador.
         if (error?.code !== 'auth/user-not-found') throw error;
       }
+      await deleteDriverDocuments(driverId);
+      // Primero libera todas las reservas de identidad. Se revisan también
+      // reservas antiguas ligadas a este UID, para que un conductor eliminado
+      // desde el dashboard pueda registrarse otra vez con sus mismos datos.
+      await releaseDriverIdentityReservations(driverId, driver);
       await Promise.all([
         driverRef.remove(),
         admin.database().ref(`driverConnectionHistory/${driverId}`).remove(),
-        admin.database().ref(`driverUnique/plate/${identityKey(driver.plate)}`).remove(),
-        admin.database().ref(`driverUnique/dni/${identityKey(driver.dni)}`).remove(),
-        admin.database().ref(`driverUnique/name/${identityKey(driver.name)}`).remove(),
       ]);
       return res.json({ ok: true, authDeleted });
     }
@@ -147,9 +262,7 @@ exports.manageDrivers = functions.https.onRequest(async (req, res) => {
   }
 });
 
-// Permite una sola correccion posterior del telefono y los datos operativos
-// del vehiculo. La transaccion atomica evita que dos peticiones simultaneas
-// consuman dos veces la misma oportunidad de edicion.
+// Permite corregir el telefono del conductor sin limite de veces.
 exports.updateDriverProfileOnce = functions.https.onRequest(async (req, res) => {
   cors(res);
   if (req.method === 'OPTIONS') return res.status(204).send('');
@@ -159,20 +272,12 @@ exports.updateDriverProfileOnce = functions.https.onRequest(async (req, res) => 
     const header = req.get('Authorization') || '';
     if (!header.startsWith('Bearer ')) throw new Error('No autorizado');
     const user = await admin.auth().verifyIdToken(header.slice(7));
-    const { phone, vehicleBrand, vehicleType, vehicleColor, vehicleSeats } = req.body || {};
+    const { phone } = req.body || {};
     const cleanPhone = String(phone || '').trim();
-    const cleanBrand = String(vehicleBrand || '').trim();
-    const cleanType = String(vehicleType || '').trim();
-    const cleanColor = String(vehicleColor || '').trim();
-    const seats = Number(vehicleSeats);
 
     if (!/^\+\d{8,19}$/.test(cleanPhone)) {
       return res.status(400).json({ error: 'El teléfono no tiene un formato válido.' });
     }
-    if (!cleanBrand || !cleanType || !cleanColor || !Number.isInteger(seats) || seats < 1 || seats > 100) {
-      return res.status(400).json({ error: 'Completa correctamente los datos del vehículo.' });
-    }
-
     const token = await functionsAccessToken();
     const headers = { Authorization: `Bearer ${token}` };
     const profileUrl = `${DATABASE_URL}/drivers/${user.uid}.json`;
@@ -186,21 +291,27 @@ exports.updateDriverProfileOnce = functions.https.onRequest(async (req, res) => 
     const etag = getResponse.headers.get('ETag');
     const current = await getResponse.json();
     if (!current) return res.status(404).json({ error: 'Perfil de conductor no encontrado.' });
-    if (current.profileEditUsed === true) {
-      return res.status(409).json({ error: 'La ediciÃƒÂ³n ÃƒÂºnica de datos ya fue utilizada.' });
-    }
     if (current.approvalStatus !== 'approved') {
       return res.status(403).json({ error: 'El conductor todavÃ­a no estÃ¡ aprobado.' });
+    }
+
+    const currentPhone = String(current.phone || '').trim();
+    const phoneChanged = normalizedIdentity(currentPhone) !== normalizedIdentity(cleanPhone);
+    let phoneReserved = false;
+    if (phoneChanged) {
+      const drivers = (await admin.database().ref('drivers').once('value')).val() || {};
+      const conflict = Object.entries(drivers).some(([driverId, driver]) => (
+        driverId !== user.uid && normalizedIdentity(driver.phone) === normalizedIdentity(cleanPhone)
+      ));
+      if (conflict) return res.status(409).json({ error: 'Ya existe un conductor con ese teléfono.' });
+
+      phoneReserved = await reserveUniqueDriverValue('phone', cleanPhone, user.uid);
+      if (!phoneReserved) return res.status(409).json({ error: 'Ya existe un conductor con ese teléfono.' });
     }
 
     const updated = {
       ...current,
       phone: cleanPhone,
-      vehicleBrand: cleanBrand,
-      vehicleType: cleanType,
-      vehicleColor: cleanColor,
-      vehicleSeats: seats,
-      profileEditUsed: true,
       profileEditedAt: Date.now(),
     };
     const putResponse = await fetch(profileUrl, {
@@ -213,23 +324,18 @@ exports.updateDriverProfileOnce = functions.https.onRequest(async (req, res) => 
       body: JSON.stringify(updated),
     });
     if (putResponse.status === 412) {
+      if (phoneReserved) await releaseUniqueDriverValue('phone', cleanPhone, user.uid);
       return res.status(409).json({ error: 'El perfil cambiÃ³ mientras se guardaba. Intenta nuevamente.' });
     }
     if (!putResponse.ok) {
+      if (phoneReserved) await releaseUniqueDriverValue('phone', cleanPhone, user.uid);
       throw new Error(`No se pudo guardar el perfil (${putResponse.status})`);
     }
 
-    /* Legacy transaction implementation removed.
-    if (false) {
-      const current = result.snapshot.val();
-      if (!current) return res.status(404).json({ error: 'Perfil de conductor no encontrado.' });
-      if (current.profileEditUsed === true) {
-        return res.status(409).json({ error: 'La edición única de datos ya fue utilizada.' });
-      }
-      return res.status(403).json({ error: 'El conductor todavía no está aprobado.' });
+    if (phoneChanged && currentPhone) {
+      await releaseUniqueDriverValue('phone', currentPhone, user.uid);
     }
 
-    */
     return res.json({ ok: true });
   } catch (error) {
     console.error('updateDriverProfileOnce', error);
@@ -441,7 +547,8 @@ exports.assignDriverOnTripCreate = functions.database
       trip.pickupLat,
       trip.pickupLng,
       trip.rejectedDriverIds || {},
-      trip.scheduledPickupLabel
+      trip.scheduledPickupLabel,
+      trip.passengerCount
     );
   });
 
@@ -478,7 +585,8 @@ exports.dispatchScheduledTrips = functions.pubsub
           trip.pickupLat,
           trip.pickupLng,
           trip.rejectedDriverIds || {},
-          trip.scheduledPickupLabel
+          trip.scheduledPickupLabel,
+          trip.passengerCount
         );
       }
     }
@@ -511,7 +619,8 @@ exports.handleTripStatusChange = functions.database
         trip.pickupLat,
         trip.pickupLng,
         trip.rejectedDriverIds || {},
-        trip.scheduledPickupLabel
+        trip.scheduledPickupLabel,
+        trip.passengerCount
       );
     }
 
@@ -589,9 +698,32 @@ exports.notifyApprovalStatusChange = functions.database
     const driverId = context.params.driverId;
     const driverSnap = await admin.database().ref(`drivers/${driverId}`).once('value');
     const driver = driverSnap.val() || {};
+    if (after === 'rejected') {
+      // Defensa adicional para rechazos antiguos o escrituras directas: un
+      // rechazado no puede conservar estado operativo ni dejar un viaje
+      // asignado apuntando a su cuenta.
+      if (driver.currentTripId) {
+        const tripRef = admin.database().ref(`trips/${driver.currentTripId}`);
+        const trip = (await tripRef.once('value')).val();
+        if (trip && !['completed', 'cancelled'].includes(trip.status)) {
+          await tripRef.update({
+            status: 'cancelled',
+            cancelledBy: 'dashboard',
+            cancelReason: 'El conductor fue rechazado por el dashboard.',
+            cancelledAt: Date.now(),
+          });
+        }
+      }
+      await admin.database().ref(`drivers/${driverId}`).update({
+        status: null,
+        currentTripId: null,
+      });
+    }
     await sendPush(driver.fcmToken, 'approval_status', {
       status: after,
       rejectionReason: after === 'rejected' ? driver.rejectionReason || '' : '',
+      rejectionFieldKeys: after === 'rejected' ? driver.rejectionFieldKeys || '' : '',
+      reviewedAt: driver.reviewedAt ? String(driver.reviewedAt) : '',
     });
     return null;
   });

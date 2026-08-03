@@ -8,6 +8,7 @@ import '../services/places_service.dart';
 import '../services/trip_service.dart';
 import 'destination_picker_screen.dart';
 import 'place_search_screen.dart';
+import '../theme/app_theme.dart';
 
 /// Pantalla principal, estilo Uber: mapa a pantalla completa, tarjeta de
 /// busqueda flotando arriba (partida/destino) y un panel inferior fijo con
@@ -49,6 +50,7 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
   bool _mapReady = false;
   List<LatLng> _routePoints = [];
   TimeOfDay? _scheduledTime;
+  int _passengerCount = 1;
 
   @override
   void initState() {
@@ -85,7 +87,9 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
 
   void _fitBounds() {
     if (_destination == null || _mapController == null) return;
-    final points = _routePoints.length >= 2 ? _routePoints : [_pickup, _destination!];
+    final points = _routePoints.length >= 2
+        ? _routePoints
+        : [_pickup, _destination!];
     double minLat = points.first.latitude, maxLat = points.first.latitude;
     double minLng = points.first.longitude, maxLng = points.first.longitude;
     for (final p in points) {
@@ -96,7 +100,10 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
     }
     _mapController!.animateCamera(
       CameraUpdate.newLatLngBounds(
-        LatLngBounds(southwest: LatLng(minLat, minLng), northeast: LatLng(maxLat, maxLng)),
+        LatLngBounds(
+          southwest: LatLng(minLat, minLng),
+          northeast: LatLng(maxLat, maxLng),
+        ),
         80,
       ),
     );
@@ -121,12 +128,18 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
     final result = await Navigator.push<PlaceSearchResult>(
       context,
       MaterialPageRoute(
-        builder: (_) => const PlaceSearchScreen(title: 'Punto de partida', hint: '¿Dónde te recogemos?'),
+        builder: (_) => const PlaceSearchScreen(
+          title: 'Punto de partida',
+          hint: '¿Dónde te recogemos?',
+        ),
       ),
     );
     if (result == null) return;
     final latLng = LatLng(result.lat, result.lng);
-    setState(() { _pickup = latLng; _pickupLabel = result.description; });
+    setState(() {
+      _pickup = latLng;
+      _pickupLabel = result.description;
+    });
     if (_destination != null) {
       _loadRoute();
     } else {
@@ -138,12 +151,18 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
     final result = await Navigator.push<DestinationPickerResult>(
       context,
       MaterialPageRoute(
-        builder: (_) => DestinationPickerScreen(initialCenter: _pickup, pickupLabel: _pickupLabel),
+        builder: (_) => DestinationPickerScreen(
+          initialCenter: _pickup,
+          pickupLabel: _pickupLabel,
+        ),
       ),
     );
     if (result == null) return;
     final latLng = LatLng(result.lat, result.lng);
-    setState(() { _destination = latLng; _destinationLabel = result.description; });
+    setState(() {
+      _destination = latLng;
+      _destinationLabel = result.description;
+    });
     _loadRoute();
   }
 
@@ -164,7 +183,11 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
   Future<void> _selectProgramar() async {
     if (!widget.allowScheduling) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Ya tienes un viaje programado. Cancélalo para programar otro.')),
+        const SnackBar(
+          content: Text(
+            'Ya tienes un viaje programado. Cancélalo para programar otro.',
+          ),
+        ),
       );
       return;
     }
@@ -174,7 +197,14 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
   Widget _buildWhenToggle() {
     return Row(
       children: [
-        Expanded(child: _whenTab(label: 'Ahora', icon: Icons.bolt, selected: _scheduledTime == null, onTap: _selectNow)),
+        Expanded(
+          child: _whenTab(
+            label: 'Ahora',
+            icon: Icons.bolt,
+            selected: _scheduledTime == null,
+            onTap: _selectNow,
+          ),
+        ),
         const SizedBox(width: 10),
         Expanded(
           child: _whenTab(
@@ -202,20 +232,28 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
-          color: selected ? Colors.black : Colors.grey.shade100,
+          color: selected ? AppColors.ink : AppColors.paperMuted,
           borderRadius: BorderRadius.circular(10),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 16, color: selected ? Colors.white : (dimmed ? Colors.black26 : Colors.black87)),
+            Icon(
+              icon,
+              size: 16,
+              color: selected
+                  ? AppColors.paper
+                  : (dimmed ? AppColors.muted.withValues(alpha: .45) : AppColors.ink),
+            ),
             const SizedBox(width: 8),
             Text(
               label,
               style: TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
-                color: selected ? Colors.white : (dimmed ? Colors.black26 : Colors.black87),
+                color: selected
+                    ? AppColors.paper
+                    : (dimmed ? AppColors.muted.withValues(alpha: .45) : AppColors.ink),
               ),
             ),
           ],
@@ -242,8 +280,16 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
   // el pasado.
   DateTime _scheduledDateTime(TimeOfDay time) {
     final now = DateTime.now();
-    var candidate = DateTime(now.year, now.month, now.day, time.hour, time.minute);
-    if (candidate.isBefore(now)) candidate = candidate.add(const Duration(days: 1));
+    var candidate = DateTime(
+      now.year,
+      now.month,
+      now.day,
+      time.hour,
+      time.minute,
+    );
+    if (candidate.isBefore(now)) {
+      candidate = candidate.add(const Duration(days: 1));
+    }
     return candidate;
   }
 
@@ -253,15 +299,24 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
   // termina mostrando eso en vez de decir de donde salio en verdad. Antes
   // de pedir el viaje se reemplazan por la direccion real via geocoding
   // inverso.
-  static const _genericPickupLabels = {'Mi ubicación actual', 'Punto marcado en el mapa'};
+  static const _genericPickupLabels = {
+    'Mi ubicación actual',
+    'Punto marcado en el mapa',
+  };
 
   Future<void> _requestRide() async {
-    setState(() { _requesting = true; _error = null; });
+    setState(() {
+      _requesting = true;
+      _error = null;
+    });
     try {
       var pickupAddress = _pickupLabel;
       if (_genericPickupLabels.contains(pickupAddress)) {
         try {
-          pickupAddress = await PlacesService.reverseGeocode(_pickup.latitude, _pickup.longitude);
+          pickupAddress = await PlacesService.reverseGeocode(
+            _pickup.latitude,
+            _pickup.longitude,
+          );
         } catch (_) {
           // Se queda con la etiqueta generica si el geocoding falla.
         }
@@ -270,14 +325,16 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
       final tripId = await TripService.requestRide(
         pickupLat: _pickup.latitude,
         pickupLng: _pickup.longitude,
+        passengerCount: _passengerCount,
         pickupAddress: pickupAddress,
         destinationLat: _destination?.latitude,
         destinationLng: _destination?.longitude,
         destinationAddress: _destinationLabel,
         passengerName: profile?['name'] ?? 'Pasajero',
         passengerPhone: profile?['phone'] ?? '',
-        scheduledPickupLabel:
-            _scheduledTime != null ? _formatTime12h(_scheduledTime!) : null,
+        scheduledPickupLabel: _scheduledTime != null
+            ? _formatTime12h(_scheduledTime!)
+            : null,
         scheduledPickupAt: _scheduledTime != null
             ? _scheduledDateTime(_scheduledTime!).millisecondsSinceEpoch
             : null,
@@ -285,7 +342,10 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
       widget.onRequested(tripId);
       if (mounted) Navigator.pop(context, tripId);
     } catch (e) {
-      setState(() { _requesting = false; _error = 'Error al pedir el viaje: $e'; });
+      setState(() {
+        _requesting = false;
+        _error = 'Error al pedir el viaje: $e';
+      });
     }
   }
 
@@ -297,11 +357,16 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
         children: [
           Positioned.fill(
             child: (_loadingLocation || !_showMap)
-                ? const Center(child: CircularProgressIndicator(color: Colors.black))
+                ? const Center(
+                    child: CircularProgressIndicator(color: AppColors.ink),
+                  )
                 : Opacity(
                     opacity: _mapReady ? 1 : 0,
                     child: GoogleMap(
-                      initialCameraPosition: CameraPosition(target: _pickup, zoom: 15),
+                      initialCameraPosition: CameraPosition(
+                        target: _pickup,
+                        zoom: 15,
+                      ),
                       onMapCreated: (controller) {
                         _mapController = controller;
                         Future.delayed(const Duration(milliseconds: 300), () {
@@ -319,7 +384,7 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
                               Polyline(
                                 polylineId: const PolylineId('route'),
                                 points: _routePoints,
-                                color: Colors.black,
+                                color: AppColors.ink,
                                 width: 4,
                               ),
                             }
@@ -336,14 +401,20 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
                             });
                             if (_destination != null) _loadRoute();
                           },
-                          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
-                          infoWindow: const InfoWindow(title: 'Punto de recogida'),
+                          icon: BitmapDescriptor.defaultMarkerWithHue(
+                            BitmapDescriptor.hueAzure,
+                          ),
+                          infoWindow: const InfoWindow(
+                            title: 'Punto de recogida',
+                          ),
                         ),
                         if (_destination != null)
                           Marker(
                             markerId: const MarkerId('destination'),
                             position: _destination!,
-                            icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet),
+                            icon: BitmapDescriptor.defaultMarkerWithHue(
+                              BitmapDescriptor.hueViolet,
+                            ),
                             infoWindow: const InfoWindow(title: 'Destino'),
                           ),
                       },
@@ -353,8 +424,10 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
           if (!_mapReady && !_loadingLocation && _showMap)
             const Positioned.fill(
               child: ColoredBox(
-                color: Colors.white,
-                child: Center(child: CircularProgressIndicator(color: Colors.black)),
+                color: AppColors.paper,
+                child: Center(
+                  child: CircularProgressIndicator(color: AppColors.ink),
+                ),
               ),
             ),
           Positioned(
@@ -363,7 +436,10 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
             right: 0,
             child: SafeArea(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
                 child: _buildSearchCard(),
               ),
             ),
@@ -381,18 +457,37 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
       bottom: 0,
       child: Container(
         decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.only(topLeft: Radius.circular(24), topRight: Radius.circular(24)),
-          boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 16, offset: Offset(0, -4))],
+          color: AppColors.paper,
+          borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(24),
+            topRight: Radius.circular(24),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black26,
+              blurRadius: 16,
+              offset: Offset(0, -4),
+            ),
+          ],
         ),
-        padding: EdgeInsets.fromLTRB(20, 20, 20, MediaQuery.of(context).padding.bottom + 20),
+        padding: EdgeInsets.fromLTRB(
+          20,
+          20,
+          20,
+          MediaQuery.of(context).padding.bottom + 20,
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Tu viaje', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Text(
+              'Tu viaje',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 12),
             _buildWhenToggle(),
+            const SizedBox(height: 12),
+            _buildPassengerCountSelector(),
             if (_scheduledTime != null) ...[
               const SizedBox(height: 10),
               InkWell(
@@ -400,15 +495,18 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
                 borderRadius: BorderRadius.circular(8),
                 child: Row(
                   children: [
-                    const Icon(Icons.schedule, size: 16, color: Colors.black87),
+                    const Icon(Icons.schedule, size: 16, color: AppColors.ink),
                     const SizedBox(width: 14),
                     Expanded(
                       child: Text(
                         'Recogida: ${_formatTime12h(_scheduledTime!)}',
-                        style: const TextStyle(fontSize: 14, color: Colors.black87),
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: AppColors.ink,
+                        ),
                       ),
                     ),
-                    const Icon(Icons.edit, size: 14, color: Colors.black45),
+                    const Icon(Icons.edit, size: 14, color: AppColors.muted),
                   ],
                 ),
               ),
@@ -424,19 +522,31 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: (_requesting || _destination == null) ? null : _requestRide,
-                style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                onPressed: (_requesting || _destination == null)
+                    ? null
+                    : _requestRide,
+                style: ElevatedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(52),
+                ),
                 child: _requesting
                     ? const SizedBox(
                         height: 20,
                         width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.paper,
+                        ),
                       )
                     : Text(
                         _destination == null
                             ? 'Elige un destino'
-                            : (_scheduledTime != null ? 'Programar viaje' : 'Confirmar viaje'),
-                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                            : (_scheduledTime != null
+                                  ? 'Programar viaje'
+                                  : 'Confirmar viaje'),
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
               ),
             ),
@@ -446,19 +556,69 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
     );
   }
 
+  Widget _buildPassengerCountSelector() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+      decoration: BoxDecoration(
+        color: AppColors.paperMuted,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.people_alt_outlined,
+            size: 20,
+            color: AppColors.ink,
+          ),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              'Viaje para',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+            ),
+          ),
+          DropdownButton<int>(
+            value: _passengerCount,
+            menuMaxHeight: 250,
+            underline: const SizedBox.shrink(),
+            items: [
+              for (var count = 1; count <= 45; count++)
+                DropdownMenuItem(
+                  value: count,
+                  child: Text(
+                    '$count ${count == 1 ? 'pasajero' : 'pasajeros'}',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+            ],
+            onChanged: (value) {
+              if (value != null) setState(() => _passengerCount = value);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildSearchCard() {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.paper,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 12, offset: Offset(0, 2))],
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black26,
+            blurRadius: 12,
+            offset: Offset(0, 2),
+          ),
+        ],
       ),
       padding: const EdgeInsets.all(12),
       child: Column(
         children: [
           _searchField(
             icon: Icons.radio_button_checked,
-            iconColor: Colors.black,
+            iconColor: AppColors.ink,
             label: _pickupLabel,
             onTap: _searchPickup,
           ),
@@ -468,7 +628,7 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
           ),
           _searchField(
             icon: Icons.square_rounded,
-            iconColor: Colors.black,
+            iconColor: AppColors.ink,
             label: _destinationLabel ?? '¿A dónde vas?',
             placeholder: _destinationLabel == null,
             onTap: _searchDestination,
@@ -498,7 +658,7 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 fontSize: 15,
-                color: placeholder ? Colors.black45 : Colors.black87,
+                color: placeholder ? AppColors.muted : AppColors.ink,
                 fontWeight: placeholder ? FontWeight.normal : FontWeight.w500,
               ),
             ),

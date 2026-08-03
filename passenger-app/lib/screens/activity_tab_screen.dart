@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/trip_service.dart';
+import '../theme/app_theme.dart';
 
 /// Pestaña "Actividad": historial de viajes del pasajero, mas recientes
 /// primero.
@@ -42,11 +43,11 @@ class _ActivityTabScreenState extends State<ActivityTabScreen> {
   Color _statusColor(String? status) {
     switch (status) {
       case 'completed':
-        return Colors.green;
+        return AppColors.green;
       case 'cancelled':
-        return Colors.red;
+        return AppColors.red;
       default:
-        return Colors.grey;
+        return AppColors.muted;
     }
   }
 
@@ -74,7 +75,7 @@ class _ActivityTabScreenState extends State<ActivityTabScreen> {
                 future: _tripsFuture,
                 builder: (context, snapshot) {
                   if (snapshot.connectionState != ConnectionState.done) {
-                    return const Center(child: CircularProgressIndicator(color: Colors.black));
+                    return const Center(child: CircularProgressIndicator(color: AppColors.ink));
                   }
                   if (snapshot.hasError) {
                     return ListView(
@@ -95,7 +96,7 @@ class _ActivityTabScreenState extends State<ActivityTabScreen> {
                           child: Center(
                             child: Text(
                               'Aún no tienes viajes.',
-                              style: TextStyle(color: Colors.black54, fontSize: 15),
+                              style: TextStyle(color: AppColors.muted, fontSize: 15),
                             ),
                           ),
                         ),
@@ -105,7 +106,7 @@ class _ActivityTabScreenState extends State<ActivityTabScreen> {
                   return ListView.separated(
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                     itemCount: trips.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    separatorBuilder: (_, _) => const Divider(height: 1),
                     itemBuilder: (context, index) {
                       final trip = trips[index].value;
                       final pickup = trip['pickupAddress'] as String? ?? 'Punto de partida';
@@ -117,8 +118,8 @@ class _ActivityTabScreenState extends State<ActivityTabScreen> {
                           children: [
                             Container(
                               padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(color: Colors.grey.shade100, shape: BoxShape.circle),
-                              child: const Icon(Icons.local_taxi, color: Colors.black),
+                              decoration: const BoxDecoration(color: AppColors.paperMuted, shape: BoxShape.circle),
+                              child: const Icon(Icons.local_taxi, color: AppColors.ink),
                             ),
                             const SizedBox(width: 14),
                             Expanded(
@@ -146,7 +147,7 @@ class _ActivityTabScreenState extends State<ActivityTabScreen> {
                                   const SizedBox(height: 2),
                                   Text(
                                     trip['driverName'] as String? ?? 'Sin conductor asignado',
-                                    style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                                    style: const TextStyle(fontSize: 13, color: AppColors.muted),
                                   ),
                                   const SizedBox(height: 10),
                                   _RoutePoint(icon: Icons.circle, iconSize: 8, label: pickup),
@@ -193,7 +194,7 @@ class _RoutePoint extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.only(top: 4),
-          child: Icon(icon, size: iconSize, color: Colors.black87),
+          child: Icon(icon, size: iconSize, color: AppColors.ink),
         ),
         const SizedBox(width: 10),
         Expanded(
@@ -201,7 +202,7 @@ class _RoutePoint extends StatelessWidget {
             label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: 13, color: Colors.grey.shade800),
+            style: const TextStyle(fontSize: 13, color: AppColors.ink),
           ),
         ),
       ],

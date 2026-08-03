@@ -7,6 +7,7 @@ import 'preset_places_screen.dart';
 import 'request_ride_screen.dart';
 import '../services/trip_service.dart';
 import '../widgets/support_button.dart';
+import '../theme/app_theme.dart';
 
 /// Pestaña "Inicio": mapa de fondo centrado en la ubicacion actual, con el
 /// buscador de destino flotando arriba (igual que las apps de viajes
@@ -138,7 +139,7 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
       children: [
         Positioned.fill(
           child: (_loadingLocation || !_showMap)
-              ? const Center(child: CircularProgressIndicator(color: Colors.black))
+              ? const Center(child: CircularProgressIndicator(color: AppColors.ink))
               : Opacity(
                   opacity: _mapReady ? 1 : 0,
                   child: GoogleMap(
@@ -161,8 +162,8 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
         if (!_mapReady && !_loadingLocation && _showMap)
           const Positioned.fill(
             child: ColoredBox(
-              color: Colors.white,
-              child: Center(child: CircularProgressIndicator(color: Colors.black)),
+              color: AppColors.paper,
+              child: Center(child: CircularProgressIndicator(color: AppColors.ink)),
             ),
           ),
         Positioned(
@@ -199,11 +200,11 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
                       ),
                       child: Row(
                         children: [
-                          const Icon(Icons.search, color: Colors.black87),
+                          const Icon(Icons.search, color: AppColors.ink),
                           const SizedBox(width: 12),
                           Text(
                             '¿A dónde vas?',
-                            style: TextStyle(fontSize: 16, color: Colors.grey.shade700),
+                            style: const TextStyle(fontSize: 16, color: AppColors.muted),
                           ),
                         ],
                       ),
@@ -239,8 +240,8 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
                 Expanded(
                   child: FloatingActionButton.extended(
                     heroTag: 'sport-venues-fab',
-                    backgroundColor: Colors.white,
-                    foregroundColor: Colors.black,
+                    backgroundColor: AppColors.ink,
+                    foregroundColor: Colors.white,
                     icon: const Icon(Icons.sports_soccer, size: 20),
                     label: const Text(
                       'Sedes deportivas',
@@ -255,8 +256,8 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
                 Expanded(
                   child: FloatingActionButton.extended(
                     heroTag: 'hotels-fab',
-                    backgroundColor: Colors.white,
-                    foregroundColor: Colors.black,
+                    backgroundColor: AppColors.ink,
+                    foregroundColor: Colors.white,
                     icon: const Icon(Icons.hotel, size: 20),
                     label: const Text(
                       'Hoteles',
@@ -287,7 +288,7 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
       ),
       child: Row(
         children: [
-          const Icon(Icons.schedule, color: Colors.black87),
+          const Icon(Icons.schedule, color: AppColors.ink),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
