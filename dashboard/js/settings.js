@@ -21,20 +21,20 @@ const UPDATE_APPS = [
 ];
 
 const BRAND_APPS = [
-  { key: 'driver', label: 'App de conductores', defaultName: 'App de conductores' },
-  { key: 'passenger', label: 'App de pasajeros', defaultName: 'App de pasajeros' },
+  { key: 'driver', label: 'App de conductores', defaultName: 'APL Conductores' },
+  { key: 'passenger', label: 'App de pasajeros', defaultName: 'APL Pasajeros' },
 ];
 
 let currentBuilds = {}; // buildField -> numero
 let currentAppBranding = {};
 let appDownloadUrls = {};
-let currentDashboardName = 'Panel de Flota';
+let currentDashboardName = 'APL Logistic';
 let currentDashboardLogoUrl = '';
 let dashboardUsers = [];
 let dashboardUserCreateOpen = false;
 
 function applyDashboardName(name) {
-  const value = name || 'Panel de Flota';
+  const value = name || 'APL Logistic';
   document.querySelectorAll('[data-dashboard-name]').forEach((element) => {
     element.textContent = value;
   });
@@ -44,7 +44,7 @@ function applyDashboardName(name) {
 // El nombre del dashboard es publico para que tambien se muestre antes de
 // iniciar sesion, pero solo una cuenta de administrador puede modificarlo.
 db.ref('config/dashboardName').on('value', (snapshot) => {
-  currentDashboardName = snapshot.val() || 'Panel de Flota';
+  currentDashboardName = snapshot.val() || 'APL Logistic';
   applyDashboardName(currentDashboardName);
   if (settingsSubscribed) renderSettings();
 });
@@ -59,7 +59,7 @@ function applyDashboardLogo(url) {
     element.style.backgroundImage = url ? `url("${url}")` : '';
     element.style.backgroundSize = 'cover';
     element.style.backgroundPosition = 'center';
-    element.textContent = url ? '' : 'F';
+    element.textContent = url ? '' : 'APL';
   });
 }
 
@@ -436,7 +436,7 @@ function appBrandingCardHtml(app) {
   const downloadUrl = appDownloadUrls[app.key] || '';
   const icon = branding.iconUrl
     ? `<img class="app-branding-icon" src="${escapeHtml(branding.iconUrl)}" alt="Ícono de ${escapeHtml(app.label)}" />`
-    : '<span class="app-branding-icon app-branding-icon-placeholder">▣</span>';
+    : '<img class="app-branding-icon" src="assets/apl-mark.png" alt="Ícono APL" />';
   return `
     <div class="app-branding-block">
       <div class="app-branding-header">${icon}<b>${escapeHtml(app.label)}</b></div>

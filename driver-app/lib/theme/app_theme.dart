@@ -5,8 +5,7 @@ abstract final class AppColors {
   static const inkSurface = Color(0xFF102426);
   static const paper = Color(0xFFF5F7F3);
   static const paperMuted = Color(0xFFE9EEEA);
-  // Acento neutro: evita el verde fosforescente y mantiene la interfaz calmada.
-  static const lime = Color(0xFFF5F7F3);
+  static const lime = Color(0xFFC8F267);
   static const green = Color(0xFF20B879);
   static const amber = Color(0xFFF5B94C);
   static const red = Color(0xFFE96B61);

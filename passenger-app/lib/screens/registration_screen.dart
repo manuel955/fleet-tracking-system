@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import '../config.dart';
 import '../services/passenger_service.dart';
+import '../theme/app_theme.dart';
 
 /// Registro del pasajero (una sola vez): nombre, telefono y foto de la
 /// credencial (DNI/carnet). Sin validacion biometrica -- la foto solo
@@ -101,6 +102,28 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           child: ListView(
             padding: const EdgeInsets.all(20),
             children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Image.asset(
+                    'assets/branding/apl-mark.png',
+                    width: 52,
+                    height: 52,
+                    fit: BoxFit.cover,
+                  ),
+                  const SizedBox(width: 12),
+                  const Text(
+                    'APL Logistic',
+                    style: TextStyle(
+                      color: AppColors.ink,
+                      fontSize: 19,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.6,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
               const Text(
                 'Completa tus datos',
                 style: TextStyle(

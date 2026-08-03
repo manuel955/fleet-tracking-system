@@ -1510,8 +1510,8 @@ body {
   box-shadow: none;
 }
 .topbar .brand-home { align-items: center; gap: 14px; }
-.topbar .brand-icon { width: 52px; height: 52px; border-radius: 15px; background: #f5f7f3 !important; background-image: none !important; color: #081618; font-size: 0; }
-.topbar .brand-icon::before { content: 'APL'; font: 700 16px 'Instrument Sans', var(--font); letter-spacing: -.08em; }
+.topbar .brand-icon { width: 52px; height: 52px; border-radius: 15px; background: #081618; background-image: url('../assets/apl-mark.png'); background-size: cover; background-position: center; color: transparent; font-size: 0; }
+.topbar .brand-icon::before { content: ''; }
 .topbar .brand-text { font-family: 'Instrument Sans', var(--font); font-size: 21px; line-height: 1.05; }
 .topbar .brand-home::after { content: 'Operaciones'; position: absolute; margin: 38px 0 0 66px; color: #76918d; font-size: 12px; letter-spacing: .02em; }
 .control-copy { display: flex; flex-direction: column; gap: 8px; margin-top: 68px; }
@@ -1634,6 +1634,19 @@ body {
   .stat-card strong { font-size: 23px; }
   .sidebar { order: 2; min-height: 420px; }
   .drivers-admin-view, .settings-view { border-radius: 0; }
+}
+
+/* Marca APL compartida con la app del conductor. El estilo en línea que
+   aplica settings.js sigue teniendo prioridad cuando el administrador carga
+   un logo personalizado desde Configuración. */
+.brand-icon {
+  background-color: #081618;
+  background-image: url('../assets/apl-mark.png');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  color: transparent;
+  font-size: 0;
 }
 
 /* Correcciones de legibilidad y controles del mapa. */

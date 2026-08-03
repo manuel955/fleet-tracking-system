@@ -75,7 +75,7 @@ jobs:
                   uploaded_icon.convert('RGBA').save(icon, 'PNG')
               source_icon.unlink(missing_ok=True)
               manifest = root / 'android/app/src/main/AndroidManifest.xml'
-              manifest.write_text(manifest.read_text().replace('android:icon="@mipmap/ic_launcher"', 'android:icon="@drawable/app_branding_icon"'))
+              manifest.write_text(re.sub(r'android:icon="[^"]+"', 'android:icon="@drawable/app_branding_icon"', manifest.read_text(), count=1))
           PY
 
       - name: Restore the existing Android signing key

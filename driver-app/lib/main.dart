@@ -61,7 +61,7 @@ class FleetDriverApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Fleet Driver App',
+      title: 'APL Conductores',
       theme: buildAppTheme(),
       home: const _UpdateGate(
         appName: 'la app de conductores',

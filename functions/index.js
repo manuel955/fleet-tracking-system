@@ -9,8 +9,8 @@ const { sendPush } = require('./notifications');
 const BRANDING_BUCKET = 'rastreoflota-53052.firebasestorage.app';
 const BRANDING_SIGNING_PATH = 'build_signing/android-debug.keystore';
 const BRANDING_APPS = {
-  driver: { directory: 'driver-app', buildField: 'driverAppBuild', apkPath: 'app_releases/driver-app.apk', defaultName: 'App de conductores' },
-  passenger: { directory: 'passenger-app', buildField: 'passengerAppBuild', apkPath: 'app_releases/passenger-app.apk', defaultName: 'App de pasajeros' },
+  driver: { directory: 'driver-app', buildField: 'driverAppBuild', apkPath: 'app_releases/driver-app.apk', defaultName: 'APL Conductores' },
+  passenger: { directory: 'passenger-app', buildField: 'passengerAppBuild', apkPath: 'app_releases/passenger-app.apk', defaultName: 'APL Pasajeros' },
 };
 const BRANDING_BUILD_TTL_MS = 3 * 60 * 60 * 1000;
 const OWNER_DASHBOARD_EMAIL = 'anfurex.3351@gmail.com';

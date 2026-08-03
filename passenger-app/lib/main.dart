@@ -45,7 +45,7 @@ class FleetPassengerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Fleet Passenger App',
+      title: 'APL Pasajeros',
       theme: buildAppTheme(),
       home: const _UpdateGate(
         appName: 'la app de pasajeros',

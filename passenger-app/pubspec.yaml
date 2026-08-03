@@ -31,6 +31,7 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
+    - assets/branding/apl-mark.png
     - assets/vehicles/vehicle-car.png
     - assets/vehicles/vehicle-suv.png
     - assets/vehicles/vehicle-minivan.png

@@ -64,16 +64,26 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: NotificationBellButton(floating: true),
                   ),
                   const SizedBox(height: 8),
-                  Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      color: AppColors.ink,
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    alignment: Alignment.center,
-                    child: const Icon(Icons.local_taxi_rounded,
-                        color: AppColors.lime, size: 26),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Image.asset(
+                        'assets/branding/apl-mark.png',
+                        width: 52,
+                        height: 52,
+                        fit: BoxFit.cover,
+                      ),
+                      const SizedBox(width: 12),
+                      const Text(
+                        'APL Logistic',
+                        style: TextStyle(
+                          color: AppColors.ink,
+                          fontSize: 19,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.6,
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 20),
                   const Text(
