@@ -94,13 +94,19 @@ async function createFakeDrivers(n) {
     const id = `sim_driver_${RUN_ID}_${i}`;
     ids.push(id);
     updates[id] = {
-      name: `Conductor simulado ${i}`,
+      name: `PRUEBA VIAJE - Conductor ${i}`,
       phone: `+51900${String(i).padStart(6, '0')}`,
       plate: `SIM-${String(i).padStart(3, '0')}`,
+      approvalStatus: 'approved',
       status: 'online',
       lat: jitter(HUB.lat),
       lng: jitter(HUB.lng),
       lastUpdate: Date.now(),
+      vehicleBrand: 'Test',
+      vehicleColor: 'Plata',
+      vehicleSeats: 4,
+      vehicleType: 'Auto',
+      testRun: `live-100-trips-${RUN_ID}`,
     };
   }
   await db.ref('drivers').update(updates);
