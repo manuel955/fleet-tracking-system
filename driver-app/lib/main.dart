@@ -13,7 +13,6 @@ import 'screens/active_trip_screen.dart';
 import 'screens/driver_registration_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/pending_approval_screen.dart';
-import 'screens/notifications_screen.dart';
 import 'services/auth_service.dart';
 import 'services/driver_profile_service.dart';
 import 'services/location_service.dart';
@@ -991,7 +990,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
     }
 
     // Mapa a pantalla completa con overlays flotantes (perfil, estado,
-    // notificaciones, soporte y boton de turno) -- mismo patron visual que
+    // soporte y boton de turno) -- mismo patron visual que
     // Uber Conductor, en vez del AppBar + mapa chico.
     return Scaffold(
       body: Stack(
@@ -1022,8 +1021,6 @@ class _DriverHomePageState extends State<DriverHomePage> {
                         const Column(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            NotificationBellButton(floating: true),
-                            SizedBox(height: 8),
                             SupportButton(),
                           ],
                         ),
