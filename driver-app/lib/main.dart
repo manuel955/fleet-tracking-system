@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:google_maps_flutter_android/google_maps_flutter_android.dart';
@@ -175,7 +174,6 @@ class _DriverHomePageState extends State<DriverHomePage> {
   bool _tracking = false;
   bool _loading = true;
   String? _driverId;
-  PermissionStatus? _whenInUseStatus;
   PermissionStatus? _alwaysStatus;
   PermissionStatus? _notificationStatus;
 
@@ -704,11 +702,10 @@ class _DriverHomePageState extends State<DriverHomePage> {
   Future<void> _refreshPermissionStatus() async {
     if (!_supportsMobileServices) return;
 
-    final whenInUse = await Permission.locationWhenInUse.status;
+    await Permission.locationWhenInUse.status;
     final always = await Permission.locationAlways.status;
     final notification = await Permission.notification.status;
     setState(() {
-      _whenInUseStatus = whenInUse;
       _alwaysStatus = always;
       _notificationStatus = notification;
     });
@@ -904,15 +901,6 @@ class _DriverHomePageState extends State<DriverHomePage> {
     });
   }
 
-  void _copyDni() {
-    final dni = _driverProfile?['dni'] as String?;
-    if (dni == null) return;
-    Clipboard.setData(ClipboardData(text: dni));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('DNI copiado')),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -1003,9 +991,8 @@ class _DriverHomePageState extends State<DriverHomePage> {
     }
 
     // Mapa a pantalla completa con overlays flotantes (perfil, estado,
-    // registro de actividad, boton de turno) -- mismo patron visual que
-    // Uber Conductor, en vez del AppBar + mapa chico + lista de logs
-    // siempre visible que tenia antes.
+    // notificaciones, soporte y boton de turno) -- mismo patron visual que
+    // Uber Conductor, en vez del AppBar + mapa chico.
     return Scaffold(
       body: Stack(
         children: [
@@ -1032,18 +1019,12 @@ class _DriverHomePageState extends State<DriverHomePage> {
                           padding: const EdgeInsets.only(top: 4),
                           child: _statusPill(),
                         ),
-                        Column(
+                        const Column(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            _circleIconButton(
-                              icon: Icons.receipt_long_outlined,
-                              tooltip: 'Registro de actividad',
-                              onTap: _showActivityLog,
-                            ),
-                            const SizedBox(height: 8),
-                            const NotificationBellButton(floating: true),
-                            const SizedBox(height: 8),
-                            const SupportButton(),
+                            NotificationBellButton(floating: true),
+                            SizedBox(height: 8),
+                            SupportButton(),
                           ],
                         ),
                       ],
@@ -1251,35 +1232,6 @@ class _DriverHomePageState extends State<DriverHomePage> {
     );
   }
 
-  void _showActivityLog() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.only(
-            topLeft: Radius.circular(20), topRight: Radius.circular(20)),
-      ),
-      builder: (context) {
-        return SizedBox(
-          height: MediaQuery.of(context).size.height * 0.6,
-          child: Column(
-            children: [
-              const Padding(
-                padding: EdgeInsets.all(16),
-                child: Text('Registro de actividad',
-                    style:
-                        TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-              ),
-              _buildStatusChips(),
-              const Divider(height: 1),
-              Expanded(child: _buildLogList()),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
   Widget _buildProfileForm() {
     return Form(
       key: _profileFormKey,
@@ -1345,54 +1297,6 @@ class _DriverHomePageState extends State<DriverHomePage> {
     );
   }
 
-  Widget _buildStatusChips() {
-    return Container(
-      width: double.infinity,
-      color: Colors.grey.shade100,
-      padding: const EdgeInsets.all(10),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 6,
-        children: [
-          _chip('DNI: ${_driverProfile?['dni'] ?? '-'}', Colors.blueGrey,
-              onTap: _copyDni),
-          if ((_driverProfile?['assignedPlace'] as Map?)?['name'] != null)
-            _chip(
-              'Asignado: ${(_driverProfile!['assignedPlace'] as Map)['name']}',
-              Colors.deepPurple,
-            ),
-          _chip(
-            'Ubicación: ${_permissionLabel()}',
-            _alwaysStatus?.isGranted == true ? Colors.green : Colors.orange,
-          ),
-          _chip(
-            'Notificaciones: ${_notificationStatus?.isGranted == true ? 'OK' : 'Falta'}',
-            _notificationStatus?.isGranted == true ? Colors.green : Colors.red,
-          ),
-          _chip(_tracking ? 'En turno' : 'Fuera de turno',
-              _tracking ? Colors.green : Colors.grey),
-        ],
-      ),
-    );
-  }
-
-  String _permissionLabel() {
-    if (_alwaysStatus?.isGranted == true) return 'Siempre';
-    if (_whenInUseStatus?.isGranted == true) return 'Solo en uso';
-    return 'No otorgado';
-  }
-
-  Widget _chip(String label, Color color, {VoidCallback? onTap}) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Chip(
-        label: Text(label,
-            style: const TextStyle(color: Colors.white, fontSize: 12)),
-        backgroundColor: color,
-      ),
-    );
-  }
-
   Widget _buildMap() {
     final center = _currentLatLng ?? const LatLng(19.4326, -99.1332);
     return GoogleMap(
@@ -1401,7 +1305,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
       myLocationEnabled: true,
       myLocationButtonEnabled: true,
       zoomControlsEnabled: false,
-      // Deja libre la franja de arriba (perfil/estado/log) y la de abajo
+      // Deja libre la franja de arriba (perfil/estado) y la de abajo
       // (boton de turno) para que el control nativo de "mi ubicacion" no
       // quede tapado por los overlays flotantes.
       padding: const EdgeInsets.only(top: 110, bottom: 110),
@@ -1416,24 +1320,4 @@ class _DriverHomePageState extends State<DriverHomePage> {
     );
   }
 
-  Widget _buildLogList() {
-    if (_logs.isEmpty) {
-      return const Center(child: Text('Sin actividad todavía.'));
-    }
-    return ListView.builder(
-      itemCount: _logs.length,
-      itemBuilder: (context, index) {
-        final entry = _logs[index];
-        final time = '${entry.time.hour.toString().padLeft(2, '0')}:'
-            '${entry.time.minute.toString().padLeft(2, '0')}:'
-            '${entry.time.second.toString().padLeft(2, '0')}';
-        return ListTile(
-          dense: true,
-          leading: Text(time,
-              style: const TextStyle(fontSize: 12, color: Colors.grey)),
-          title: Text(entry.message, style: const TextStyle(fontSize: 13)),
-        );
-      },
-    );
-  }
 }
