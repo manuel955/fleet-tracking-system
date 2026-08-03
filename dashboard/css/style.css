@@ -1709,8 +1709,10 @@ body { background: #f1f2f1; }
 .layout,
 .drivers-admin-view,
 .settings-view { background: #f5f6f5; }
+.driver-card,
 .driver-card:hover,
 .driver-card-header:hover { background: transparent; }
+.driver-card { flex: 0 0 auto; }
 .driver-card.expanded,
 .driver-card.selected { border-color: rgba(245, 247, 243, .18); }
 .map-stage { box-shadow: 0 16px 34px rgba(0, 0, 0, .10); }
