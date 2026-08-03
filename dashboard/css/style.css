@@ -1720,6 +1720,34 @@ body { background: #f1f2f1; }
 .map-center-btn:hover { box-shadow: 0 12px 25px rgba(0, 0, 0, .18); }
 .settings-section-link:hover { background: #eef0ef; }
 
+/* Ficha de conductor: una sola columna de lectura para etiquetas, valores y acciones. */
+.driver-card .detail-section,
+.driver-card .map-place-assignment,
+.driver-card .contact-actions { padding-left: 18px; }
+.driver-card .detail-section .row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: baseline;
+}
+.driver-card .map-place-assignment {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 10px;
+}
+.driver-card .map-place-assignment select,
+.driver-card .map-place-assignment button { min-height: 46px; box-sizing: border-box; }
+.driver-card .map-place-assignment select { width: 100%; }
+.driver-card .map-place-assignment button { white-space: nowrap; padding-inline: 14px; }
+.driver-card .contact-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.driver-card .call-btn,
+.driver-card .whatsapp-btn { min-height: 42px; box-sizing: border-box; }
+
 /* Fallback real para navegadores que bloquean la Fullscreen API: ocupa toda la ventana */
 #map-view.map-fullscreen-fallback {
   position: fixed !important;
