@@ -1703,6 +1703,23 @@ body {
 #map-view:fullscreen .map-stage #map,
 #map-view.map-fullscreen-fallback .map-stage #map { min-height: 0; height: 100%; }
 
+/* Pulido visual: sombras neutras y hover sin velo verdoso. El verde queda
+   reservado para estados operativos y acciones, no para superficies. */
+body { background: #f1f2f1; }
+.layout,
+.drivers-admin-view,
+.settings-view { background: #f5f6f5; }
+.driver-card:hover,
+.driver-card-header:hover { background: transparent; }
+.driver-card.expanded,
+.driver-card.selected { border-color: rgba(245, 247, 243, .18); }
+.map-stage { box-shadow: 0 16px 34px rgba(0, 0, 0, .10); }
+.map-fullscreen-btn,
+.map-center-btn { box-shadow: 0 8px 20px rgba(0, 0, 0, .14); }
+.map-fullscreen-btn:hover,
+.map-center-btn:hover { box-shadow: 0 12px 25px rgba(0, 0, 0, .18); }
+.settings-section-link:hover { background: #eef0ef; }
+
 /* Fallback real para navegadores que bloquean la Fullscreen API: ocupa toda la ventana */
 #map-view.map-fullscreen-fallback {
   position: fixed !important;
