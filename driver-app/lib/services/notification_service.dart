@@ -141,9 +141,11 @@ class NotificationService {
   // canal general (sonido normal, sin el patron fuerte de "viaje asignado")
   // + aviso hablado, para que el conductor lo note aunque no este mirando
   // el telefono en ese momento.
-  static Future<void> showTripUpdated() async {
+  static Future<void> showTripUpdated({String? destinationAddress}) async {
     await showSimple('Viaje actualizado', 'El pasajero cambió el destino del viaje.');
-    _speak('Cambio de destino');
+    await _speak(destinationAddress == null || destinationAddress.trim().isEmpty
+        ? 'Cambio de destino'
+        : 'Cambio de destino. Nuevo destino: ${destinationAddress.trim()}');
   }
 
   static Future<void> showPlaceAssigned(String name, String type) async {

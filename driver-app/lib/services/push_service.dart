@@ -27,7 +27,9 @@ Future<void> pushBackgroundHandler(RemoteMessage message) async {
       break;
     case 'trip_updated':
       if (await _isActiveTrip(message.data['tripId']?.toString())) {
-        await NotificationService.showTripUpdated();
+        await NotificationService.showTripUpdated(
+          destinationAddress: message.data['destinationAddress']?.toString(),
+        );
       }
       break;
     case 'place_assigned':

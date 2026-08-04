@@ -3,9 +3,8 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:google_maps_flutter_android/google_maps_flutter_android.dart';
-import 'package:google_maps_flutter_platform_interface/google_maps_flutter_platform_interface.dart';
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart'
+    show MapboxOptions;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'config.dart';
@@ -16,6 +15,7 @@ import 'screens/pending_approval_screen.dart';
 import 'services/auth_service.dart';
 import 'services/driver_profile_service.dart';
 import 'services/location_service.dart';
+import 'services/map_adapter.dart';
 import 'services/notification_service.dart';
 import 'services/notification_inbox_service.dart';
 import 'services/push_service.dart';
@@ -33,14 +33,8 @@ bool get _supportsMobileServices =>
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // La app crea varios GoogleMap distintos (pantalla principal, viaje
-  // entrante, viaje activo). El modo de renderizado por defecto (virtual
-  // display) puede dejar el segundo/tercer mapa en blanco en algunos
-  // dispositivos (visto en un Huawei P30 Pro); "hybrid composition" es la
-  // alternativa oficialmente recomendada para esto.
-  final mapsImplementation = GoogleMapsFlutterPlatform.instance;
-  if (mapsImplementation is GoogleMapsFlutterAndroid) {
-    mapsImplementation.useAndroidViewSurface = true;
+  if (!kIsWeb && AppConfig.mapboxAccessToken.isNotEmpty) {
+    MapboxOptions.setAccessToken(AppConfig.mapboxAccessToken);
   }
 
   // En web solo necesitamos revisar la interfaz local. Estas integraciones
@@ -167,7 +161,7 @@ class DriverHomePage extends StatefulWidget {
 }
 
 class _DriverHomePageState extends State<DriverHomePage> {
-  GoogleMapController? _mapController;
+  MapboxMapController? _mapController;
   LatLng? _currentLatLng;
 
   bool _tracking = false;
@@ -232,7 +226,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
           setState(() => _currentLatLng = LatLng(lat, lng));
 
           // Si una pantalla de viaje (entrante o activo) reemplazo la pantalla
-          // principal, el GoogleMap de ahi ya fue destruido por Flutter aunque
+          // principal, el mapa de ahi ya fue destruido por Flutter aunque
           // este listener (registrado una sola vez en initState) siga vivo.
           // Sin este guard, animateCamera lanza "used after disposed".
           if (!_showingMainScreen) return;
@@ -259,7 +253,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
   }
 
   // Misma condicion que build() usa para decidir si se muestra la
-  // pantalla principal de rastreo (con su GoogleMap) en vez de las
+  // pantalla principal de rastreo (con su mapa) en vez de las
   // pantallas de viaje entrante/activo.
   bool get _showingMainScreen {
     final tripStatus = _tripData?['status'] as String?;
@@ -324,7 +318,10 @@ class _DriverHomePageState extends State<DriverHomePage> {
             if (_tripId == message.data['tripId'] &&
                 const ['accepted', 'arrived_at_pickup', 'in_progress']
                     .contains(_tripData?['status'])) {
-              NotificationService.showTripUpdated();
+              NotificationService.showTripUpdated(
+                destinationAddress:
+                    message.data['destinationAddress']?.toString(),
+              );
             }
             break;
           case 'place_assigned':
@@ -461,6 +458,9 @@ class _DriverHomePageState extends State<DriverHomePage> {
         _driverId = uid;
         _driverProfile = profile;
         _loggedIn = true;
+        _tracking = profile['turno_activo'] == true ||
+            (profile['turno_activo'] == null &&
+                (profile['status'] == 'online' || profile['status'] == 'busy'));
         _loading = false;
       });
 
@@ -473,6 +473,13 @@ class _DriverHomePageState extends State<DriverHomePage> {
         _tripPollTimer =
             Timer.periodic(const Duration(seconds: 5), (_) => _pollForTrip());
         _pollForTrip();
+        // El turno es una decision explicita del conductor y vive separado
+        // del estado de conexion. Si el proceso se cerro, se reconecta y
+        // reanuda el GPS sin pedir un nuevo inicio de turno.
+        final shiftWasActive = profile['turno_activo'] == true ||
+            (profile['turno_activo'] == null &&
+                (profile['status'] == 'online' || profile['status'] == 'busy'));
+        if (shiftWasActive) unawaited(_startShift(resume: true));
       } else {
         await _lockUnapprovedDriver(uid);
       }
@@ -752,29 +759,42 @@ class _DriverHomePageState extends State<DriverHomePage> {
   // presionar nada) apenas la sesion queda resuelta y aprobada. Si algun
   // permiso falta, queda mostrado en la barra de estado y el conductor
   // puede reintentar con el boton "Reintentar inicio de turno".
-  Future<void> _startShift() async {
+  Future<void> _startShift({bool resume = false}) async {
+    if (_driverId == null) return;
+
     final granted = await _requestPermissions();
-    if (!granted) return;
+    if (!granted) {
+      if (!resume && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text(
+                  'Concede los permisos necesarios para iniciar el turno.')),
+        );
+      }
+      if (mounted) setState(() => _tracking = false);
+      return;
+    }
+
+    try {
+      await TripService.setAvailability(_driverId!, online: true);
+    } catch (error) {
+      _addLog('No se pudo iniciar la disponibilidad: $error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text(
+                  'No se pudo iniciar la disponibilidad. Revisa tu conexión e intenta nuevamente.')),
+        );
+      }
+      return;
+    }
 
     if (_supportsMobileServices) await LocationService.start();
+    if (!mounted) return;
     setState(() => _tracking = true);
-    _addLog('Turno iniciado: rastreo en curso.');
-    if (_driverId != null) {
-      try {
-        // Si la app se cerro (crash, deslizar para quitarla de recientes,
-        // reinicio del telefono) con un viaje asignado, currentTripId sigue
-        // apuntando a el -- no hay que pisar 'busy' con 'online' aqui, o el
-        // conductor queda "disponible" en el dashboard mientras el viaje
-        // sigue en curso, y ni el dashboard ni el pasajero pueden saber que
-        // sigue ocupado.
-        final driverNode = await TripService.getMyDriverNode(_driverId!);
-        if (driverNode?['currentTripId'] == null) {
-          await TripService.setAvailability(_driverId!, online: true);
-        }
-      } catch (e) {
-        _addLog('No se pudo actualizar disponibilidad: $e');
-      }
-    }
+    _addLog(resume
+        ? 'Turno reanudado: el cierre de la app no lo termino.'
+        : 'Turno iniciado: rastreo GPS cada 5 segundos.');
   }
 
   // Unica forma de detener el rastreo: el conductor termina su turno a
@@ -796,8 +816,6 @@ class _DriverHomePageState extends State<DriverHomePage> {
       return;
     }
 
-    if (_supportsMobileServices) LocationService.stop();
-    _addLog('Turno terminado por el conductor.');
     if (_driverId != null) {
       try {
         await TripService.setAvailability(_driverId!, online: false);
@@ -805,6 +823,9 @@ class _DriverHomePageState extends State<DriverHomePage> {
         _addLog('No se pudo actualizar disponibilidad: $e');
       }
     }
+
+    if (_supportsMobileServices) LocationService.stop();
+    _addLog('Turno terminado por el conductor.');
 
     setState(() => _tracking = false);
   }
@@ -982,6 +1003,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
         trip: _tripData!,
         tripId: _tripId!,
         currentLatLng: _currentLatLng,
+        onTripStateConflict: _pollForTrip,
         onFinished: () => setState(() {
           _tripId = null;
           _tripData = null;
@@ -1099,7 +1121,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
           ),
           const SizedBox(width: 8),
           Text(
-            online ? 'En línea' : 'Fuera de turno',
+            online ? 'En línea' : 'Desconectado',
             style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
           ),
         ],
@@ -1222,7 +1244,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
           side: const BorderSide(color: AppColors.line),
           minimumSize: const Size.fromHeight(56),
           shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           elevation: 4,
         ),
       ),
@@ -1296,7 +1318,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
 
   Widget _buildMap() {
     final center = _currentLatLng ?? const LatLng(19.4326, -99.1332);
-    return GoogleMap(
+    return MapboxMapView(
       initialCameraPosition: CameraPosition(target: center, zoom: 15),
       onMapCreated: (controller) => _mapController = controller,
       myLocationEnabled: true,
@@ -1316,5 +1338,4 @@ class _DriverHomePageState extends State<DriverHomePage> {
             },
     );
   }
-
 }

@@ -108,6 +108,7 @@ void onServiceStart(ServiceInstance service) async {
   }
 
   Timer? timer;
+  var sendInFlight = false;
 
   service.on('stopService').listen((event) {
     timer?.cancel();
@@ -120,8 +121,15 @@ void onServiceStart(ServiceInstance service) async {
   await _sendCurrentLocation(service);
 
   timer = Timer.periodic(
-    const Duration(seconds: AppConfig.locationIntervalSeconds),
-    (_) => _sendCurrentLocation(service),
+    AppConfig.locationInterval,
+    (_) {
+      // No superponer lecturas GPS/red: si un ciclo tarda mas de 5s, el
+      // siguiente espera al siguiente intervalo. Asi no se multiplican las
+      // escrituras ni los heartbeats por una mala cobertura.
+      if (sendInFlight) return;
+      sendInFlight = true;
+      _sendCurrentLocation(service).whenComplete(() => sendInFlight = false);
+    },
   );
 }
 
@@ -173,29 +181,39 @@ Future<void> _sendCurrentLocation(ServiceInstance service) async {
     final driverId = auth['uid'];
     final token = auth['idToken'];
 
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final heading = position.heading.isFinite ? position.heading : 0.0;
+    final payload = jsonEncode({
+      'lat': position.latitude,
+      'lng': position.longitude,
+      'heading': heading,
+      'lastUpdate': timestamp,
+    });
     final uri = Uri.parse(
       '${AppConfig.firebaseDbUrl}/drivers/$driverId.json?auth=$token',
     );
-
-    final response = await http.patch(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'lat': position.latitude,
-        'lng': position.longitude,
-        'lastUpdate': DateTime.now().millisecondsSinceEpoch,
-      }),
+    final publicLocationUri = Uri.parse(
+      '${AppConfig.firebaseDbUrl}/driverLocations/$driverId.json?auth=$token',
     );
 
-    if (response.statusCode == 200) {
+    // El perfil privado conserva la logica del dashboard/worker y el nodo
+    // publico solo expone las tres coordenadas necesarias al pasajero.
+    final responses = await Future.wait([
+      http.patch(uri, headers: {'Content-Type': 'application/json'}, body: payload),
+      http.patch(publicLocationUri, headers: {'Content-Type': 'application/json'}, body: payload),
+    ]);
+
+    if (responses.every((response) => response.statusCode == 200)) {
       _log(service, 'Enviado a Firebase correctamente.');
       service.invoke('location_update', {
         'lat': position.latitude,
         'lng': position.longitude,
+        'heading': heading,
         'time': DateTime.now().toIso8601String(),
       });
     } else {
-      _log(service, 'Firebase respondió ${response.statusCode}: ${response.body}');
+      final failed = responses.firstWhere((response) => response.statusCode != 200);
+      _log(service, 'Firebase respondió ${failed.statusCode}: ${failed.body}');
     }
   } catch (e) {
     _log(service, 'Error inesperado: $e');

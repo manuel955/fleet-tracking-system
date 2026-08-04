@@ -33,6 +33,8 @@ jobs:
       FLEET_KEYSTORE_PATH: /home/runner/.android/fleet-signing.keystore
       GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
       PASSENGER_GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.PASSENGER_GOOGLE_SERVICES_JSON_BASE64 }}
+      MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
+      MAPBOX_STYLE_URI: ${{ secrets.MAPBOX_STYLE_URI }}
     steps:
       - uses: actions/checkout@v4
 
@@ -106,7 +108,14 @@ jobs:
 
       - name: Build Android release APK
         working-directory: ${{ inputs.app == 'driver' && 'driver-app' || 'passenger-app' }}
-        run: flutter build apk --release
+        run: |
+          if [ -z "$MAPBOX_ACCESS_TOKEN" ]; then
+            echo "Falta MAPBOX_ACCESS_TOKEN; se cancela la publicación para no entregar una app sin mapas."
+            exit 1
+          fi
+          flutter build apk --release \
+            --dart-define=MAPBOX_ACCESS_TOKEN="$MAPBOX_ACCESS_TOKEN" \
+            --dart-define=MAPBOX_STYLE_URI="${MAPBOX_STYLE_URI:-mapbox://styles/mapbox/standard}"
 
       - name: Upload APK through one-time signed URL
         run: |

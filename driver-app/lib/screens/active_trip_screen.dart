@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../config.dart';
 import '../services/directions_service.dart';
+import '../services/map_adapter.dart';
 import '../services/trip_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/labeled_icon_button.dart';
@@ -18,6 +19,10 @@ class ActiveTripScreen extends StatefulWidget {
   final Map<String, dynamic> trip;
   final String tripId;
   final VoidCallback onFinished;
+  // Se ejecuta cuando el backend informa que la pantalla quedo atrasada
+  // respecto al viaje real (por ejemplo, cancelacion desde el dashboard o
+  // un gesto que ya habia llegado al servidor).
+  final Future<void> Function()? onTripStateConflict;
   // Posicion GPS actual del conductor (la misma que ya trackea main.dart en
   // segundo plano), usada solo para exigir cercania real al confirmar
   // "He llegado" -- no se puede confirmar a control remoto.
@@ -28,6 +33,7 @@ class ActiveTripScreen extends StatefulWidget {
     required this.trip,
     required this.tripId,
     required this.onFinished,
+    this.onTripStateConflict,
     this.currentLatLng,
   });
 
@@ -37,7 +43,9 @@ class ActiveTripScreen extends StatefulWidget {
 
 class _ActiveTripScreenState extends State<ActiveTripScreen> {
   bool _busy = false;
-  GoogleMapController? _mapController;
+  // La brújula/recentrado no forma parte de la interfaz operativa.
+  final bool _showMapRecenterControl = false;
+  MapboxMapController? _mapController;
 
   // Ruta real dibujada del conductor hasta el punto de recogida o destino
   // (segun la etapa), igual que en el dashboard: se recalcula con cada
@@ -48,6 +56,8 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
   LatLng? _lastRouteOrigin;
   ({double lat, double lng})? _lastRouteTarget;
   int _routeReqToken = 0;
+  DateTime? _lastRouteRequestedAt;
+  bool _routeRequestInFlight = false;
 
   @override
   void initState() {
@@ -70,10 +80,14 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
         _lastRouteTarget!.lat != target.lat ||
         _lastRouteTarget!.lng != target.lng;
 
-    // El GPS reenvia la posicion cada ~15s aunque el conductor este
-    // detenido; sin este filtro se llamaria a Routes API sin necesidad en
-    // cada envio. Se salta el filtro si el objetivo cambio (ej. paso de
-    // "ir a recoger" a "ir al destino") aunque la posicion sea la misma.
+    // El GPS reenvia la posicion cada ~5s aunque el conductor este detenido.
+    // La ruta visual se recalcula como maximo cada 30s y cuando avanzo 50m.
+    // Se salta el filtro si el objetivo cambio (recogida -> destino).
+    final tooSoon = _lastRouteRequestedAt != null &&
+        DateTime.now().difference(_lastRouteRequestedAt!) <
+            AppConfig.routeRefreshInterval;
+    if (!targetChanged && tooSoon) return;
+    if (_routeRequestInFlight) return;
     if (!force &&
         !targetChanged &&
         _lastRouteOrigin != null &&
@@ -83,13 +97,15 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
               origin.latitude,
               origin.longitude,
             ) <
-            25) {
+            AppConfig.routeRecalculationDistanceMeters) {
       return;
     }
 
     final token = ++_routeReqToken;
+    _routeRequestInFlight = true;
     _lastRouteOrigin = origin;
     _lastRouteTarget = target;
+    _lastRouteRequestedAt = DateTime.now();
     final destination = LatLng(target.lat, target.lng);
 
     try {
@@ -99,6 +115,8 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
     } catch (_) {
       if (token != _routeReqToken || !mounted) return;
       setState(() => _routePoints = [origin, destination]);
+    } finally {
+      _routeRequestInFlight = false;
     }
   }
 
@@ -137,14 +155,12 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
         here.latitude, here.longitude, target.lat, target.lng);
   }
 
-  // Si todavia no hay una posicion GPS disponible (recien se abrio la
-  // pantalla) o el viaje no tiene el punto correspondiente, no se bloquea --
-  // el primer fix de ubicacion tarda unos segundos y no queremos dejar al
-  // conductor sin poder confirmar por eso.
+  // Sin un fix GPS actual no se permite confirmar. Esto evita que una app
+  // recien reabierta pueda finalizar el viaje antes de recuperar la posicion.
   bool get _proximityBlocked {
     if (_proximityTarget == null) return false;
     final distance = _distanceToTargetMeters;
-    if (distance == null) return false;
+    if (distance == null) return true;
     return distance > _proximityRadiusMeters;
   }
 
@@ -194,8 +210,7 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
   // Antes de recoger al pasajero, navega al punto de recogida; ya con el
   // pasajero a bordo, navega al destino (si el pasajero marco uno -- es
   // opcional). No se implementa navegacion propia adentro de la app para
-  // no cargarla de peso: se delega a Google Maps (esta en todos los
-  // telefonos Android, a diferencia de Waze).
+  // no cargarla de peso: se delega a la navegacion externa del telefono.
   ({double lat, double lng})? get _navTarget {
     final trip = widget.trip;
     if (!_headingToPickup) {
@@ -220,13 +235,12 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
     _mapController!.animateCamera(CameraUpdate.newLatLngZoom(here, 16));
   }
 
-  Future<void> _openInGoogleMaps(double lat, double lng) async {
-    final uri = Uri.parse(
-        'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving');
+  Future<void> _openNavigation(double lat, double lng) async {
+    final uri = Uri.parse('geo:$lat,$lng?q=$lat,$lng');
     final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!ok && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo abrir Google Maps.')),
+        const SnackBar(content: Text('No se pudo abrir la navegacion.')),
       );
     }
   }
@@ -236,7 +250,9 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
         ? 'destino'
         : 'punto de recogida';
     final distance = _distanceToTargetMeters;
-    if (distance == null) return 'Acércate al $label para poder confirmar.';
+    if (distance == null) {
+      return 'Esperando una posicion GPS valida para confirmar.';
+    }
     final rounded = (distance / 10).round() * 10;
     return 'Acércate al $label (a ${rounded}m) para poder confirmar.';
   }
@@ -262,6 +278,19 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
       await TripService.advanceTrip(widget.tripId, action.nextStatus);
       if (action.nextStatus == 'completed') {
         widget.onFinished();
+      }
+    } on TripStateConflictException catch (_) {
+      // No dejamos al conductor atrapado en una pantalla antigua. El
+      // callback vuelve a leer currentTripId y trips/{tripId}; si el viaje
+      // avanzo, la tarjeta cambia de etapa, y si fue cancelado/terminado,
+      // la pantalla activa desaparece.
+      await widget.onTripStateConflict?.call();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('El viaje cambio. La pantalla fue actualizada.'),
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
@@ -292,7 +321,7 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
       body: Stack(
         children: [
           Positioned.fill(
-            child: GoogleMap(
+            child: MapboxMapView(
               initialCameraPosition:
                   CameraPosition(target: markerPosition, zoom: 15),
               onMapCreated: (controller) => _mapController = controller,
@@ -335,25 +364,26 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
               ),
             ),
           ),
-          Positioned(
-            top: 0,
-            left: 16,
-            child: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Material(
-                  color: AppColors.paper,
-                  shape: const CircleBorder(),
-                  elevation: 2,
-                  child: IconButton(
-                    icon: const Icon(Icons.my_location, color: AppColors.ink),
-                    tooltip: 'Actualizar posición',
-                    onPressed: _recenterToMyLocation,
+          if (_showMapRecenterControl)
+            Positioned(
+              top: 0,
+              left: 16,
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Material(
+                    color: AppColors.paper,
+                    shape: const CircleBorder(),
+                    elevation: 2,
+                    child: IconButton(
+                      icon: const Icon(Icons.my_location, color: AppColors.ink),
+                      tooltip: 'Actualizar posición',
+                      onPressed: _recenterToMyLocation,
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
           Positioned(
             left: 0,
             right: 0,
@@ -385,14 +415,16 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
                     const SizedBox(height: 4),
                     Text(
                       'Viaje programado para las ${trip['scheduledPickupLabel']}',
-                      style: const TextStyle(fontSize: 13, color: AppColors.muted),
+                      style:
+                          const TextStyle(fontSize: 13, color: AppColors.muted),
                     ),
                   ],
                   if (passengerCount != null && passengerCount > 0) ...[
                     const SizedBox(height: 4),
                     Text(
                       'Viaje para $passengerCount ${passengerCount == 1 ? 'pasajero' : 'pasajeros'}',
-                      style: const TextStyle(fontSize: 13, color: AppColors.muted),
+                      style:
+                          const TextStyle(fontSize: 13, color: AppColors.muted),
                     ),
                   ],
                   const SizedBox(height: 16),
@@ -439,7 +471,7 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
                           label: 'Ruta',
                           color: AppColors.blue,
                           onTap: () =>
-                              _openInGoogleMaps(navTarget.lat, navTarget.lng),
+                              _openNavigation(navTarget.lat, navTarget.lng),
                         ),
                       ],
                     ],
@@ -449,7 +481,7 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
                       const SizedBox(height: 12),
                       Text(
                         _distanceHint(),
-                                style: const TextStyle(
+                        style: const TextStyle(
                             color: AppColors.muted, fontSize: 13),
                       ),
                     ],

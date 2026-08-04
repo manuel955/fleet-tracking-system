@@ -43,9 +43,6 @@
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
             android:resource="@drawable/notification_icon" />
-        <meta-data
-            android:name="com.google.android.geo.API_KEY"
-            android:value="AIzaSyAfPeC1qZW6eKFVz6oFzn_UYFQ5HMS0SsQ" />
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"
             android:foregroundServiceType="location"
@@ -62,12 +59,9 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
-        <!-- Necesario (Android 11+) para poder abrir Google Maps como
-             navegacion externa desde el boton "Navegar" del viaje activo. -->
         <intent>
             <action android:name="android.intent.action.VIEW"/>
-            <data android:scheme="https"/>
+            <data android:scheme="geo"/>
         </intent>
-        <package android:name="com.google.android.apps.maps"/>
     </queries>
 </manifest>

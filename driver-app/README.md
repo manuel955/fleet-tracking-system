@@ -3,8 +3,8 @@
 Version simplificada a proposito: sin formulario de registro. Al abrir la
 app, se autentica de forma anonima contra Firebase (el UID que le asigna
 Firebase es su "ID de conductor"), muestra su posicion en un mapa de
-Google Maps, y al presionar "Iniciar rastreo" empieza a enviar su
-ubicacion en segundo plano cada 15 segundos. Incluye un panel de
+Mapbox, y al presionar "Iniciar rastreo" empieza a enviar su
+ubicacion en segundo plano cada 5 segundos. Incluye un panel de
 "Registro de actividad" en pantalla para ver en tiempo real cada paso
 (permiso, GPS, envio a Firebase) — util porque `print()` no es visible
 cuando el codigo corre en el isolate de segundo plano.
@@ -47,14 +47,9 @@ Agrega dentro de `<manifest>`, antes de `<application>`:
 <uses-permission android:name="android.permission.INTERNET"/>
 ```
 
-Dentro de `<application>`, agrega el servicio en primer plano y la API key
-de Google Maps:
+Dentro de `<application>`, agrega el servicio en primer plano:
 
 ```xml
-<meta-data
-    android:name="com.google.android.geo.API_KEY"
-    android:value="TU_API_KEY_DE_GOOGLE_MAPS"/>
-
 <service
     android:name="id.flutter.flutter_background_service.BackgroundService"
     android:foregroundServiceType="location"
@@ -76,23 +71,18 @@ de Google Maps:
 </array>
 ```
 
-Y en `ios/Runner/AppDelegate.swift`, agrega la key de Google Maps antes de
-`GeneratedPluginRegistrant.register`:
+Mapbox se inicializa desde Dart y no necesita una key en el Manifest ni en
+`AppDelegate.swift`.
 
-```swift
-import GoogleMaps // agregar este import
-
-GMSServices.provideAPIKey("TU_API_KEY_DE_GOOGLE_MAPS")
-```
-
-## 3. Configurar Firebase y Google Maps
+## 3. Configurar Firebase y Mapbox
 
 - Edita [`lib/config.dart`](lib/config.dart) con tu API Key y URL de Realtime
   Database (Firebase Console > Configuracion del proyecto > General).
-- La API key de **Google Maps** no va en `config.dart`: va directamente en
-  `AndroidManifest.xml` y `AppDelegate.swift` como se muestra arriba.
-  Consiguela en https://console.cloud.google.com/google/maps-apis
-  habilitando "Maps SDK for Android" / "Maps SDK for iOS".
+- El token de Mapbox no se guarda en el repositorio. Compila con:
+  `flutter build apk --release --dart-define=MAPBOX_ACCESS_TOKEN=pk....`.
+- El adaptador usa Mapbox Maps SDK y Directions API con perfil `driving`; las
+  peticiones de ruta tienen timeout y las pantallas dibujan una linea de
+  respaldo si no hay red.
 
 ## 4. Correr en un dispositivo fisico
 
@@ -115,7 +105,7 @@ flutter run --release
    "Permitir todo el tiempo".
 3. Observa el panel **"Registro de actividad"**: deberias ver en segundos
    "Obteniendo posicion GPS...", luego "GPS ok: lat, lng" y
-   "Enviado a Firebase correctamente" cada 15 segundos.
+   "Enviado a Firebase correctamente" cada 5 segundos.
 4. El mapa debe centrarse en tu ubicacion real (no en Ciudad de Mexico por
    defecto) y mostrar un marcador que se mueve si caminas/manejas.
 5. Si algo falla, el log te dira exactamente en que paso: GPS del telefono
