@@ -125,6 +125,10 @@ jobs:
           heartbeat &
           HEARTBEAT_PID=$!
           trap 'kill $HEARTBEAT_PID 2>/dev/null || true' EXIT
+          # El runner puede dejar activo el VFS watcher de Gradle al compilar
+          # plugins nativos (Mapbox/CMake). Desactivarlo evita el bloqueo
+          # "Already watching path" que dejaba assembleRelease esperando.
+          export GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false"
           flutter build apk --release \
             --dart-define=MAPBOX_ACCESS_TOKEN="$MAPBOX_ACCESS_TOKEN" \
             --dart-define=MAPBOX_STYLE_URI="${MAPBOX_STYLE_URI:-mapbox://styles/mapbox/standard}"
