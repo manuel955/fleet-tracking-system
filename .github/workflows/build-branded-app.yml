@@ -122,16 +122,52 @@ jobs:
               sleep 30
             done
           }
+          kill_tree() {
+            local pid="$1"
+            [ -z "$pid" ] && return 0
+            for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+              kill_tree "$child"
+            done
+            kill "$pid" 2>/dev/null || true
+          }
           heartbeat &
           HEARTBEAT_PID=$!
-          trap 'kill $HEARTBEAT_PID 2>/dev/null || true' EXIT
+          BUILD_PID=""
+          trap 'kill_tree "$BUILD_PID"; kill "$HEARTBEAT_PID" 2>/dev/null || true' EXIT
           # El runner puede dejar activo el VFS watcher de Gradle al compilar
           # plugins nativos (Mapbox/CMake). Desactivarlo evita el bloqueo
           # "Already watching path" que dejaba assembleRelease esperando.
           export GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false"
+          APK_PATH="$PWD/build/app/outputs/flutter-apk/app-release.apk"
+          BUILD_LOG="$RUNNER_TEMP/${APP_KIND}-flutter-build.log"
+          rm -f "$APK_PATH" "$BUILD_LOG"
           flutter build apk --release \
             --dart-define=MAPBOX_ACCESS_TOKEN="$MAPBOX_ACCESS_TOKEN" \
-            --dart-define=MAPBOX_STYLE_URI="${MAPBOX_STYLE_URI:-mapbox://styles/mapbox/standard}"
+            --dart-define=MAPBOX_STYLE_URI="${MAPBOX_STYLE_URI:-mapbox://styles/mapbox/standard}" \
+            >"$BUILD_LOG" 2>&1 &
+          BUILD_PID=$!
+          BUILD_STATUS=0
+          APK_READY=false
+          while kill -0 "$BUILD_PID" 2>/dev/null; do
+            if [ -s "$APK_PATH" ] && unzip -t "$APK_PATH" >/dev/null 2>&1; then
+              APK_READY=true
+              echo "APK valida generada; cerrando el watcher de Gradle para continuar."
+              break
+            fi
+            sleep 15
+          done
+          if [ "$APK_READY" = true ]; then
+            kill_tree "$BUILD_PID"
+            BUILD_PID=""
+          else
+            wait "$BUILD_PID" || BUILD_STATUS=$?
+            BUILD_PID=""
+            if [ "$BUILD_STATUS" -ne 0 ] || [ ! -s "$APK_PATH" ]; then
+              echo "La compilación de Android falló. Últimas líneas del log:"
+              tail -n 200 "$BUILD_LOG"
+              exit 1
+            fi
+          fi
 
       - name: Upload APK through one-time signed URL
         run: |
