@@ -78,6 +78,45 @@ class LocationService {
   }
 
   static Future<bool> isRunning() => FlutterBackgroundService().isRunning();
+
+  /// Obtiene una posicion desde el isolate de la interfaz para que el mapa
+  /// pueda centrarse al abrir la app, sin esperar el primer tick del servicio.
+  static Future<Position?> getCurrentPosition() async {
+    if (!await Geolocator.isLocationServiceEnabled()) return null;
+
+    final permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      return null;
+    }
+
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 12),
+      );
+      return isUsableCoordinates(position.latitude, position.longitude)
+          ? position
+          : null;
+    } catch (_) {
+      final last = await Geolocator.getLastKnownPosition();
+      if (last == null ||
+          !isUsableCoordinates(last.latitude, last.longitude)) {
+        return null;
+      }
+      return last;
+    }
+  }
+
+  static bool isUsableCoordinates(double latitude, double longitude) {
+    return latitude.isFinite &&
+        longitude.isFinite &&
+        latitude >= -90 &&
+        latitude <= 90 &&
+        longitude >= -180 &&
+        longitude <= 180 &&
+        !(latitude == 0.0 && longitude == 0.0);
+  }
 }
 
 // Los callbacks del servicio en segundo plano deben ser funciones de nivel
@@ -166,7 +205,8 @@ Future<void> _sendCurrentLocation(ServiceInstance service) async {
       position = last;
     }
 
-    if (position.latitude == 0.0 && position.longitude == 0.0) {
+    if (!LocationService.isUsableCoordinates(
+        position.latitude, position.longitude)) {
       _log(service, 'Posición inválida (0,0). Se descarta este envío.');
       return;
     }

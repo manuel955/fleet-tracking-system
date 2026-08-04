@@ -205,6 +205,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
   // telefono inicio sesion con la misma cuenta y, si es asi, cierra esta
   // sesion solo (ver _checkSessionStillActive).
   Timer? _sessionCheckTimer;
+  bool _locationReadInFlight = false;
 
   @override
   void initState() {
@@ -221,22 +222,14 @@ class _DriverHomePageState extends State<DriverHomePage> {
 
         FlutterBackgroundService().on('location_update').listen((event) {
           if (event == null) return;
-          final lat = event['lat'] as double;
-          final lng = event['lng'] as double;
-          setState(() => _currentLatLng = LatLng(lat, lng));
-
-          // Si una pantalla de viaje (entrante o activo) reemplazo la pantalla
-          // principal, el mapa de ahi ya fue destruido por Flutter aunque
-          // este listener (registrado una sola vez en initState) siga vivo.
-          // Sin este guard, animateCamera lanza "used after disposed".
-          if (!_showingMainScreen) return;
-          try {
-            _mapController
-                ?.animateCamera(CameraUpdate.newLatLng(LatLng(lat, lng)));
-          } catch (_) {
-            // El controller quedo obsoleto justo en la transicion; se ignora,
-            // el proximo update ya no entrara aqui gracias al guard de arriba.
+          final lat = (event['lat'] as num?)?.toDouble();
+          final lng = (event['lng'] as num?)?.toDouble();
+          if (lat == null ||
+              lng == null ||
+              !LocationService.isUsableCoordinates(lat, lng)) {
+            return;
           }
+          _applyCurrentLocation(LatLng(lat, lng));
         });
       } catch (_) {
         // En previews de escritorio y tests el plugin no tiene plataforma.
@@ -467,6 +460,13 @@ class _DriverHomePageState extends State<DriverHomePage> {
       _sessionCheckTimer?.cancel();
       _sessionCheckTimer = Timer.periodic(
           const Duration(seconds: 20), (_) => _checkSessionStillActive());
+
+      if (profile['approvalStatus'] == 'approved' &&
+          _supportsMobileServices) {
+        // La pantalla obtiene una posicion inicial propia y no depende de
+        // que el servicio en segundo plano ya haya emitido su primer evento.
+        unawaited(_refreshCurrentLocation());
+      }
 
       if (profile['approvalStatus'] == 'approved') {
         _tripPollTimer?.cancel();
@@ -789,7 +789,12 @@ class _DriverHomePageState extends State<DriverHomePage> {
       return;
     }
 
-    if (_supportsMobileServices) await LocationService.start();
+    if (_supportsMobileServices) {
+      await LocationService.start();
+      // Centra el mapa en la posicion real al iniciar o reanudar el turno,
+      // sin esperar el primer tick de cinco segundos del servicio.
+      await _refreshCurrentLocation();
+    }
     if (!mounted) return;
     setState(() => _tracking = true);
     _addLog(resume
@@ -919,6 +924,58 @@ class _DriverHomePageState extends State<DriverHomePage> {
       _logs.insert(0, LogEntry(message, DateTime.now()));
       if (_logs.length > 60) _logs.removeLast();
     });
+  }
+
+  void _applyCurrentLocation(LatLng location, {bool recenter = true}) {
+    if (!mounted) return;
+    setState(() => _currentLatLng = location);
+    if (recenter && _showingMainScreen) {
+      unawaited(_moveMapTo(location));
+    }
+  }
+
+  Future<LatLng?> _refreshCurrentLocation({bool recenter = true}) async {
+    if (!_supportsMobileServices || _locationReadInFlight) {
+      return _currentLatLng;
+    }
+    _locationReadInFlight = true;
+    try {
+      final position = await LocationService.getCurrentPosition();
+      if (position == null) return _currentLatLng;
+      final location = LatLng(position.latitude, position.longitude);
+      _applyCurrentLocation(location, recenter: recenter);
+      return location;
+    } catch (_) {
+      return _currentLatLng;
+    } finally {
+      _locationReadInFlight = false;
+    }
+  }
+
+  Future<void> _moveMapTo(LatLng location, {bool zoom = false}) async {
+    if (!_showingMainScreen) return;
+    final controller = _mapController;
+    if (controller == null) return;
+    try {
+      await controller.animateCamera(zoom
+          ? CameraUpdate.newLatLngZoom(location, 16)
+          : CameraUpdate.newLatLng(location));
+    } catch (_) {
+      // El mapa puede estar reconstruyendose al cambiar entre pantallas.
+    }
+  }
+
+  Future<void> _centerOnCurrentLocation() async {
+    final location =
+        _currentLatLng ?? await _refreshCurrentLocation(recenter: false);
+    if (!mounted) return;
+    if (location == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Aún no tenemos una ubicación GPS.')),
+      );
+      return;
+    }
+    await _moveMapTo(location, zoom: true);
   }
 
   @override
@@ -1061,6 +1118,18 @@ class _DriverHomePageState extends State<DriverHomePage> {
                     ],
                   ],
                 ),
+              ),
+            ),
+          ),
+          Positioned(
+            right: 20,
+            bottom: 96,
+            child: SafeArea(
+              top: false,
+              child: _circleIconButton(
+                icon: Icons.my_location,
+                tooltip: 'Centrar en mi ubicación',
+                onTap: _centerOnCurrentLocation,
               ),
             ),
           ),
@@ -1320,7 +1389,11 @@ class _DriverHomePageState extends State<DriverHomePage> {
     final center = _currentLatLng ?? const LatLng(19.4326, -99.1332);
     return MapboxMapView(
       initialCameraPosition: CameraPosition(target: center, zoom: 15),
-      onMapCreated: (controller) => _mapController = controller,
+      onMapCreated: (controller) {
+        _mapController = controller;
+        final location = _currentLatLng;
+        if (location != null) unawaited(_moveMapTo(location));
+      },
       myLocationEnabled: true,
       myLocationButtonEnabled: true,
       zoomControlsEnabled: false,
