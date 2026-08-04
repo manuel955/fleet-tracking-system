@@ -113,6 +113,18 @@ jobs:
             echo "Falta MAPBOX_ACCESS_TOKEN; se cancela la publicación para no entregar una app sin mapas."
             exit 1
           fi
+          # Gradle/Mapbox puede pasar varios minutos sin escribir en stdout
+          # durante la primera compilacion fria. El pulso evita que GitHub
+          # marque el job como inactivo y lo cancele antes de terminar.
+          heartbeat() {
+            while true; do
+              echo "Compilando APK $APP_KIND... $(date -u +%H:%M:%S) UTC"
+              sleep 30
+            done
+          }
+          heartbeat &
+          HEARTBEAT_PID=$!
+          trap 'kill $HEARTBEAT_PID 2>/dev/null || true' EXIT
           flutter build apk --release \
             --dart-define=MAPBOX_ACCESS_TOKEN="$MAPBOX_ACCESS_TOKEN" \
             --dart-define=MAPBOX_STYLE_URI="${MAPBOX_STYLE_URI:-mapbox://styles/mapbox/standard}"
