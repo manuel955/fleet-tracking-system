@@ -108,6 +108,55 @@ class LocationService {
     }
   }
 
+  /// Publica un heartbeat GPS desde el isolate visible. El servicio en
+  /// segundo plano sigue enviando cada cinco segundos, pero este primer
+  /// envio evita que el dashboard marque al conductor como desconectado
+  /// mientras Android termina de levantar el foreground service.
+  static Future<Position?> sendCurrentLocationNow() async {
+    final position = await getCurrentPosition();
+    if (position == null) return null;
+
+    try {
+      final auth = await AuthService.currentSession();
+      final driverId = auth['uid'];
+      final token = auth['idToken'];
+      if (driverId is! String ||
+          token is! String ||
+          driverId.isEmpty ||
+          token.isEmpty) {
+        return null;
+      }
+
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final heading = position.heading.isFinite ? position.heading : 0.0;
+      final payload = jsonEncode({
+        'lat': position.latitude,
+        'lng': position.longitude,
+        'heading': heading,
+        'lastUpdate': timestamp,
+      });
+      final uri = Uri.parse(
+        '${AppConfig.firebaseDbUrl}/drivers/$driverId.json?auth=$token',
+      );
+      final publicLocationUri = Uri.parse(
+        '${AppConfig.firebaseDbUrl}/driverLocations/$driverId.json?auth=$token',
+      );
+
+      final responses = await Future.wait([
+        http.patch(uri,
+            headers: {'Content-Type': 'application/json'}, body: payload),
+        http.patch(publicLocationUri,
+            headers: {'Content-Type': 'application/json'}, body: payload),
+      ]).timeout(const Duration(seconds: 12));
+      if (responses.every((response) => response.statusCode == 200)) {
+        return position;
+      }
+    } catch (_) {
+      // El servicio en segundo plano reintentara en el siguiente ciclo.
+    }
+    return null;
+  }
+
   static bool isUsableCoordinates(double latitude, double longitude) {
     return latitude.isFinite &&
         longitude.isFinite &&
@@ -241,7 +290,7 @@ Future<void> _sendCurrentLocation(ServiceInstance service) async {
     final responses = await Future.wait([
       http.patch(uri, headers: {'Content-Type': 'application/json'}, body: payload),
       http.patch(publicLocationUri, headers: {'Content-Type': 'application/json'}, body: payload),
-    ]);
+    ]).timeout(const Duration(seconds: 12));
 
     if (responses.every((response) => response.statusCode == 200)) {
       _log(service, 'Enviado a Firebase correctamente.');

@@ -791,9 +791,21 @@ class _DriverHomePageState extends State<DriverHomePage> {
 
     if (_supportsMobileServices) {
       await LocationService.start();
-      // Centra el mapa en la posicion real al iniciar o reanudar el turno,
-      // sin esperar el primer tick de cinco segundos del servicio.
-      await _refreshCurrentLocation();
+      // Publica un heartbeat desde el isolate visible de inmediato. El
+      // servicio en segundo plano toma los siguientes envios cada 5s, pero
+      // el dashboard ya puede mostrar al conductor como conectado sin
+      // esperar a que Android termine de levantarlo.
+      final reportedPosition = await LocationService.sendCurrentLocationNow();
+      if (reportedPosition != null) {
+        _applyCurrentLocation(
+          LatLng(reportedPosition.latitude, reportedPosition.longitude),
+        );
+      } else {
+        // Aunque Firebase no responda, intenta mostrar la ubicacion local
+        // para que el conductor pueda seguir usando el mapa.
+        await _refreshCurrentLocation();
+        _addLog('Turno conectado, pero aun no se pudo publicar el GPS.');
+      }
     }
     if (!mounted) return;
     setState(() => _tracking = true);
