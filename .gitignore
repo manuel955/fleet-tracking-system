@@ -33,3 +33,4 @@ dashboard/js/mapbox-runtime-config.generated.js
 .qa-*.png
 .qa-*.xml
 scripts/__pycache__/
+passenger-app/assets/vehicles/vehicle-bus-new.png
