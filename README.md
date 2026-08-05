@@ -10,7 +10,7 @@ fleet-tracking-system/
 ├── functions/         # Cloud Functions: emparejamiento automatico, ciclo de vida del viaje, historial
 ├── driver-app/        # Flutter: registro con documentos + aprobacion admin, GPS en segundo plano, viajes
 ├── passenger-app/     # Flutter: pedir viaje estilo Uber (mapa, destino, seguimiento, historial)
-└── dashboard/         # Panel web para administracion: flota en vivo sobre Google Maps
+└── dashboard/         # Panel web para administracion: flota en vivo sobre Mapbox
 ```
 
 ## Flujo de un viaje
@@ -76,17 +76,16 @@ del conductor asignado
 - El canal de notificacion es `trip_alert_channel_v2`: Android congela la
   config de vibracion de un canal al crearlo — si cambias el patron,
   renombra el canal.
-- Navegacion solo con Google Maps (sin Waze). Voz TTS en espanol con tono
+- Navegacion externa mediante el esquema `geo:` del telefono. Voz TTS en espanol con tono
   agudo (los motores TTS no siempre exponen genero de voz).
 
 ### passenger-app/
 - Estilo Uber en blanco/negro, 3 pestañas: Inicio (mapa + "¿A donde
   vas?"), Actividad (viajes de los ultimos 7 dias), Cuenta.
-- Destino por busqueda (Places API New), recientes, o pin fijo al centro
+- Destino por busqueda (Mapbox Geocoding), recientes, o pin fijo al centro
   del mapa arrastrable ("Fija tu destino") con geocoding inverso.
-- La ruta de confirmacion usa **Routes API v2** (la Directions API clasica
-  esta bloqueada en el proyecto); polyline decodificada con fallback a
-  linea recta.
+- La ruta usa **Mapbox Directions API** con perfil `driving`; si la
+  red o el token fallan, la pantalla dibuja una linea recta de respaldo.
 - Cerrar sesion borra viajes, perfil y foto credencial en Firebase y todo
   lo local.
 
@@ -111,27 +110,46 @@ Storage y Cloud Messaging.
 1. **Reglas y funciones**
    ```bash
    cd fleet-tracking-system
-   firebase deploy --only database,functions
+   firebase deploy --only database,storage,functions
    ```
-2. **Google Maps Platform**: habilita Maps SDK for Android, Maps JavaScript
-   API, Places API (New), Geocoding API y **Routes API**. Si la key tiene
-   restriccion por API, incluye todas las anteriores.
+2. **Mapbox**: crea tokens publicos separados para dashboard, conductor y
+   pasajero. El uso requiere acceso a Maps SDK, Directions API, Matrix API y
+   Geocoding API. Las rutas y ETA usan el perfil `driving`, sin datos de
+   tráfico ni capa visual de congestión.
 3. **Apps Flutter** (`driver-app/` y `passenger-app/`):
    - `lib/config.dart`: API key de Firebase, Database URL y (passenger)
      base URL de Cloud Functions.
-   - API key de Maps en `android/app/src/main/AndroidManifest.xml`.
+   - Inyecta el token sin guardarlo en el codigo:
+     `flutter build apk --release --dart-define=MAPBOX_ACCESS_TOKEN=pk....`.
+   - Opcionalmente define `MAPBOX_STYLE_URI`; el valor por defecto es el estilo
+     Standard de Mapbox.
    - driver-app ademas necesita `android/app/google-services.json` (app
      Android registrada en Firebase, para FCM).
-   - Compila e instala en telefono fisico (GPS/camera reales):
-     ```bash
-     flutter pub get
-     flutter build apk --release
-     ```
+    - Compila e instala en telefono fisico (GPS/camera reales). Siempre pasa
+      el token; si no, la app muestra el estado seguro de mapa no configurado:
+      ```bash
+      flutter pub get
+      flutter build apk --release --dart-define=MAPBOX_ACCESS_TOKEN=pk....
+      ```
    - Los builds release firman con la llave debug (ver TODO en
      `build.gradle.kts`); genera una keystore propia antes de distribuir.
-4. **Dashboard**: configura `dashboard/js/firebase-config.js` y
-   `dashboard/js/google-maps-config.js`, sirve la carpeta como sitio
-   estatico y entra con el usuario admin de Email/Password.
+ 4. **Dashboard**: configura `dashboard/js/firebase-config.js`; genera el
+   runtime de Mapbox desde la raiz con `node scripts/inject-mapbox-config.mjs`
+    usando `MAPBOX_ACCESS_TOKEN` y `MAPBOX_STYLE_URI`, sirve la carpeta como
+    sitio estatico y entra con el usuario admin de Email/Password.
+ 5. **Web de pasajeros**: Firebase Hosting sirve `passenger-app/build/web`.
+    Debes compilarlo con el token real de Mapbox antes de desplegarlo:
+    ```powershell
+    cd passenger-app
+    flutter build web --release --dart-define=MAPBOX_ACCESS_TOKEN=$env:MAPBOX_ACCESS_TOKEN
+    cd ..
+    firebase deploy --only hosting
+    ```
+    El build web nuevo usa Mapbox GL JS; una APK o build web antiguo seguirá
+    mostrando el proveedor anterior hasta que se reinstale o se publique el
+    build actualizado.
+    Para compilar y publicar en un solo paso, usa desde la raiz:
+    `powershell -ExecutionPolicy Bypass -File .\scripts\publicar-passenger-web.ps1`.
 
 ### Publicar el dashboard en el VPS
 
@@ -151,6 +169,11 @@ Tambien puedes hacer doble clic en `scripts/publicar-dashboard.cmd`.
 - Cualquier usuario autenticado (incluso anonimo) puede leer `/drivers`;
   restringe la lectura con custom claims de admin antes de exponer datos
   reales.
-- Restringe la API key de Google Maps por paquete/dominio.
+- Usa tokens publicos `pk.*` con restricciones de URL/origen para el dashboard
+  y tokens separados por app. Nunca pongas un token secreto `sk.*` en cliente.
 - Sirve el dashboard solo detras de HTTPS y acceso controlado (expone
   telefonos de conductores).
+
+## Documentacion para entrega y venta
+
+La documentación completa de la solución está en [`docs/`](docs/README.md): incluye dossier comercial, manual de operación, referencia técnica y guía de despliegue y transferencia.

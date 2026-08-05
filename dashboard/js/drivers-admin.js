@@ -72,7 +72,7 @@ function openDashboardView(view) {
     startSettings();
     renderSettings();
   }
-  if (view === 'map' && map && window.google?.maps) window.google.maps.event.trigger(map, 'resize');
+  if (view === 'map' && map) map.resize();
 }
 
 navTabs.forEach((tab) => tab.addEventListener('click', () => openDashboardView(tab.getAttribute('data-view'))));
@@ -136,6 +136,20 @@ function docCellHtml(driverId, field, url) {
   `;
 }
 
+function driverConnectionHtml(driverId, d) {
+  const connection = d.estado_conexion || ((d.status === 'online' || d.status === 'busy') ? 'ONLINE' : 'OFFLINE');
+  const lastConnection = d.ultima_conexion ? new Date(Number(d.ultima_conexion)).toLocaleString('es-PE') : 'Sin registro';
+  return `
+    <div class="driver-connection-box" data-connection-box="${driverId}">
+      <div class="driver-connection-heading">
+        <div><b>Estado de conexión</b><small>${connection === 'ONLINE' ? 'En línea' : 'Fuera de línea'} · última conexión: ${escapeHtml(lastConnection)}</small></div>
+        <span class="connection-state ${connection === 'ONLINE' ? 'online' : 'offline'}">${connection}</span>
+      </div>
+      <small class="connection-note">Las desconexiones manuales y las pérdidas de señal generan una alerta automática.</small>
+    </div>
+  `;
+}
+
 function driverAdminCardHtml(driverId, d) {
   const status = d.approvalStatus || 'pending_review';
   const rejectFormOpen = openRejectFormId === driverId;
@@ -194,6 +208,7 @@ function driverAdminCardHtml(driverId, d) {
         <div class="row"><b>Edad:</b> ${escapeHtml(String(d.age ?? '-'))}</div>
         <div class="row"><b>Lugar asignado:</b> ${escapeHtml(d.assignedPlace?.name || '-')}</div>
       </div>
+      ${status !== 'rejected' ? driverConnectionHtml(driverId, d) : ''}
       ${rejectionBlock}
       ${
         status !== 'rejected'
@@ -205,7 +220,12 @@ function driverAdminCardHtml(driverId, d) {
           <button type="button" class="delete-driver-btn" data-action="delete-driver" data-id="${driverId}">Eliminar conductor</button>
         </div>
       `
-          : ''
+          : `
+        <div class="driver-admin-actions">
+          <button type="button" class="view-file-btn" data-action="view-file" data-id="${driverId}">Ver archivo completo</button>
+          <button type="button" class="delete-driver-btn" data-action="delete-driver" data-id="${driverId}">Eliminar y permitir nuevo registro</button>
+        </div>
+      `
       }
       ${actionsHtml}
     </div>
@@ -213,9 +233,13 @@ function driverAdminCardHtml(driverId, d) {
 }
 
 function renderDriversAdmin() {
-  if (adminActiveFilter === 'trip-history' || adminActiveFilter === 'attendance') {
+  if (adminActiveFilter === 'trip-history' || adminActiveFilter === 'attendance' || adminActiveFilter === 'alerts') {
     if (adminActiveFilter === 'attendance') {
       renderDriversAttendance();
+      return;
+    }
+    if (adminActiveFilter === 'alerts') {
+      renderPrematureDisconnectHistory();
       return;
     }
     renderDriversHistory();
@@ -228,11 +252,11 @@ function renderDriversAdmin() {
 
   const toolbarHtml = `
     <div class="drivers-admin-toolbar">
-      ${['approved', 'pending_review', 'rejected', 'all', 'trip-history', 'attendance']
+      ${['approved', 'pending_review', 'rejected', 'all', 'trip-history', 'attendance', 'alerts']
         .map(
           (f) => `
         <button type="button" class="filter-pill ${adminActiveFilter === f ? 'active' : ''}" data-admin-filter="${f}">
-          ${f === 'all' ? 'Todos' : f === 'trip-history' ? 'Historial de viajes' : f === 'attendance' ? 'Asistencia' : APPROVAL_LABELS[f]}
+          ${f === 'all' ? 'Todos' : f === 'trip-history' ? 'Historial de viajes' : f === 'attendance' ? 'Asistencia' : f === 'alerts' ? 'Alertas de desconexión' : APPROVAL_LABELS[f]}
         </button>
       `
         )
@@ -274,7 +298,6 @@ function renderDriversAdmin() {
   adminViewEl.querySelectorAll('[data-action="delete-driver"]').forEach((btn) => {
     btn.addEventListener('click', () => deleteDriver(btn.getAttribute('data-id')));
   });
-
   adminViewEl.querySelectorAll('[data-reject-form]').forEach((form) => {
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -290,37 +313,14 @@ function renderDriversAdmin() {
 }
 
 function historyToolbarHtml() {
-  return `<div class="drivers-admin-toolbar">${['approved', 'pending_review', 'rejected', 'all', 'trip-history', 'attendance'].map((f) => `<button type="button" class="filter-pill ${adminActiveFilter === f ? 'active' : ''}" data-admin-filter="${f}">${f === 'all' ? 'Todos' : f === 'trip-history' ? 'Historial de viajes' : f === 'attendance' ? 'Asistencia' : APPROVAL_LABELS[f]}</button>`).join('')}</div>`;
+  return `<div class="drivers-admin-toolbar">${['approved', 'pending_review', 'rejected', 'all', 'trip-history', 'attendance', 'alerts'].map((f) => `<button type="button" class="filter-pill ${adminActiveFilter === f ? 'active' : ''}" data-admin-filter="${f}">${f === 'all' ? 'Todos' : f === 'trip-history' ? 'Historial de viajes' : f === 'attendance' ? 'Asistencia' : f === 'alerts' ? 'Alertas de desconexión' : APPROVAL_LABELS[f]}</button>`).join('')}</div>`;
 }
 
 function attendanceSessions() {
-  return Object.entries(adminConnectionHistory).flatMap(([driverId, events]) => {
-    const driver = adminDriversCache[driverId] || {};
-    if (driver.approvalStatus === 'rejected') return [];
-    const sorted = Object.values(events || {})
-      .filter((event) => event && Number.isFinite(Number(event.at)))
-      .sort((a, b) => Number(a.at) - Number(b.at));
-    const sessions = [];
-    sorted.forEach((event, index) => {
-      if (event.status !== 'online') return;
-      const end = sorted.slice(index + 1).find((candidate) => candidate.status === 'offline');
-      const startAt = Number(event.at);
-      const explicitEndAt = end ? Number(end.at) : null;
-      const driverOnline = driver.status === 'online' || driver.status === 'busy';
-      // Older records may not have an `offline` event. If the driver's
-      // current node is no longer online, close the session at its last GPS
-      // update instead of leaving it permanently marked as active.
-      const endAt = explicitEndAt || (!driverOnline && driver.lastUpdate ? Number(driver.lastUpdate) : null);
-      sessions.push({
-        driverId,
-        driverName: event.driverName || driver.name || driverId,
-        startAt,
-        endAt,
-        active: !endAt && driverOnline,
-      });
-    });
-    return sessions;
-  }).filter((session) => {
+  const sessions = window.AttendanceUtils
+    ? window.AttendanceUtils.buildSessions(adminConnectionHistory, adminDriversCache)
+    : [];
+  return sessions.filter((session) => {
     const query = attendanceSearch.trim().toLowerCase();
     if (query && ![session.driverName, session.driverId, adminDriversCache[session.driverId]?.plate].some((value) => String(value || '').toLowerCase().includes(query))) return false;
     const key = attendanceDateKey(session.startAt);
@@ -523,6 +523,25 @@ function renderDriversHistory() {
   }
 }
 
+function renderPrematureDisconnectHistory() {
+  const alerts = typeof window.operationAlertsForHistory === 'function'
+    ? window.operationAlertsForHistory()
+    : [];
+  const rows = alerts
+    .sort((a, b) => Number(b.disconnectedAt || b.createdAt || 0) - Number(a.disconnectedAt || a.createdAt || 0))
+    .map((alert) => `<tr>
+      <td>${new Date(Number(alert.disconnectedAt || alert.createdAt)).toLocaleString('es-PE')}</td>
+      <td><strong>${escapeHtml(alert.driverName || alert.driverId || '-')}</strong><small>${escapeHtml(alert.driverPlate || '-')}</small></td>
+      <td>${escapeHtml(alert.reasonLabel || (alert.reason === 'HEARTBEAT' ? 'Pérdida de señal / heartbeat' : alert.reason === 'ADMIN' ? 'Desconexión administrativa' : 'Desconexión manual'))}</td>
+      <td><span class="attendance-status ${alert.status === 'CLOSED' ? 'closed' : 'active'}">${alert.status === 'CLOSED' ? 'Reconocida' : 'Abierta'}</span></td>
+    </tr>`).join('');
+  adminViewEl.innerHTML = `${historyToolbarHtml()}<div class="attendance-heading"><div><h3>Historial de desconexiones</h3><p>Todo cierre manual, administrativo o pérdida de señal queda registrado para auditoría.</p></div><span class="attendance-count">${alerts.length} alerta${alerts.length === 1 ? '' : 's'}</span></div><div class="dashboard-users-table-wrap"><table class="dashboard-users-table"><thead><tr><th>Fecha y hora</th><th>Conductor / placa</th><th>Motivo</th><th>Estado</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="dashboard-empty-row">Todavía no hay alertas registradas.</td></tr>'}</tbody></table></div>`;
+  adminViewEl.querySelectorAll('[data-admin-filter]').forEach((btn) => btn.addEventListener('click', () => {
+    adminActiveFilter = btn.getAttribute('data-admin-filter');
+    renderDriversAdmin();
+  }));
+}
+
 async function manageDriver(payload) {
   const token = await auth.currentUser.getIdToken();
   const response = await fetch('https://us-central1-rastreoflota-53052.cloudfunctions.net/manageDrivers', {
@@ -678,7 +697,7 @@ async function downloadDriverPdf(button) {
       ['Tipo de vehiculo', d.vehicleType],
       ['Color del vehiculo', d.vehicleColor],
       ['Pasajeros', d.vehicleSeats != null ? `${d.vehicleSeats} pasajeros` : null],
-      ['Estado operativo', d.status || 'Fuera de turno'],
+      ['Estado operativo', d.status || 'Desconectado'],
       ['Registrado', d.registeredAt ? new Date(d.registeredAt).toLocaleString() : null],
       ['Documentos enviados', d.documentsSubmittedAt ? new Date(d.documentsSubmittedAt).toLocaleString() : null],
       ['Revisado', d.reviewedAt ? new Date(d.reviewedAt).toLocaleString() : null],

@@ -1,5 +1,17 @@
 {
   "projects": {
     "default": "rastreoflota-53052"
+  },
+  "targets": {
+    "rastreoflota-53052": {
+      "hosting": {
+        "passenger": [
+          "rastreoflota-53052"
+        ],
+        "dashboard": [
+          "rastreoflota-53052-dashboard"
+        ]
+      }
+    }
   }
 }

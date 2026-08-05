@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&family=Instrument+Sans:wght@500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=20260803h" />
+  <link rel="stylesheet" href="css/style.css?v=20260804d" />
 </head>
 <body>
 
@@ -56,6 +56,9 @@
       <button type="button" class="nav-tab" data-view="settings">Configuración</button>
     </nav>
     <div class="topbar-right">
+      <button type="button" id="operation-alerts-button" class="operation-alerts-button" aria-label="Abrir alertas de operación" title="Alertas de operación">
+        <span aria-hidden="true">⚠</span><span class="operation-alerts-label">Alertas</span><span id="operation-alerts-badge" class="operation-alerts-badge hidden">0</span>
+      </button>
       <span id="live-indicator" class="live-indicator"><span class="live-dot"></span>En vivo</span>
       <span id="driver-count" class="badge">0 vehículos</span>
       <button id="logout-btn" class="logout-btn">Cerrar sesión</button>
@@ -118,6 +121,7 @@
         <div id="map"></div>
       </div>
       <footer class="map-legend">
+        <span class="legend-title">Leyenda</span>
         <span class="legend-item"><span class="legend-dot state-available"></span>Disponible</span>
         <span class="legend-item"><span class="legend-dot state-to_pickup"></span>En ruta de recogida</span>
         <span class="legend-item"><span class="legend-dot state-on_trip"></span>En viaje</span>
@@ -131,6 +135,83 @@
   <div id="settings-view" class="settings-view hidden"></div>
 </div>
 
+<!-- Panel exclusivo para coordinadores: no contiene mapa ni metricas de flota. -->
+<div id="coordinator-app" class="coordinator-app hidden">
+  <header class="coordinator-topbar">
+    <div class="brand">
+      <span class="brand-icon" data-dashboard-icon aria-hidden="true"></span>
+      <span class="brand-text" data-dashboard-name>APL Logistic</span>
+    </div>
+    <div class="coordinator-heading">
+      <span>Despacho</span>
+      <strong id="coordinator-place-name">Sede asignada</strong>
+    </div>
+    <div class="coordinator-account">
+      <span id="coordinator-user-name">Coordinador</span>
+      <button type="button" id="coordinator-logout-btn" class="logout-btn">Cerrar sesión</button>
+    </div>
+  </header>
+  <main class="coordinator-dispatch-layout">
+    <section class="coordinator-request-card" aria-labelledby="coordinator-request-title">
+      <div class="coordinator-section-heading">
+        <span class="overview-eyebrow">NUEVO SERVICIO</span>
+        <h1 id="coordinator-request-title">Solicitar vehículo</h1>
+        <p>El origen se toma automáticamente de tu sede asignada.</p>
+      </div>
+      <form id="coordinator-request-form" class="coordinator-request-form">
+        <label>Sede / origen<input id="coordinator-origin-input" type="text" readonly /></label>
+        <div class="coordinator-destination-field">
+          <label for="coordinator-destination-input">Destino</label>
+          <input id="coordinator-destination-input" type="text" placeholder="Buscar dirección" autocomplete="off" required />
+          <div id="coordinator-destination-suggestions" class="coordinator-suggestions hidden"></div>
+        </div>
+        <div class="coordinator-preview-panel" aria-labelledby="coordinator-preview-title">
+          <div class="coordinator-preview-heading">
+            <div>
+              <span class="coordinator-preview-title" id="coordinator-preview-title">Confirmar destino</span>
+              <small id="coordinator-map-preview-status">Selecciona una dirección del buscador.</small>
+            </div>
+            <span class="coordinator-preview-badge">MAPA</span>
+          </div>
+          <div id="coordinator-map-preview" class="coordinator-map-preview" aria-label="Vista previa del destino"></div>
+          <p id="coordinator-map-preview-message" class="coordinator-map-preview-message">El mapa mostrará el origen y el destino seleccionado.</p>
+        </div>
+        <div class="coordinator-passenger-grid">
+          <label>Nombre del pasajero<input id="coordinator-passenger-name" type="text" maxlength="120" placeholder="Opcional" /></label>
+          <label>Teléfono<input id="coordinator-passenger-phone" type="tel" maxlength="40" placeholder="Opcional" /></label>
+        </div>
+        <label>Número de pasajeros<input id="coordinator-passenger-count" type="number" min="1" max="45" step="1" value="1" required /></label>
+        <p id="coordinator-request-feedback" class="settings-feedback" aria-live="polite"></p>
+        <button type="submit" id="coordinator-request-submit" class="coordinator-primary-btn">Solicitar vehículo</button>
+      </form>
+    </section>
+    <section class="coordinator-trips-card" aria-labelledby="coordinator-trips-title">
+      <div class="coordinator-section-heading coordinator-trips-heading">
+        <div><span class="overview-eyebrow">TIEMPO REAL</span><h2 id="coordinator-trips-title">Viajes de hoy</h2></div>
+        <span id="coordinator-trip-count" class="coordinator-trip-count">0</span>
+      </div>
+      <div id="coordinator-trips-list" class="coordinator-trips-list"><p class="coordinator-empty-state">Aún no hay solicitudes.</p></div>
+    </section>
+  </main>
+</div>
+
+<div id="coordinator-trip-modal" class="coordinator-trip-modal hidden" aria-hidden="true">
+  <div class="coordinator-trip-modal-backdrop" data-close-coordinator-modal></div>
+  <section class="coordinator-trip-modal-card" role="dialog" aria-modal="true" aria-labelledby="coordinator-modal-title">
+    <button type="button" id="coordinator-modal-close" class="coordinator-modal-close" aria-label="Cerrar detalle">×</button>
+    <span class="overview-eyebrow">DETALLE DEL SERVICIO</span>
+    <h2 id="coordinator-modal-title">Viaje</h2>
+    <div id="coordinator-modal-content" class="coordinator-modal-content"></div>
+    <div id="coordinator-modal-actions" class="coordinator-modal-actions"></div>
+  </section>
+</div>
+
+<aside id="operation-alerts-panel" class="operation-alerts-panel hidden" aria-hidden="true" aria-label="Alertas de operación">
+  <div class="operation-alerts-panel-heading"><div><span>OPERACIONES</span><h2>Alertas de desconexión</h2></div><button type="button" id="operation-alerts-close" aria-label="Cerrar alertas">×</button></div>
+  <div id="operation-alerts-list" class="operation-alerts-list"></div>
+</aside>
+<div id="operation-alert-toast-region" class="operation-alert-toast-region" aria-live="assertive"></div>
+
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
@@ -143,19 +224,19 @@
   pdfjsLib.GlobalWorkerOptions.workerSrc =
     'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 </script>
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.25.0/mapbox-gl.css" rel="stylesheet" />
 <script src="js/firebase-config.js"></script>
-<script src="js/google-maps-config.js"></script>
-<script src="js/app.js?v=20260803e"></script>
-<script src="js/drivers-admin.js?v=20260802e"></script>
-<script src="js/settings.js?v=20260803a"></script>
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.25.0/mapbox-gl.js"></script>
+<script src="js/mapbox-runtime-config.js"></script>
+<script src="js/mapbox-runtime-config.generated.js"></script>
+<script src="js/mapbox-config.js"></script>
+<script src="js/mapbox-adapter.js?v=20260804d"></script>
+<script src="js/app.js?v=20260804e"></script>
+<script src="js/attendance-utils.js?v=20260805a"></script>
+<script src="js/drivers-admin.js?v=20260804c"></script>
+<script src="js/operation-alerts.js?v=20260804c"></script>
+<script src="js/settings.js?v=20260804a"></script>
 <script src="js/places-admin.js"></script>
-<script>
-  (function loadGoogleMaps() {
-    const script = document.createElement('script');
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&callback=onGoogleMapsReady&loading=async`;
-    script.async = true;
-    document.head.appendChild(script);
-  })();
-</script>
+<script src="js/coordinator-dashboard.js?v=20260804c"></script>
 </body>
 </html>

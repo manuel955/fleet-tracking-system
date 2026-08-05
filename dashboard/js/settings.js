@@ -12,6 +12,19 @@ let settingsSubscribed = false;
 let currentSupportPhone = '';
 let settingsSection = 'home';
 
+function normalizeSupportPhone(value) {
+  const raw = String(value || '').trim().replace(/[\s().-]/g, '');
+  if (!raw) return '';
+  if (raw.startsWith('00')) return `+${raw.slice(2)}`;
+  if (raw.startsWith('+')) return `+${raw.slice(1).replace(/\D/g, '')}`;
+  const digits = raw.replace(/\D/g, '');
+  return digits.startsWith('51') ? `+${digits}` : `+51${digits}`;
+}
+
+function isValidSupportPhone(value) {
+  return /^\+519\d{8}$/.test(value);
+}
+
 // Nombre de archivo fijo por app: cada version nueva sobreescribe la
 // anterior, asi AppConfig.apkDownloadUrl en cada app Flutter nunca cambia y
 // no hace falta guardar la URL en ningun lado, solo el numero de build.
@@ -32,6 +45,7 @@ let currentDashboardName = 'APL Logistic';
 let currentDashboardLogoUrl = '';
 let dashboardUsers = [];
 let dashboardUserCreateOpen = false;
+let dashboardPlacesCache = { hotels: {}, sportVenues: {} };
 
 function applyDashboardName(name) {
   const value = name || 'APL Logistic';
@@ -67,7 +81,11 @@ function startSettings() {
   if (settingsSubscribed) return;
   settingsSubscribed = true;
   db.ref('config/supportPhone').on('value', (snapshot) => {
-    currentSupportPhone = snapshot.val() || '';
+    const raw = snapshot.val() || '';
+    currentSupportPhone = normalizeSupportPhone(raw);
+    if (raw && currentSupportPhone && raw !== currentSupportPhone) {
+      db.ref('config/supportPhone').set(currentSupportPhone).catch(() => {});
+    }
     renderSettings();
   });
   UPDATE_APPS.forEach((app) => {
@@ -80,6 +98,10 @@ function startSettings() {
     currentAppBranding = snapshot.val() || {};
     renderSettings();
   });
+  ['hotels', 'sportVenues'].forEach((key) => db.ref(`config/${key}`).on('value', (snapshot) => {
+    dashboardPlacesCache[key] = snapshot.val() || {};
+    if (settingsSection === 'users') renderDashboardUsers();
+  }));
   loadAppDownloadUrls();
 }
 
@@ -203,10 +225,22 @@ function renderDashboardSettings() {
 function renderSupportSettings() {
   settingsViewEl.innerHTML = `<button type="button" id="back-to-settings" class="settings-back">← Configuración</button>
     <div class="settings-card apps-settings-card"><h3>Número de soporte</h3><p class="settings-hint">Teléfono usado por los botones de llamada y WhatsApp de ambas apps. Incluye código de país, por ejemplo +51987654321.</p>
-      <form id="support-phone-form" class="settings-form"><input type="tel" id="support-phone-input" placeholder="+51987654321" value="${escapeHtml(currentSupportPhone)}" required /><button type="submit">Guardar</button></form><p id="settings-feedback" class="settings-feedback"></p>
+      <form id="support-phone-form" class="settings-form"><input type="tel" id="support-phone-input" placeholder="+51987654321" value="${escapeHtml(currentSupportPhone)}" pattern="\\+519[0-9]{8}" required /><button type="submit">Guardar</button></form><p id="settings-feedback" class="settings-feedback"></p>
     </div>`;
   document.getElementById('back-to-settings').addEventListener('click', () => { settingsSection = 'home'; renderSettings(); });
-  document.getElementById('support-phone-form').addEventListener('submit', (event) => { event.preventDefault(); let value = document.getElementById('support-phone-input').value.trim(); if (!value) return; if (!value.startsWith('+')) value = `+51${value}`; saveSupportPhone(value); });
+  document.getElementById('support-phone-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const input = document.getElementById('support-phone-input');
+    const value = normalizeSupportPhone(input.value);
+    const feedback = document.getElementById('settings-feedback');
+    if (!isValidSupportPhone(value)) {
+      feedback.textContent = 'Ingresa un celular peruano válido, por ejemplo +51987654321.';
+      feedback.className = 'settings-feedback error';
+      return;
+    }
+    input.value = value;
+    saveSupportPhone(value);
+  });
 }
 
 async function saveDashboardLogo(file) {
@@ -231,6 +265,22 @@ async function dashboardUsersRequest(payload) {
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error || 'No se pudo administrar los usuarios');
   return result;
+}
+
+function dashboardPlaceOptions(selectedType = '', selectedId = '', placeholder = 'Selecciona una sede / hotel') {
+  const entries = ['sportVenues', 'hotels'].flatMap((type) => Object.entries(dashboardPlacesCache[type] || {}).map(([id, place]) => ({
+    type, id, name: place.name || id, address: place.address || '',
+  })));
+  return `<option value="">${placeholder}</option>${entries.map((place) => `
+    <option value="${escapeHtml(`${place.type}|${place.id}`)}"${place.type === selectedType && place.id === selectedId ? ' selected' : ''}>
+      ${escapeHtml(`${place.name}${place.address ? ` · ${place.address}` : ''}`)}
+    </option>
+  `).join('')}`;
+}
+
+function parseDashboardPlaceValue(value) {
+  const [sedeType, sedeId] = String(value || '').split('|');
+  return { sedeType: sedeType || '', sedeId: sedeId || '' };
 }
 
 async function loadDashboardUsers() {
@@ -272,7 +322,8 @@ function renderDashboardUsers() {
         <label>Nombre<input id="new-dashboard-name" type="text" maxlength="60" required /></label>
         <label>Email<input id="new-dashboard-email" type="email" placeholder="correo@empresa.com" required /></label>
         <label>Contraseña<input id="new-dashboard-password" type="password" placeholder="Mínimo 6 caracteres" minlength="6" required /></label>
-        <label>Rol<select id="new-dashboard-role"><option value="supervisor">Supervisor</option><option value="admin">Administrador</option></select></label>
+        <label>Rol<select id="new-dashboard-role"><option value="coordinator">Coordinador</option><option value="supervisor">Supervisor</option><option value="admin">Administrador</option></select></label>
+        <label id="new-dashboard-sede-field">Sede / hotel asignado<select id="new-dashboard-sede" required>${dashboardPlaceOptions()}</select></label>
         <button type="submit">Crear usuario</button>
       </form>
       <p id="dashboard-users-feedback" class="settings-feedback"></p>
@@ -280,8 +331,8 @@ function renderDashboardUsers() {
     </div>
     <div class="dashboard-users-table-wrap">
       <table class="dashboard-users-table">
-        <thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Estado</th><th>Creado</th><th>Acciones</th></tr></thead>
-        <tbody>${dashboardUsers.map((user) => dashboardUserCardHtml(user)).join('') || '<tr><td colspan="6" class="dashboard-empty-row">No hay usuarios.</td></tr>'}</tbody>
+        <thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Sede</th><th>Estado</th><th>Creado</th><th>Acciones</th></tr></thead>
+        <tbody>${dashboardUsers.map((user) => dashboardUserCardHtml(user)).join('') || '<tr><td colspan="7" class="dashboard-empty-row">No hay usuarios.</td></tr>'}</tbody>
       </table>
     </div>
   `;
@@ -291,12 +342,25 @@ function renderDashboardUsers() {
     renderDashboardUsers();
   });
   document.getElementById('close-create-dashboard-user').addEventListener('click', () => { dashboardUserCreateOpen = false; renderDashboardUsers(); });
+  const newRoleSelect = document.getElementById('new-dashboard-role');
+  const newSedeField = document.getElementById('new-dashboard-sede-field');
+  const newSedeSelect = document.getElementById('new-dashboard-sede');
+  const syncNewRoleFields = () => {
+    const isCoordinator = newRoleSelect.value === 'coordinator';
+    newSedeField.classList.toggle('hidden', !isCoordinator);
+    newSedeSelect.required = isCoordinator;
+    newSedeSelect.disabled = !isCoordinator;
+  };
+  newRoleSelect.addEventListener('change', syncNewRoleFields);
+  syncNewRoleFields();
   document.getElementById('create-dashboard-user').addEventListener('submit', async (event) => {
     event.preventDefault();
     const feedback = document.getElementById('dashboard-users-feedback');
     try {
       feedback.textContent = 'Creando…';
-      await dashboardUsersRequest({ action: 'create', name: document.getElementById('new-dashboard-name').value, email: document.getElementById('new-dashboard-email').value, password: document.getElementById('new-dashboard-password').value, role: document.getElementById('new-dashboard-role').value });
+      const role = newRoleSelect.value;
+      const sede = role === 'coordinator' ? parseDashboardPlaceValue(newSedeSelect.value) : {};
+      await dashboardUsersRequest({ action: 'create', name: document.getElementById('new-dashboard-name').value, email: document.getElementById('new-dashboard-email').value, password: document.getElementById('new-dashboard-password').value, role, ...sede });
       dashboardUserCreateOpen = false;
       await loadDashboardUsers();
     } catch (error) { feedback.textContent = error.message; feedback.className = 'settings-feedback error'; }
@@ -307,10 +371,22 @@ function renderDashboardUsers() {
 function dashboardUserCardHtml(user) {
   const name = user.name || (user.email ? user.email.split('@')[0] : 'Usuario');
   const state = user.disabled ? 'Inactivo' : 'Activo';
+  const sede = user.sedeName || '—';
+  const roleControl = user.isCurrent
+    ? '<span class="dashboard-role-static">Administrador</span>'
+    : `<select id="dashboard-role-${user.uid}" class="dashboard-role-select">
+        <option value="coordinator"${user.role === 'coordinator' ? ' selected' : ''}>Coordinador</option>
+        <option value="supervisor"${user.role === 'supervisor' ? ' selected' : ''}>Supervisor</option>
+        <option value="admin"${user.role === 'admin' ? ' selected' : ''}>Administrador</option>
+      </select>`;
+  const sedeControl = user.isCurrent
+    ? '<span>—</span>'
+    : `<select id="dashboard-sede-${user.uid}" class="dashboard-sede-select${user.role === 'coordinator' ? '' : ' hidden'}">${dashboardPlaceOptions(user.sedeType, user.sedeId)}</select>`;
   return `<tr>
     <td><b>${escapeHtml(name)}</b>${user.isCurrent ? ' <small>(tu)</small>' : ''}</td>
     <td>${escapeHtml(user.email)}</td>
-    <td>${user.isCurrent ? '<span class="dashboard-role-static">Administrador</span>' : `<select id="dashboard-role-${user.uid}" class="dashboard-role-select"><option value="supervisor"${user.role === 'supervisor' ? ' selected' : ''}>Supervisor</option><option value="admin"${user.role === 'admin' ? ' selected' : ''}>Administrador</option></select>`}</td>
+    <td>${roleControl}</td>
+    <td>${sedeControl}</td>
     <td><span class="dashboard-status ${user.disabled ? 'inactive' : 'active'}">${state}</span></td>
     <td>${formatDashboardDate(user.createdAt)}</td>
     <td class="dashboard-user-actions"><button type="button" data-save-user="${user.uid}" class="dashboard-table-action">Editar</button>${user.isCurrent ? '' : `<button type="button" data-delete-user="${user.uid}" class="dashboard-table-action danger">Eliminar</button>`}</td>
@@ -318,9 +394,21 @@ function dashboardUserCardHtml(user) {
 }
 
 function bindDashboardUserControls(user) {
+  const roleSelect = document.getElementById(`dashboard-role-${user.uid}`);
+  const sedeSelect = document.getElementById(`dashboard-sede-${user.uid}`);
+  if (roleSelect && sedeSelect) {
+    roleSelect.addEventListener('change', () => {
+      sedeSelect.classList.toggle('hidden', roleSelect.value !== 'coordinator');
+    });
+  }
   document.querySelector(`[data-save-user="${user.uid}"]`).addEventListener('click', async () => {
     try {
-      await dashboardUsersRequest({ action: 'update', uid: user.uid, role: user.isCurrent ? 'admin' : document.getElementById(`dashboard-role-${user.uid}`).value });
+      const role = user.isCurrent ? 'admin' : roleSelect.value;
+      const sede = role === 'coordinator' ? parseDashboardPlaceValue(sedeSelect.value) : {};
+      if (role === 'coordinator' && (!sede.sedeId || !sede.sedeType)) {
+        throw new Error('Selecciona una sede para el coordinador.');
+      }
+      await dashboardUsersRequest({ action: 'update', uid: user.uid, role, ...sede });
       await loadDashboardUsers();
     } catch (error) { alert(error.message); }
   });
@@ -531,6 +619,8 @@ function updateAppCardHtml(app) {
 }
 
 function saveSupportPhone(value) {
+  value = normalizeSupportPhone(value);
+  if (!isValidSupportPhone(value)) return;
   const feedback = document.getElementById('settings-feedback');
   feedback.textContent = 'Guardando...';
   feedback.className = 'settings-feedback';
