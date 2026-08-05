@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'destination_picker_screen.dart';
 import 'preset_places_screen.dart';
 import 'request_ride_screen.dart';
 import '../services/trip_service.dart';
+import '../services/map_adapter.dart';
 import '../widgets/support_button.dart';
 import '../theme/app_theme.dart';
 
@@ -36,8 +36,9 @@ class HomeTabScreen extends StatefulWidget {
 }
 
 class _HomeTabScreenState extends State<HomeTabScreen> {
-  GoogleMapController? _mapController;
-  LatLng _pickup = const LatLng(19.4326, -99.1332);
+  MapboxMapController? _mapController;
+  // Lima como respaldo hasta que el GPS entregue la ubicacion real.
+  LatLng _pickup = const LatLng(-12.0464, -77.0428);
   bool _loadingLocation = true;
   bool _showMap = false;
   bool _mapReady = false;
@@ -142,7 +143,7 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
               ? const Center(child: CircularProgressIndicator(color: AppColors.ink))
               : Opacity(
                   opacity: _mapReady ? 1 : 0,
-                  child: GoogleMap(
+                  child: MapboxMapView(
                     initialCameraPosition: CameraPosition(target: _pickup, zoom: 15),
                     onMapCreated: (controller) {
                       _mapController = controller;
@@ -172,7 +173,9 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
           right: 0,
           child: SafeArea(
             child: Padding(
-              padding: const EdgeInsets.all(20),
+              // Reserva la columna derecha para Soporte; asi nunca tapa la
+              // barra de busqueda en telefonos estrechos.
+              padding: const EdgeInsets.fromLTRB(20, 20, 120, 0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [

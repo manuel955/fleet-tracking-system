@@ -1,7 +1,8 @@
 import 'dart:async';
+import 'package:geolocator/geolocator.dart';
 import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../services/places_service.dart';
+import '../services/map_adapter.dart';
 import '../theme/app_theme.dart';
 import '../services/trip_service.dart';
 
@@ -32,10 +33,13 @@ class DestinationPickerScreen extends StatefulWidget {
 }
 
 class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
-  GoogleMapController? _mapController;
+  MapboxMapController? _mapController;
   final _controller = TextEditingController();
   final _sessionToken = PlacesService.newSessionToken();
   Timer? _debounce;
+  Timer? _reverseDebounce;
+  LatLng? _lastReverseRequested;
+  int _reverseRequestToken = 0;
   List<PlaceSuggestion> _suggestions = [];
   bool _loading = false;
   String? _error;
@@ -76,6 +80,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _reverseDebounce?.cancel();
     _controller.dispose();
     super.dispose();
   }
@@ -179,17 +184,34 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
   }
 
   Future<void> _reverseGeocodePin(LatLng latLng) async {
-    try {
-      final address = await PlacesService.reverseGeocode(latLng.latitude, latLng.longitude);
-      if (!mounted || _pin != latLng) return;
-      setState(() {
-        _pinLabel = address;
-        _controller.text = address;
-      });
-    } catch (_) {
-      if (!mounted || _pin != latLng) return;
-      setState(() => _pinLabel = 'Punto marcado en el mapa');
+    _reverseDebounce?.cancel();
+    final last = _lastReverseRequested;
+    if (last != null &&
+        Geolocator.distanceBetween(
+              last.latitude,
+              last.longitude,
+              latLng.latitude,
+              latLng.longitude,
+            ) <
+            60) {
+      return;
     }
+    final requestToken = ++_reverseRequestToken;
+    _reverseDebounce = Timer(const Duration(milliseconds: 500), () async {
+      try {
+        final address = await PlacesService.reverseGeocode(latLng.latitude, latLng.longitude);
+        if (!mounted || requestToken != _reverseRequestToken || _pin != latLng) return;
+        _lastReverseRequested = latLng;
+        setState(() {
+          _pinLabel = address;
+          _controller.text = address;
+        });
+      } catch (_) {
+        if (!mounted || requestToken != _reverseRequestToken || _pin != latLng) return;
+        _lastReverseRequested = latLng;
+        setState(() => _pinLabel = 'Punto marcado en el mapa');
+      }
+    });
   }
 
   void _confirm() {
@@ -210,7 +232,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
             Positioned.fill(
               child: Opacity(
                 opacity: _mapReady ? 1 : 0,
-                child: GoogleMap(
+                child: MapboxMapView(
                   initialCameraPosition: CameraPosition(target: widget.initialCenter, zoom: 14),
                   onMapCreated: (controller) {
                     _mapController = controller;

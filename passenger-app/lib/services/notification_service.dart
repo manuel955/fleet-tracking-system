@@ -48,4 +48,13 @@ class NotificationService {
       ),
     );
   }
+
+  static Future<void> showTripCancelled([String? reason]) async {
+    await showSimple(
+      'Viaje cancelado',
+      (reason == null || reason.trim().isEmpty)
+          ? 'Tu viaje fue cancelado.'
+          : reason.trim(),
+    );
+  }
 }

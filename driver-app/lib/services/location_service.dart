@@ -118,37 +118,26 @@ class LocationService {
 
     try {
       final auth = await AuthService.currentSession();
-      final driverId = auth['uid'];
       final token = auth['idToken'];
-      if (driverId is! String ||
-          token is! String ||
-          driverId.isEmpty ||
-          token.isEmpty) {
+      if (token is! String || token.isEmpty) {
         return null;
       }
 
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
       final heading = position.heading.isFinite ? position.heading : 0.0;
       final payload = jsonEncode({
         'lat': position.latitude,
         'lng': position.longitude,
         'heading': heading,
-        'lastUpdate': timestamp,
       });
-      final uri = Uri.parse(
-        '${AppConfig.firebaseDbUrl}/drivers/$driverId.json?auth=$token',
-      );
-      final publicLocationUri = Uri.parse(
-        '${AppConfig.firebaseDbUrl}/driverLocations/$driverId.json?auth=$token',
-      );
-
-      final responses = await Future.wait([
-        http.patch(uri,
-            headers: {'Content-Type': 'application/json'}, body: payload),
-        http.patch(publicLocationUri,
-            headers: {'Content-Type': 'application/json'}, body: payload),
-      ]).timeout(const Duration(seconds: 12));
-      if (responses.every((response) => response.statusCode == 200)) {
+      final response = await http.post(
+        Uri.parse('${AppConfig.cloudFunctionsBaseUrl}/updateDriverLocation'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+        body: payload,
+      ).timeout(const Duration(seconds: 12));
+      if (response.statusCode == 200) {
         return position;
       }
     } catch (_) {
@@ -262,37 +251,28 @@ Future<void> _sendCurrentLocation(ServiceInstance service) async {
 
     _log(service, 'GPS ok: ${position.latitude.toStringAsFixed(5)}, ${position.longitude.toStringAsFixed(5)}');
 
-    // Usar SIEMPRE el uid devuelto por esta misma llamada (no leerlo de
-    // SharedPreferences por separado): el uid y el idToken deben venir del
-    // mismo resultado o las reglas de Firebase (auth.uid === $driverId)
-    // rechazan la escritura con 401 aunque el usuario sea valido.
+    // El token se obtiene de la misma sesion que usa el turno. La escritura
+    // pasa por Cloud Functions, que valida el uid y actualiza solo los campos
+    // de ubicacion; asi el telefono no necesita escribir el nodo padre RTDB.
     final auth = await AuthService.currentSession();
-    final driverId = auth['uid'];
     final token = auth['idToken'];
 
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
     final heading = position.heading.isFinite ? position.heading : 0.0;
     final payload = jsonEncode({
       'lat': position.latitude,
       'lng': position.longitude,
       'heading': heading,
-      'lastUpdate': timestamp,
     });
-    final uri = Uri.parse(
-      '${AppConfig.firebaseDbUrl}/drivers/$driverId.json?auth=$token',
-    );
-    final publicLocationUri = Uri.parse(
-      '${AppConfig.firebaseDbUrl}/driverLocations/$driverId.json?auth=$token',
-    );
+    final response = await http.post(
+      Uri.parse('${AppConfig.cloudFunctionsBaseUrl}/updateDriverLocation'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      },
+      body: payload,
+    ).timeout(const Duration(seconds: 12));
 
-    // El perfil privado conserva la logica del dashboard/worker y el nodo
-    // publico solo expone las tres coordenadas necesarias al pasajero.
-    final responses = await Future.wait([
-      http.patch(uri, headers: {'Content-Type': 'application/json'}, body: payload),
-      http.patch(publicLocationUri, headers: {'Content-Type': 'application/json'}, body: payload),
-    ]).timeout(const Duration(seconds: 12));
-
-    if (responses.every((response) => response.statusCode == 200)) {
+    if (response.statusCode == 200) {
       _log(service, 'Enviado a Firebase correctamente.');
       service.invoke('location_update', {
         'lat': position.latitude,
@@ -301,7 +281,7 @@ Future<void> _sendCurrentLocation(ServiceInstance service) async {
         'time': DateTime.now().toIso8601String(),
       });
     } else {
-      final failed = responses.firstWhere((response) => response.statusCode != 200);
+      final failed = response;
       _log(service, 'Firebase respondió ${failed.statusCode}: ${failed.body}');
     }
   } catch (e) {

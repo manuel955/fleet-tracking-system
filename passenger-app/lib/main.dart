@@ -2,8 +2,8 @@ import 'dart:async';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:google_maps_flutter_android/google_maps_flutter_android.dart';
-import 'package:google_maps_flutter_platform_interface/google_maps_flutter_platform_interface.dart';
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' show MapboxOptions;
+import 'config.dart';
 import 'screens/account_tab_screen.dart';
 import 'screens/active_trip_tracking_screen.dart';
 import 'screens/activity_tab_screen.dart';
@@ -20,14 +20,8 @@ import 'theme/app_theme.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // La app crea varios GoogleMap distintos a lo largo de una sesion
-  // (pedir viaje, seguimiento del viaje activo). El modo de renderizado por
-  // defecto (virtual display) puede dejar el segundo/tercer mapa en blanco
-  // en algunos dispositivos (visto en un Huawei P30 Pro); "hybrid
-  // composition" es la alternativa oficialmente recomendada para esto.
-  final mapsImplementation = GoogleMapsFlutterPlatform.instance;
-  if (mapsImplementation is GoogleMapsFlutterAndroid) {
-    mapsImplementation.useAndroidViewSurface = true;
+  if (!kIsWeb && AppConfig.mapboxAccessToken.isNotEmpty) {
+    MapboxOptions.setAccessToken(AppConfig.mapboxAccessToken);
   }
 
   // En web solo necesitamos revisar la interfaz local. Estas integraciones
@@ -256,8 +250,13 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
             'Viaje actualizado',
             'El destino de tu viaje cambió.',
           );
-          break;
-      }
+           break;
+         case 'trip_cancelled':
+           NotificationService.showTripCancelled(
+             message.data['reason']?.toString(),
+           );
+           break;
+       }
     });
     if (registered) PushService.registerToken();
 

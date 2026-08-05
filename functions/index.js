@@ -490,6 +490,58 @@ exports.setDriverAvailability = functions.https.onRequest(async (req, res) => {
   }
 });
 
+// Publica una posicion GPS desde el telefono sin permitir escrituras directas
+// sobre todo el perfil del conductor. Las reglas RTDB mantienen bloqueado el
+// nodo padre `drivers/{uid}`; esta funcion valida el token, el perfil aprobado
+// y actualiza unicamente los campos de ubicacion necesarios.
+exports.updateDriverLocation = functions.https.onRequest(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
+
+  try {
+    const header = req.get('Authorization') || '';
+    if (!header.startsWith('Bearer ')) throw new Error('No autorizado');
+    const user = await admin.auth().verifyIdToken(header.slice(7));
+    const driverId = user.uid;
+    const lat = Number(req.body?.lat);
+    const lng = Number(req.body?.lng);
+    const heading = Number(req.body?.heading ?? 0);
+    if (!Number.isFinite(lat) || lat < -90 || lat > 90 ||
+        !Number.isFinite(lng) || lng < -180 || lng > 180 ||
+        !Number.isFinite(heading) || heading < 0 || heading > 360 ||
+        (lat === 0 && lng === 0)) {
+      return res.status(400).json({ error: 'Coordenadas GPS invalidas.' });
+    }
+
+    const driverRef = admin.database().ref(`drivers/${driverId}`);
+    const driver = (await driverRef.once('value')).val();
+    if (!driver) return res.status(404).json({ error: 'Conductor no encontrado.' });
+    if (driver.approvalStatus !== 'approved') {
+      return res.status(403).json({ error: 'El conductor todavía no está aprobado.' });
+    }
+    if (driver.turno_activo !== true && !['online', 'busy'].includes(driver.status)) {
+      return res.status(409).json({ error: 'El turno del conductor no está activo.' });
+    }
+
+    // La hora la fija el servidor para evitar falsos heartbeats por un reloj
+    // incorrecto del teléfono.
+    const lastUpdate = Date.now();
+    const location = { lat, lng, heading, lastUpdate };
+    await admin.database().ref().update({
+      [`drivers/${driverId}/lat`]: lat,
+      [`drivers/${driverId}/lng`]: lng,
+      [`drivers/${driverId}/heading`]: heading,
+      [`drivers/${driverId}/lastUpdate`]: lastUpdate,
+      [`driverLocations/${driverId}`]: location,
+    });
+    return res.json({ ok: true, lastUpdate });
+  } catch (error) {
+    console.error('updateDriverLocation', error);
+    return res.status(403).json({ error: error.message || 'No se pudo actualizar la ubicacion.' });
+  }
+});
+
 // Avanza el viaje exclusivamente desde el backend. La app puede perder su
 // proceso y volver a abrirse, pero nunca debe poder finalizar un viaje solo
 // porque aun no recupero el GPS. La validacion de cercania se hace con la
@@ -543,11 +595,11 @@ exports.advanceDriverTrip = functions.https.onRequest(async (req, res) => {
       const targetLat = Number(newStatus === 'completed' ? trip.destinationLat : trip.pickupLat);
       const targetLng = Number(newStatus === 'completed' ? trip.destinationLng : trip.pickupLng);
       if (![lat, lng, targetLat, targetLng].every(Number.isFinite)) {
-        return res.status(409).json({ error: 'Aun no recibimos una posicion GPS valida. Espera unos segundos.' });
+        return res.status(422).json({ error: 'Aun no recibimos una posicion GPS valida. Espera unos segundos.' });
       }
       const distance = distanceMeters(lat, lng, targetLat, targetLng);
       if (distance > DRIVER_ARRIVAL_RADIUS_METERS) {
-        return res.status(409).json({
+        return res.status(422).json({
           error: `Debes estar a menos de ${DRIVER_ARRIVAL_RADIUS_METERS} metros del punto. Distancia actual: ${Math.round(distance)} m.`,
           distanceMeters: Math.round(distance),
         });
@@ -559,27 +611,61 @@ exports.advanceDriverTrip = functions.https.onRequest(async (req, res) => {
       in_progress: 'inProgressAt',
       completed: 'completedAt',
     }[newStatus];
-    const result = await tripRef.transaction((current) => {
-      if (!current || current.driverId !== user.uid || current.status !== expectedStatus) return;
-      return {
-        ...current,
-        status: newStatus,
-        [timestampField]: Date.now(),
-      };
-    });
-    if (!result.committed) {
-      // Otra solicitud pudo ganar la carrera. Vuelve a leer para distinguir
-      // un reintento de la misma transicion de un avance incompatible.
+    // Una lectura/poll del viaje puede coincidir con este gesto y hacer que
+    // la primera transaccion se aborte aunque nadie haya avanzado el viaje.
+    // Reintentamos solo si el estado remoto sigue siendo el esperado; si ya
+    // cambio a otro estado, conservamos el conflicto real.
+    let result;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      result = await tripRef.transaction((current) => {
+        // El SDK puede invocar el callback una primera vez con null antes de
+        // hidratar el valor remoto. Usamos la lectura validada de arriba como
+        // base solo para esa primera llamada; devolver undefined cancela la
+        // transaccion y provocaba el falso conflicto al pulsar "he llegado".
+        const candidate = current || trip;
+        if (!candidate || candidate.driverId !== user.uid || candidate.status !== expectedStatus) {
+          return current;
+        }
+        return {
+          ...candidate,
+          status: newStatus,
+          [timestampField]: Date.now(),
+        };
+      });
+      if (result.committed) return res.json({ ok: true, status: newStatus });
+
       const latest = (await tripRef.once('value')).val() || {};
       if (latest.driverId === user.uid && latest.status === newStatus) {
         return res.json({ ok: true, status: newStatus, alreadyApplied: true });
       }
-      return res.status(409).json({
-        error: 'El viaje cambio de estado. Actualiza la pantalla.',
-        currentStatus: latest.status || null,
-      });
+      if (latest.driverId !== user.uid || latest.status !== expectedStatus) {
+        console.warn('advanceDriverTrip state conflict', {
+          tripId,
+          newStatus,
+          expectedStatus,
+          currentStatus: latest.status || null,
+          driverId: user.uid,
+        });
+        return res.status(409).json({
+          error: 'El viaje cambio de estado. Actualiza la pantalla.',
+          currentStatus: latest.status || null,
+        });
+      }
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 120 * (attempt + 1)));
+      }
     }
-    return res.json({ ok: true, status: newStatus });
+
+    console.warn('advanceDriverTrip transaction retry exhausted', {
+      tripId,
+      newStatus,
+      expectedStatus,
+      driverId: user.uid,
+    });
+    return res.status(409).json({
+      error: 'No se pudo confirmar el viaje. Desliza nuevamente.',
+      currentStatus: expectedStatus,
+    });
   } catch (error) {
     console.error('advanceDriverTrip', error);
     return res.status(403).json({ error: error.message || 'No se pudo actualizar el viaje.' });

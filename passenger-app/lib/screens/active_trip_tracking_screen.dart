@@ -1,11 +1,12 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/car_icon.dart';
 import '../services/directions_service.dart';
+import '../services/map_adapter.dart';
 import '../services/trip_service.dart';
+import '../config.dart';
 import '../theme/app_theme.dart';
 import '../widgets/support_button.dart';
 import 'destination_picker_screen.dart';
@@ -44,11 +45,16 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
   LatLng? _lastRouteOrigin;
   ({double lat, double lng})? _lastRouteTarget;
   int _routeReqToken = 0;
+  DateTime? _lastRouteRequestedAt;
+  bool _routeRequestInFlight = false;
+  bool _tripPollInFlight = false;
+  bool _driverPollInFlight = false;
   bool _busy = false;
+  // La brújula/recentrado no forma parte de la interfaz operativa.
+  final bool _showMapRecenterControl = false;
   BitmapDescriptor? _carIcon;
-  GoogleMapController? _mapController;
+  MapboxMapController? _mapController;
   bool _followDriver = false;
-  bool _ignoreNextCameraMove = false;
   Map<String, dynamic>? _driverProfile;
 
   dynamic _firstPopulatedValue(String key) {
@@ -129,7 +135,7 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
       ' ',
     );
     if (type == 'bus' || type.contains('ómnibus') || type.contains('omnibus')) {
-      return 'assets/vehicles/vehicle-bus.png';
+      return 'assets/vehicles/vehicle-bus-dispo.png';
     }
     if (type == 'mini bus' || type == 'minibus') {
       return 'assets/vehicles/vehicle-minibus.png';
@@ -138,15 +144,14 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
       return 'assets/vehicles/vehicle-minivan.png';
     }
     if (type == 'van') {
-      return 'assets/vehicles/vehicle-van.png';
+      return 'assets/vehicles/vehicle-van-v2.png';
     }
-    if (type == 'suv' ||
-        type == 'camioneta' ||
-        type == 'pickup' ||
-        type == 'pick-up') {
+    // "Pickup" era una categoría antigua. La categoría vigente es SUV;
+    // ambos valores deben mostrar la misma imagen para viajes históricos.
+    if (type == 'pickup' || type == 'pick-up' || type == 'suv' || type == 'camioneta') {
       return 'assets/vehicles/vehicle-suv.png';
     }
-    return 'assets/vehicles/vehicle-car.png';
+    return 'assets/vehicles/vehicle-car-new.png';
   }
 
   Widget _vehicleImage() {
@@ -172,7 +177,9 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
   }
 
   String? get _driverPhotoUrl {
-    final value = _driverProfile?['profilePhotoUrl']?.toString().trim();
+    final value = (_driverProfile?['profilePhotoUrl'] ?? _trip['driverPhotoUrl'])
+        ?.toString()
+        .trim();
     return value == null || value.isEmpty ? null : value;
   }
 
@@ -190,6 +197,7 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
       'driverName',
       'driverPlate',
       'driverPhone',
+      'driverPhotoUrl',
     ];
     return keys.any((key) => _trip[key] != next[key]);
   }
@@ -220,7 +228,7 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
     _trip = widget.trip;
     _tripTimer = Timer.periodic(const Duration(seconds: 4), (_) => _pollTrip());
     _driverTimer = Timer.periodic(
-      const Duration(seconds: 5),
+      AppConfig.driverLocationPollInterval,
       (_) => _pollDriver(),
     );
     _pollDriver();
@@ -237,6 +245,8 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
   }
 
   Future<void> _pollTrip() async {
+    if (_tripPollInFlight) return;
+    _tripPollInFlight = true;
     try {
       final trip = await TripService.getTrip(widget.tripId);
       if (trip == null) return;
@@ -251,12 +261,16 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
       _refreshRoute();
     } catch (_) {
       // Reintenta en el siguiente tick.
+    } finally {
+      _tripPollInFlight = false;
     }
   }
 
   Future<void> _pollDriver() async {
     final driverId = _trip['driverId'] as String?;
     if (driverId == null) return;
+    if (_driverPollInFlight) return;
+    _driverPollInFlight = true;
     try {
       final driver = await TripService.getDriverLocation(driverId);
       if (driver == null) return;
@@ -280,6 +294,8 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
       }
     } catch (_) {
       // Reintenta en el siguiente tick.
+    } finally {
+      _driverPollInFlight = false;
     }
   }
 
@@ -308,8 +324,14 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
         _lastRouteTarget!.lat != target.lat ||
         _lastRouteTarget!.lng != target.lng;
 
-    // El GPS del conductor reenvia la posicion aunque no se haya movido;
-    // sin este filtro se llamaria a Routes API sin necesidad en cada poll.
+    // El GPS del conductor reenvia la posicion aunque no se haya movido. La
+    // ruta visual se recalcula como maximo cada 30s y cuando avanzo 50m.
+    final tooSoon =
+        _lastRouteRequestedAt != null &&
+        DateTime.now().difference(_lastRouteRequestedAt!) <
+            AppConfig.routeRefreshInterval;
+    if (!targetChanged && tooSoon) return;
+    if (_routeRequestInFlight) return;
     if (!force &&
         !targetChanged &&
         _lastRouteOrigin != null &&
@@ -319,13 +341,15 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
               origin.latitude,
               origin.longitude,
             ) <
-            25) {
+            AppConfig.routeRecalculationDistanceMeters) {
       return;
     }
 
     final token = ++_routeReqToken;
+    _routeRequestInFlight = true;
     _lastRouteOrigin = origin;
     _lastRouteTarget = target;
+    _lastRouteRequestedAt = DateTime.now();
     final destination = LatLng(target.lat, target.lng);
 
     try {
@@ -335,6 +359,8 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
     } catch (_) {
       if (token != _routeReqToken || !mounted) return;
       setState(() => _routePoints = [origin, destination]);
+    } finally {
+      _routeRequestInFlight = false;
     }
   }
 
@@ -352,7 +378,6 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
   Future<void> _moveCameraTo(LatLng target) async {
     final controller = _mapController;
     if (controller == null) return;
-    _ignoreNextCameraMove = true;
     await controller.animateCamera(
       CameraUpdate.newCameraPosition(CameraPosition(target: target, zoom: 16)),
     );
@@ -365,10 +390,6 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
   }
 
   void _onCameraMoveStarted() {
-    if (_ignoreNextCameraMove) {
-      _ignoreNextCameraMove = false;
-      return;
-    }
     if (_followDriver && mounted) setState(() => _followDriver = false);
   }
 
@@ -553,7 +574,7 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
       body: Stack(
         children: [
           Positioned.fill(
-            child: GoogleMap(
+            child: MapboxMapView(
               onMapCreated: (controller) => _mapController = controller,
               onCameraMoveStarted: _onCameraMoveStarted,
               initialCameraPosition: CameraPosition(target: pickup, zoom: 15),
@@ -627,12 +648,10 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Padding(
+                  if (_showMapRecenterControl) Padding(
                     padding: const EdgeInsets.only(right: 16, bottom: 10),
                     child: Material(
-                      color: _followDriver
-                          ? AppColors.blue
-                          : AppColors.paper,
+                      color: _followDriver ? AppColors.blue : AppColors.paper,
                       shape: const CircleBorder(),
                       elevation: 4,
                       child: IconButton(
@@ -646,9 +665,7 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
                             _centerMap(pickup);
                           }
                         },
-                        color: _followDriver
-                            ? AppColors.paper
-                            : AppColors.blue,
+                        color: _followDriver ? AppColors.paper : AppColors.blue,
                         icon: Icon(
                           _followDriver ? Icons.gps_fixed : Icons.my_location,
                         ),
@@ -683,7 +700,7 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
                             width: 48,
                             height: 4,
                             decoration: BoxDecoration(
-                        color: AppColors.muted,
+                              color: AppColors.muted,
                               borderRadius: BorderRadius.circular(4),
                             ),
                           ),
@@ -811,7 +828,9 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
                                   onPressed: _busy ? null : _cancel,
                                   style: OutlinedButton.styleFrom(
                                     foregroundColor: AppColors.red,
-                                    side: const BorderSide(color: AppColors.red),
+                                    side: const BorderSide(
+                                      color: AppColors.red,
+                                    ),
                                     minimumSize: const Size.fromHeight(40),
                                   ),
                                   child: const Text('Cancelar viaje'),

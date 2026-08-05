@@ -15,6 +15,7 @@ class TripService {
     required int passengerCount,
     required String passengerName,
     required String passengerPhone,
+    String? passengerPhotoUrl,
     String? pickupAddress,
     double? destinationLat,
     double? destinationLng,
@@ -41,6 +42,7 @@ class TripService {
         'passengerId': auth['uid'],
         'passengerName': passengerName,
         'passengerPhone': passengerPhone,
+        'passengerPhotoUrl': ?passengerPhotoUrl,
         'passengerCount': passengerCount,
         'pickupLat': pickupLat,
         'pickupLng': pickupLng,
@@ -102,7 +104,7 @@ class TripService {
   ) async {
     final auth = await AuthService.signInAnonymously();
     final uri = Uri.parse(
-      '${AppConfig.firebaseDbUrl}/drivers/$driverId.json?auth=${auth['idToken']}',
+      '${AppConfig.firebaseDbUrl}/driverLocations/$driverId.json?auth=${auth['idToken']}',
     );
     final response = await http.get(uri);
     if (response.statusCode != 200) {

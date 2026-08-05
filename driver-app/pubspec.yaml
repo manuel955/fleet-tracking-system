@@ -1,7 +1,7 @@
 name: fleet_driver_app
 description: App del conductor - envia ubicacion GPS en segundo plano cada 5s
 publish_to: "none"
-version: 1.0.0+34
+version: 1.0.0+40
 
 environment:
   sdk: ">=3.0.0 <4.0.0"

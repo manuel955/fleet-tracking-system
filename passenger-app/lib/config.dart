@@ -15,6 +15,12 @@ class AppConfig {
   // numero de respaldo que driver-app/lib/config.dart.
   static const String supportPhone = '+51929125443';
 
+  // El pasajero refresca la posicion recibida del conductor cada 5 segundos.
+  // Las consultas de ruta usan un intervalo y un umbral independientes.
+  static const Duration driverLocationPollInterval = Duration(seconds: 5);
+  static const Duration routeRefreshInterval = Duration(seconds: 30);
+  static const double routeRecalculationDistanceMeters = 50;
+
   // Chequeo de version: config/passengerAppBuild en Firebase (numero) contra
   // PackageInfo.buildNumber (el "+N" de este pubspec.yaml) -- si el remoto
   // es mayor, se avisa al pasajero. El APK se publica desde el dashboard
@@ -25,9 +31,15 @@ class AppConfig {
   static const String apkDownloadUrl =
       'https://firebasestorage.googleapis.com/v0/b/$firebaseStorageBucket/o/app_releases%2Fpassenger-app.apk?alt=media';
 
-  // Misma key que android/app/src/main/AndroidManifest.xml (meta-data
-  // com.google.android.geo.API_KEY). Aqui tambien se necesita en texto
-  // plano porque el buscador de lugares llama a la Places API (New) por
-  // HTTP directo, no a traves del SDK nativo de Maps.
-  static const String googleMapsApiKey = 'AIzaSyAfPeC1qZW6eKFVz6oFzn_UYFQ5HMS0SsQ';
+  // Token del SDK de Mapbox, inyectado en tiempo de compilacion.
+  // Se inyecta al compilar: flutter build apk
+  // --dart-define=MAPBOX_ACCESS_TOKEN=pk....
+  static const String mapboxAccessToken = String.fromEnvironment(
+    'MAPBOX_ACCESS_TOKEN',
+    defaultValue: '',
+  );
+  static const String mapboxStyleUri = String.fromEnvironment(
+    'MAPBOX_STYLE_URI',
+    defaultValue: 'mapbox://styles/mapbox/standard',
+  );
 }

@@ -1,9 +1,6 @@
 // ---------------------------------------------------------------------------
 // Seccion "Lugares": sedes deportivas y hoteles que el pasajero elige desde
-// botones flotantes en la app (sin escribir la direccion a mano). Viven en
-// config/sportVenues y config/hotels (ver database/firebase-rules.json),
-// lectura publica, escritura solo dashboard-admin -- mismo patron que el
-// resto de config/ (settings.js).
+// botones flotantes en la app. Viven en config/sportVenues y config/hotels.
 // ---------------------------------------------------------------------------
 
 const PLACE_LISTS = [
@@ -13,7 +10,7 @@ const PLACE_LISTS = [
 
 const placesViewEl = document.getElementById('places-view');
 let placesSubscribed = false;
-let placesCache = {}; // key -> { $id: {name, address, lat, lng} }
+let placesCache = {};
 
 function startPlaces() {
   if (placesSubscribed) return;
@@ -30,16 +27,16 @@ function renderPlaces() {
   placesViewEl.innerHTML = PLACE_LISTS.map((list) => placeListCardHtml(list)).join('');
 
   PLACE_LISTS.forEach((list) => {
-    document.getElementById(`place-form-${list.key}`).addEventListener('submit', (e) => {
-      e.preventDefault();
+    document.getElementById(`place-form-${list.key}`).addEventListener('submit', (event) => {
+      event.preventDefault();
       addPlace(list.key);
     });
   });
 
-  placesViewEl.querySelectorAll('[data-delete-place]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const [key, id] = btn.getAttribute('data-delete-place').split('|');
-      if (confirm('¿Eliminar este lugar?')) db.ref(`config/${key}/${id}`).remove();
+  placesViewEl.querySelectorAll('[data-delete-place]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const [key, id] = button.getAttribute('data-delete-place').split('|');
+      if (confirm('Eliminar este lugar?')) db.ref(`config/${key}/${id}`).remove();
     });
   });
 }
@@ -47,31 +44,24 @@ function renderPlaces() {
 function placeListCardHtml(list) {
   const entries = Object.entries(placesCache[list.key] || {});
   const rows = entries.length
-    ? entries
-        .map(
-          ([id, p]) => `
+    ? entries.map(([id, place]) => `
         <li class="place-row">
           <div>
-            <b>${escapeHtml(p.name || '-')}</b>
-            <div class="place-address">${escapeHtml(p.address || '-')}</div>
+            <b>${escapeHtml(place.name || '-')}</b>
+            <div class="place-address">${escapeHtml(place.address || '-')}</div>
           </div>
           <button type="button" class="place-delete-btn" data-delete-place="${list.key}|${id}">Eliminar</button>
         </li>
-      `
-        )
-        .join('')
-    : '<p class="empty-list">Sin lugares todavía.</p>';
+      `).join('')
+    : '<p class="empty-list">Sin lugares todavia.</p>';
 
   return `
     <div class="settings-card place-settings-card">
       <h3>${list.label}</h3>
-      <p class="settings-hint">
-        Aparecen en la app de pasajeros al tocar el botón "${list.label}" en
-        Inicio, para pedir un viaje directo sin escribir la dirección.
-      </p>
+      <p class="settings-hint">Aparecen en la app de pasajeros al tocar el boton de ${list.label}.</p>
       <form id="place-form-${list.key}" class="settings-form place-form">
         <input type="text" id="place-name-${list.key}" placeholder="Nombre" required />
-        <input type="text" id="place-address-${list.key}" placeholder="Dirección" required />
+        <input type="text" id="place-address-${list.key}" placeholder="Direccion" required />
         <button type="submit">Agregar</button>
       </form>
       <p id="place-feedback-${list.key}" class="settings-feedback"></p>
@@ -80,7 +70,7 @@ function placeListCardHtml(list) {
   `;
 }
 
-function addPlace(key) {
+async function addPlace(key) {
   const nameInput = document.getElementById(`place-name-${key}`);
   const addressInput = document.getElementById(`place-address-${key}`);
   const feedback = document.getElementById(`place-feedback-${key}`);
@@ -88,27 +78,26 @@ function addPlace(key) {
   const address = addressInput.value.trim();
   if (!name || !address) return;
 
-  feedback.textContent = 'Buscando dirección...';
+  feedback.textContent = 'Buscando direccion...';
   feedback.className = 'settings-feedback';
 
-  new google.maps.Geocoder().geocode({ address }, (results, status) => {
-    if (status !== 'OK' || !results[0]) {
-      feedback.textContent = 'No se encontró esa dirección. Revisa que esté bien escrita.';
-      feedback.className = 'settings-feedback error';
-      return;
+  try {
+    if (!map || typeof map.geocodeAddress !== 'function') {
+      throw new Error('El mapa todavia no esta listo');
     }
-    const loc = results[0].geometry.location;
-    db.ref(`config/${key}`)
-      .push({ name, address, lat: loc.lat(), lng: loc.lng() })
-      .then(() => {
-        nameInput.value = '';
-        addressInput.value = '';
-        feedback.textContent = 'Agregado.';
-        feedback.className = 'settings-feedback success';
-      })
-      .catch((err) => {
-        feedback.textContent = `Error al guardar: ${err.message || err}`;
-        feedback.className = 'settings-feedback error';
-      });
-  });
+    const location = await map.geocodeAddress(address);
+    await db.ref(`config/${key}`).push({
+      name,
+      address,
+      lat: location.lat,
+      lng: location.lng,
+    });
+    nameInput.value = '';
+    addressInput.value = '';
+    feedback.textContent = 'Agregado.';
+    feedback.className = 'settings-feedback success';
+  } catch (error) {
+    feedback.textContent = `Error al geocodificar o guardar: ${error.message || error}`;
+    feedback.className = 'settings-feedback error';
+  }
 }

@@ -22,7 +22,46 @@ class PassengerService {
     final name = prefs.getString('passenger_name');
     final phone = prefs.getString('passenger_phone');
     if (name == null || phone == null) return null;
-    return {'name': name, 'phone': phone};
+    final photoUrl = prefs.getString('passenger_photo_url');
+    return {
+      'name': name,
+      'phone': phone,
+      if (photoUrl != null && photoUrl.isNotEmpty) 'photoUrl': photoUrl,
+    };
+  }
+
+  /// Refresca el perfil remoto para que una cuenta existente tambien pueda
+  /// compartir su foto en el siguiente viaje.
+  static Future<Map<String, String>?> loadProfile() async {
+    final cached = await cachedProfile();
+    try {
+      final auth = await AuthService.signInAnonymously();
+      final response = await http.get(Uri.parse(
+        '${AppConfig.firebaseDbUrl}/passengers/${auth['uid']}.json?auth=${auth['idToken']}',
+      ));
+      if (response.statusCode == 200 && response.body != 'null') {
+        final data = Map<String, dynamic>.from(jsonDecode(response.body));
+        final remoteName = data['name']?.toString().trim();
+        final remotePhone = data['phone']?.toString().trim();
+        final remotePhoto = data['credentialPhotoUrl']?.toString().trim();
+        if (remoteName != null && remoteName.isNotEmpty && remotePhone != null) {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('passenger_name', remoteName);
+          await prefs.setString('passenger_phone', remotePhone);
+          if (remotePhoto != null && remotePhoto.isNotEmpty) {
+            await prefs.setString('passenger_photo_url', remotePhoto);
+          }
+          return {
+            'name': remoteName,
+            'phone': remotePhone,
+            if (remotePhoto != null && remotePhoto.isNotEmpty) 'photoUrl': remotePhoto,
+          };
+        }
+      }
+    } catch (_) {
+      // La copia local permite continuar si hay una falla puntual de red.
+    }
+    return cached;
   }
 
   static Future<void> registerPassenger({
@@ -58,6 +97,7 @@ class PassengerService {
     await prefs.setBool('registered', true);
     await prefs.setString('passenger_name', name);
     await prefs.setString('passenger_phone', phone);
+    await prefs.setString('passenger_photo_url', photoUrl);
   }
 
   /// Cierra sesion: borra el historial de viajes, el perfil y la foto de
@@ -82,6 +122,7 @@ class PassengerService {
     await prefs.remove('registered');
     await prefs.remove('passenger_name');
     await prefs.remove('passenger_phone');
+    await prefs.remove('passenger_photo_url');
     await prefs.remove('active_trip_id');
     await prefs.remove('uid');
     await prefs.remove('idToken');

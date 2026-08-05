@@ -201,6 +201,7 @@ async function attemptAssignment(
         driverName: c.driver.name || '',
         driverPhone: c.driver.phone || '',
         driverPlate: c.driver.plate || '',
+        driverPhotoUrl: c.driver.profilePhotoUrl || '',
         vehicleBrand: c.driver.vehicleBrand || '',
         vehicleType: c.driver.vehicleType || '',
         vehicleColor: c.driver.vehicleColor || '',
@@ -245,7 +246,11 @@ async function releaseDriver(driverId, tripId) {
   const current = await getRes.json();
   if (!current || current.currentTripId !== tripId) return;
 
-  const updated = { ...current, status: 'online', currentTripId: null };
+  const updated = {
+    ...current,
+    status: current.turno_activo === false ? null : 'online',
+    currentTripId: null,
+  };
   await fetch(`${DB_URL}/drivers/${driverId}.json`, {
     method: 'PUT',
     headers: { ...headers, 'if-match': etag, 'Content-Type': 'application/json' },
