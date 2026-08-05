@@ -34,3 +34,6 @@ dashboard/js/mapbox-runtime-config.generated.js
 .qa-*.xml
 scripts/__pycache__/
 passenger-app/assets/vehicles/vehicle-bus-new.png
+
+# APKs publicados en Firebase Hosting; no versionar binarios pesados
+dashboard/downloads/*.apk
