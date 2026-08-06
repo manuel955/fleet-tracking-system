@@ -1,0 +1,64 @@
+name: Build signed driver AAB
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: Android version code
+        required: true
+        default: '44'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+      FLEET_KEYSTORE_PATH: /home/runner/.android/fleet-signing.keystore
+      GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+      MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
+      MAPBOX_STYLE_URI: ${{ secrets.MAPBOX_STYLE_URI }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore Android signing key
+        run: |
+          test -n "$ANDROID_DEBUG_KEYSTORE_BASE64"
+          mkdir -p "$(dirname "$FLEET_KEYSTORE_PATH")"
+          echo "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$FLEET_KEYSTORE_PATH"
+
+      - name: Restore Firebase Android configuration
+        run: |
+          test -n "$GOOGLE_SERVICES_JSON_BASE64"
+          echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > driver-app/android/app/google-services.json
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Prepare Flutter dependencies
+        working-directory: driver-app
+        run: flutter pub get
+
+      - name: Build signed Android App Bundle
+        working-directory: driver-app
+        env:
+          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false
+        run: |
+          test -n "$MAPBOX_ACCESS_TOKEN"
+          flutter build appbundle --release --no-pub \
+            --build-number "${{ inputs.build_number }}" \
+            --dart-define=MAPBOX_ACCESS_TOKEN="$MAPBOX_ACCESS_TOKEN" \
+            --dart-define=MAPBOX_STYLE_URI="${MAPBOX_STYLE_URI:-mapbox://styles/mapbox/standard}"
+
+      - name: Upload signed AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: apl-conductores-v1.0.1-${{ inputs.build_number }}-signed
+          path: driver-app/build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
