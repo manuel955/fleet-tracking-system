@@ -23,7 +23,17 @@ database-debug.log
 *.log
 scripts/load-test-100-trips/manifest-*.json
 scripts/load-test-100-trips/*.log.err
+dashboard/js/mapbox-runtime-config.generated.js
 
 # Herramientas locales y reportes generados
 .firebase/
 .gstack/
+
+# Capturas y dumps temporales de pruebas locales
+.qa-*.png
+.qa-*.xml
+scripts/__pycache__/
+passenger-app/assets/vehicles/vehicle-bus-new.png
+
+# APKs publicados en Firebase Hosting; no versionar binarios pesados
+dashboard/downloads/*.apk

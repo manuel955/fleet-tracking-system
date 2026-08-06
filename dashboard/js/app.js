@@ -1,16 +1,21 @@
 // ---------------------------------------------------------------------------
-// Panel de control de flota: mapa en tiempo real con Google Maps + Firebase RTDB
+// Panel de control de flota: Mapbox + Firebase RTDB.
+// Los listeners, filtros y estados de negocio permanecen en este archivo;
+// MapboxMapAdapter solo implementa la capa visual y las APIs cartograficas.
 // ---------------------------------------------------------------------------
 
 const STALE_AFTER_MS = 45 * 1000;   // GPS "atrasado" (visual mas tenue) despues de 45s
-                                     // (la app manda cada 15s, esto da margen a ~3 envios)
+                                     // (la app manda cada 5s, esto da margen a ~9 envios)
 const OFFLINE_AFTER_MS = 3 * 60 * 1000; // se retira el marcador del mapa tras 3 min sin GPS
+const GPS_RENDER_INTERVAL_MS = 5 * 1000;
+const ROUTE_RECALCULATION_INTERVAL_MS = 30 * 1000;
+const ROUTE_RECALCULATION_DISTANCE_METERS = 50;
 
 const STATE_COLORS = {
   available: '#06c167', // verde: libre en la red
   to_pickup: '#ff9500', // naranja: yendo a recoger / esperando en el punto de recogida
   on_trip: '#276ef1',   // azul: pasajero a bordo, rumbo al destino
-  offline: '#9ca3af',   // gris: fuera de turno o sin señal reciente
+  offline: '#9ca3af',   // gris: desconectado o sin señal reciente
 };
 
 const STATE_LABELS = {
@@ -33,7 +38,8 @@ const TRIP_STATUS_LABELS = {
 };
 
 let map;
-let markers = {};        // driverId -> google.maps.Marker
+let markers = {};        // driverId -> Mapbox marker handle
+const lastKnownMarkerIds = new Set(); // marcadores temporales de conductores seleccionados sin GPS reciente
 let selectionHalo = null; // aro de color detras del auto seleccionado
 let driversCache = {};   // driverId -> data
 let mapPlacesCache = { hotels: {}, sportVenues: {} };
@@ -53,17 +59,17 @@ let targetMarker = null; // punto de recogida o destino del tramo que se esta di
 let routeReqToken = 0;
 let lastRouteEtaSeconds = null;
 let lastRouteOrigin = null; // {lat,lng} del conductor usado para la ruta ya dibujada
+let lastRouteTarget = null; // {lat,lng} destino de la ruta ya dibujada
+let lastRouteRequestedAt = 0;
+let routeRequestInFlight = false;
 
-let googleMapsReady = false;
+let mapboxReady = false;
 let userAuthenticated = false;
 let subscribed = false;
 window.dashboardIsAdmin = false;
-
-// Llamado por el callback del script de Google Maps (ver index.html)
-function onGoogleMapsReady() {
-  googleMapsReady = true;
-  tryStartDashboard();
-}
+window.dashboardRole = '';
+window.dashboardIsCoordinator = false;
+const coordinatorAppEl = document.getElementById('coordinator-app');
 
 // ---------------------------------------------------------------------------
 // Autenticacion
@@ -83,6 +89,13 @@ const AUTH_ERROR_MESSAGES = {
   'auth/wrong-password': 'Credenciales inválidas o usuario no existe.',
   'auth/email-already-in-use': 'Ya existe una cuenta con ese correo. Inicia sesión en vez de registrarte.',
   'auth/weak-password': 'La contraseña debe tener al menos 6 caracteres.',
+  'auth/invalid-credential': 'Correo o contraseña incorrectos.',
+  'auth/invalid-login-credentials': 'Correo o contraseña incorrectos.',
+  'auth/user-disabled': 'Esta cuenta está deshabilitada.',
+  'auth/unauthorized-domain': 'Este dominio no está autorizado para iniciar sesión.',
+  'auth/network-request-failed': 'No se pudo conectar con Firebase. Revisa tu conexión.',
+  'auth/too-many-requests': 'Demasiados intentos. Espera unos minutos y vuelve a probar.',
+  'auth/operation-not-allowed': 'El inicio de sesión por correo está deshabilitado.',
 };
 
 loginForm.addEventListener('submit', async (e) => {
@@ -94,7 +107,8 @@ loginForm.addEventListener('submit', async (e) => {
   try {
     await auth.signInWithEmailAndPassword(email, password);
   } catch (err) {
-    loginError.textContent = AUTH_ERROR_MESSAGES[err.code] || 'Ocurrió un error. Intenta de nuevo.';
+    loginError.textContent = AUTH_ERROR_MESSAGES[err.code]
+      || `No se pudo iniciar sesión. Código: ${err.code || 'desconocido'}.`;
   }
 });
 
@@ -113,29 +127,82 @@ async function initializeDashboardAdmin(user) {
     // Si el usuario ya abrio Configuracion, vuelve a pintarla en cuanto el
     // rol llegue para que aparezcan los apartados sin otro inicio de sesion.
     if (typeof renderSettings === 'function') renderSettings();
+    if (typeof window.startOperationAlerts === 'function') window.startOperationAlerts();
   } catch (_) {
     // El dashboard sigue funcionando para cuentas existentes; el apartado de
     // usuarios mostrara un mensaje si la cuenta no es administradora.
   }
 }
 
-auth.onAuthStateChanged((user) => {
-  if (user) {
-    loginScreen.classList.add('hidden');
-    appEl.classList.remove('hidden');
-    userAuthenticated = true;
-    initializeDashboardAdmin(user);
-    tryStartDashboard();
-  } else {
+let authFlowId = 0;
+
+auth.onAuthStateChanged(async (user) => {
+  const flowId = ++authFlowId;
+  if (!user) {
+    if (typeof window.stopCoordinatorDispatch === 'function') window.stopCoordinatorDispatch();
     loginScreen.classList.remove('hidden');
     appEl.classList.add('hidden');
+    coordinatorAppEl.classList.add('hidden');
     userAuthenticated = false;
+    window.dashboardRole = '';
+    window.dashboardIsCoordinator = false;
+    return;
+  }
+
+  loginScreen.classList.add('hidden');
+  appEl.classList.add('hidden');
+  coordinatorAppEl.classList.add('hidden');
+  userAuthenticated = true;
+
+  try {
+    let tokenResult = await user.getIdTokenResult();
+    let claims = tokenResult.claims || {};
+    // El propietario puede recuperar el claim ADMIN una sola vez si se creó
+    // antes de que existiera el sistema de roles.
+    if (claims.dashboardRole !== 'COORDINATOR') {
+      await initializeDashboardAdmin(user);
+      if (flowId !== authFlowId || !auth.currentUser) return;
+      tokenResult = await user.getIdTokenResult(true);
+      claims = tokenResult.claims || {};
+    }
+
+    if (claims.dashboardRole === 'COORDINATOR') {
+      window.dashboardRole = 'COORDINATOR';
+      window.dashboardIsCoordinator = true;
+      coordinatorAppEl.classList.remove('hidden');
+      if (typeof window.startCoordinatorDispatch === 'function') {
+        window.startCoordinatorDispatch(user, claims);
+      }
+      return;
+    }
+
+    if (claims.dashboardUser === true || claims.dashboardAdmin === true) {
+      window.dashboardRole = claims.dashboardAdmin === true ? 'ADMIN' : (claims.dashboardRole || 'SUPERVISOR');
+      window.dashboardIsCoordinator = false;
+      appEl.classList.remove('hidden');
+      tryStartDashboard();
+      return;
+    }
+
+    throw new Error('Esta cuenta no tiene un rol de Dashboard asignado.');
+  } catch (error) {
+    if (flowId !== authFlowId) return;
+    loginScreen.classList.remove('hidden');
+    appEl.classList.add('hidden');
+    coordinatorAppEl.classList.add('hidden');
+    userAuthenticated = false;
+    loginError.textContent = error.message || 'No tienes acceso a este panel.';
+    await auth.signOut();
   }
 });
 
 function tryStartDashboard() {
-  if (!googleMapsReady || !userAuthenticated) return;
-  if (!map) initMap();
+  if (!userAuthenticated) return;
+  if (!map) {
+    initMap();
+    return;
+  }
+  if (!mapboxReady) return;
   if (!subscribed) {
     subscribed = true;
     subscribeToDrivers();
@@ -152,7 +219,7 @@ function tryStartDashboard() {
       if (!map) return;
       Object.entries(driversCache).forEach(([driverId, d]) => updateMarkerForDriver(driverId, d));
       scheduleSidebarRender();
-    }, 10000);
+    }, GPS_RENDER_INTERVAL_MS);
   }
 }
 
@@ -161,20 +228,41 @@ function tryStartDashboard() {
 // ---------------------------------------------------------------------------
 
 function initMap() {
-  map = new google.maps.Map(document.getElementById('map'), {
-    center: { lat: -12.0464, lng: -77.0428 }, // Lima, Peru por defecto
-    zoom: 12,
-    mapTypeControl: false,
-    streetViewControl: false,
-    fullscreenControl: false,
-  });
-
+  try {
+    map = new MapboxMapAdapter({
+      container: 'map',
+      center: { lat: -12.0464, lng: -77.0428 },
+      zoom: 12,
+    });
+    map.ready
+      .then(() => {
+        mapboxReady = true;
+        tryStartDashboard();
+      })
+      .catch(() => {
+        mapboxReady = false;
+        const mapEl = document.getElementById('map');
+        if (mapEl) mapEl.innerHTML = '<div class="map-fallback">No se pudo cargar el mapa. Revisa la conexion y el token de Mapbox.</div>';
+      });
+  } catch (_) {
+    mapboxReady = false;
+    const mapEl = document.getElementById('map');
+    if (mapEl) mapEl.innerHTML = '<div class="map-fallback">El mapa no esta configurado. Contacta al administrador.</div>';
+  }
 }
 
 function centerMapOnFleet() {
   if (!map) return;
 
-  const points = Object.values(driversCache)
+  // El marcador es la fuente de verdad visual: evita que un snapshot de
+  // Firebase que acaba de cambiar deje al boton centrando coordenadas viejas.
+  const markerPoints = Object.values(markers)
+    .map((marker) => marker.getPosition())
+    .filter((point) => (
+      point && Number.isFinite(Number(point.lat)) && Number.isFinite(Number(point.lng))
+    ));
+
+  const freshPoints = Object.values(driversCache)
     .filter((driver) => (
       driver?.approvalStatus === 'approved'
       && typeof driver.lat === 'number'
@@ -183,22 +271,38 @@ function centerMapOnFleet() {
     ))
     .map((driver) => ({ lat: driver.lat, lng: driver.lng }));
 
+  // Si todos estan desconectados, usa sus ultimas coordenadas conocidas en
+  // vez de volver silenciosamente al centro de Lima. Asi el boton sigue
+  // siendo util para localizar el ultimo punto reportado.
+  const points = markerPoints.length
+    ? markerPoints
+    : freshPoints.length
+      ? freshPoints
+    : Object.values(driversCache)
+      .filter((driver) => (
+        driver?.approvalStatus === 'approved'
+        && typeof driver.lat === 'number'
+        && typeof driver.lng === 'number'
+      ))
+      .map((driver) => ({ lat: driver.lat, lng: driver.lng }));
+
   if (!points.length) {
-    map.panTo({ lat: -12.0464, lng: -77.0428 });
-    map.setZoom(12);
+    const fallback = { lat: -12.0464, lng: -77.0428 };
+    if (typeof map.setView === 'function') map.setView(fallback, 12);
+    else { map.setCenter(fallback); map.setZoom(12); }
     return;
   }
 
   if (points.length === 1) {
-    map.panTo(points[0]);
-    map.setZoom(15);
+    if (typeof map.setView === 'function') map.setView(points[0], 15);
+    else { map.setCenter(points[0]); map.setZoom(15); }
     return;
   }
 
-  const bounds = new google.maps.LatLngBounds();
-  points.forEach((point) => bounds.extend(point));
+  const bounds = new mapboxgl.LngLatBounds();
+  points.forEach((point) => bounds.extend([point.lng, point.lat]));
   map.fitBounds(bounds, 72);
-  google.maps.event.addListenerOnce(map, 'idle', () => {
+  map.once('idle', () => {
     if ((map.getZoom() || 0) > 16) map.setZoom(16);
   });
 }
@@ -232,7 +336,7 @@ function driverState(d) {
 
   if (d.status === 'online') return 'available';
 
-  return 'offline'; // fuera de turno (sin status), aunque siga reportando GPS
+  return 'offline'; // sin disponibilidad operativa, aunque siga reportando GPS
 }
 
 function buildCarIcon(state) {
@@ -251,8 +355,8 @@ function buildCarIcon(state) {
   `;
   const icon = {
     url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
-    scaledSize: new google.maps.Size(36, 36),
-    anchor: new google.maps.Point(18, 18),
+    width: 36,
+    height: 36,
   };
   carIconCache.set(state, icon);
   return icon;
@@ -270,8 +374,8 @@ function buildHaloIcon(state) {
   `;
   const icon = {
     url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
-    scaledSize: new google.maps.Size(56, 56),
-    anchor: new google.maps.Point(28, 28),
+    width: 56,
+    height: 56,
   };
   haloIconCache.set(state, icon);
   return icon;
@@ -296,12 +400,10 @@ function updateSelectionHalo() {
     selectionHalo.setPosition(marker.getPosition());
     selectionHalo.setIcon(icon);
   } else {
-    selectionHalo = new google.maps.Marker({
+    selectionHalo = map.createMarker({
       position: marker.getPosition(),
       map,
       icon,
-      clickable: false,
-      zIndex: 1,
     });
   }
 }
@@ -417,6 +519,15 @@ function updateMarkerForDriver(driverId, d) {
     return;
   }
   if (freshnessStatus(d.lastUpdate || 0) === 'offline') {
+    // Conserva visible la ultima posicion solo mientras el conductor esta
+    // seleccionado; el resto de los marcadores antiguos se retira como
+    // antes para no presentar una ubicacion como si fuera actual.
+    if (expandedDriverId === driverId) {
+      if (!markers[driverId]) createLastKnownMarker(driverId, d);
+      if (markers[driverId]) markers[driverId].setOpacity(0.55);
+      updateSelectionHalo();
+      return;
+    }
     removeMarker(driverId);
     return;
   }
@@ -427,11 +538,12 @@ function updateMarkerForDriver(driverId, d) {
   const icon = buildCarIcon(state);
 
   if (markers[driverId]) {
+    lastKnownMarkerIds.delete(driverId);
     markers[driverId].setPosition(position);
     markers[driverId].setIcon(icon);
     markers[driverId].setOpacity(isStale ? 0.55 : 1);
   } else {
-    const marker = new google.maps.Marker({
+    const marker = map.createMarker({
       position,
       map,
       icon,
@@ -451,11 +563,28 @@ function updateMarkerForDriver(driverId, d) {
   }
 }
 
+function createLastKnownMarker(driverId, d) {
+  if (!map || typeof d?.lat !== 'number' || typeof d?.lng !== 'number') return null;
+  const marker = map.createMarker({
+    position: { lat: d.lat, lng: d.lng },
+    map,
+    icon: buildCarIcon('offline'),
+    opacity: 0.55,
+    title: `${d.name || driverId} · última ubicación conocida`,
+    zIndex: 10,
+  });
+  marker.addListener('click', () => selectDriver(driverId, { fromMap: true }));
+  markers[driverId] = marker;
+  lastKnownMarkerIds.add(driverId);
+  return marker;
+}
+
 function removeMarker(driverId) {
   if (markers[driverId]) {
     markers[driverId].setMap(null);
     delete markers[driverId];
   }
+  lastKnownMarkerIds.delete(driverId);
   if (expandedDriverId === driverId) updateSelectionHalo(); // ya no hay marcador: quita el aro
 }
 
@@ -467,10 +596,12 @@ function selectDriver(driverId, { fromMap } = {}) {
   expandedDriverId = expandedDriverId === driverId ? null : driverId;
   renderSidebar();
 
-  const marker = markers[driverId];
+  const driver = driversCache[driverId];
+  let marker = markers[driverId];
+  if (expandedDriverId && !marker) marker = createLastKnownMarker(driverId, driver);
   if (expandedDriverId && marker) {
-    map.setCenter(marker.getPosition());
-    if (!fromMap) map.setZoom(15);
+    if (!fromMap && typeof map.setView === 'function') map.setView(marker.getPosition(), 15);
+    else map.setCenter(marker.getPosition());
   }
   updateSelectionHalo();
 
@@ -478,7 +609,7 @@ function selectDriver(driverId, { fromMap } = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Ruta en vivo (Routes API v2) para el conductor seleccionado
+// Ruta en vivo (Mapbox Directions API) para el conductor seleccionado
 // ---------------------------------------------------------------------------
 
 function clearRoute() {
@@ -499,7 +630,7 @@ function clearRoute() {
 // violeta para destino).
 function drawRoute(path, target, targetType) {
   clearRoute();
-  routePolyline = new google.maps.Polyline({
+  routePolyline = map.createPolyline({
     path,
     map,
     strokeColor: '#000000',
@@ -507,11 +638,15 @@ function drawRoute(path, target, targetType) {
     strokeWeight: 5,
   });
   if (target) {
-    targetMarker = new google.maps.Marker({
+    const color = targetType === 'pickup' ? '#1d4ed8' : '#7c3aed';
+    const pinSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="13" fill="#fff" stroke="${color}" stroke-width="3"/><circle cx="16" cy="16" r="6" fill="${color}"/></svg>`;
+    targetMarker = map.createMarker({
       position: target,
       map,
       icon: {
-        url: `https://maps.google.com/mapfiles/ms/icons/${targetType === 'pickup' ? 'blue' : 'purple'}-dot.png`,
+        url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(pinSvg)}`,
+        width: 32,
+        height: 32,
       },
       title: targetType === 'pickup' ? 'Punto de recogida' : 'Destino',
       zIndex: 5,
@@ -520,56 +655,18 @@ function drawRoute(path, target, targetType) {
 }
 
 async function computeRoute(origin, destination) {
-  const res = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Goog-Api-Key': GOOGLE_MAPS_API_KEY,
-      'X-Goog-FieldMask': 'routes.polyline.encodedPolyline,routes.duration',
-    },
-    body: JSON.stringify({
-      origin: { location: { latLng: { latitude: origin.lat, longitude: origin.lng } } },
-      destination: { location: { latLng: { latitude: destination.lat, longitude: destination.lng } } },
-      travelMode: 'DRIVE',
-      languageCode: 'es',
-    }),
-  });
-  if (!res.ok) throw new Error(`Routes API ${res.status}`);
-  const data = await res.json();
-  const route = data.routes && data.routes[0];
-  if (!route) throw new Error('Routes API: sin rutas');
-
-  const durationSeconds = route.duration ? parseInt(route.duration, 10) : null; // ej. "412s"
-  return { path: decodePolyline(route.polyline.encodedPolyline), durationSeconds };
+  if (!map) throw new Error('Mapbox aun no esta listo');
+  return map.computeRoute(origin, destination);
 }
 
-function decodePolyline(encoded) {
-  const points = [];
-  let index = 0;
-  let lat = 0;
-  let lng = 0;
-
-  while (index < encoded.length) {
-    let shift = 0, result = 0, b;
-    do {
-      b = encoded.charCodeAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    lat += (result & 1) ? ~(result >> 1) : (result >> 1);
-
-    shift = 0;
-    result = 0;
-    do {
-      b = encoded.charCodeAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    lng += (result & 1) ? ~(result >> 1) : (result >> 1);
-
-    points.push({ lat: lat / 1e5, lng: lng / 1e5 });
-  }
-  return points;
+async function computeEtaMatrix(origin, destination) {
+  if (!map || typeof map.computeMatrix !== 'function') return null;
+  const matrix = await map.computeMatrix([origin, destination], {
+    sources: [0],
+    destinations: [1],
+  });
+  const seconds = Number(matrix?.durations?.[0]?.[0]);
+  return Number.isFinite(seconds) ? seconds : null;
 }
 
 function metersBetween(a, b) {
@@ -584,7 +681,7 @@ function metersBetween(a, b) {
 
 // Dibuja la ruta real del tramo que el conductor seleccionado esta
 // recorriendo ahora mismo: auto->punto de recogida si va en camino, o
-// recogida->destino si ya lleva al pasajero. Si Routes API falla, cae a una
+// recogida->destino si ya lleva al pasajero. Si Mapbox Directions falla, cae a una
 // linea recta entre los mismos dos puntos (igual que el patron ya usado en
 // passenger-app/lib/services/directions_service.dart).
 //
@@ -600,6 +697,8 @@ async function refreshRouteForSelected(force = false) {
   // con un viaje todavia en curso.
   if (!d || !d.currentTripId) {
     lastRouteOrigin = null;
+    lastRouteTarget = null;
+    lastRouteRequestedAt = 0;
     clearRoute();
     return;
   }
@@ -607,6 +706,8 @@ async function refreshRouteForSelected(force = false) {
   const trip = activeTripsCache[d.currentTripId];
   if (!trip) {
     lastRouteOrigin = null;
+    lastRouteTarget = null;
+    lastRouteRequestedAt = 0;
     clearRoute();
     return;
   }
@@ -624,31 +725,50 @@ async function refreshRouteForSelected(force = false) {
   }
   if (!destination) {
     lastRouteOrigin = null;
+    lastRouteTarget = null;
+    lastRouteRequestedAt = 0;
     clearRoute();
     return;
   }
 
-  // El GPS reenvia la posicion cada ~15s aunque el conductor este detenido;
-  // sin este filtro se recalcularia la ruta (llamada a Routes API) sin
-  // necesidad en cada envio. Solo se salta el filtro cuando fuerza el
-  // recalculo (cambio de seleccion o del propio viaje), donde el origen o
-  // destino pudo cambiar aunque la posicion no se haya movido.
-  if (!force && lastRouteOrigin && metersBetween(lastRouteOrigin, origin) < 25) {
+  // El GPS reenvia la posicion cada ~5s. La ruta visual no necesita pedir
+  // Directions en cada escritura: solo se recalcula si el conductor avanzo
+  // al menos 50m y no se ha pedido una ruta en los ultimos 30s. Un cambio de
+  // destino siempre fuerza una consulta nueva.
+  const targetChanged = !lastRouteTarget
+    || metersBetween(lastRouteTarget, destination) >= 10;
+  const tooSoon = Date.now() - lastRouteRequestedAt < ROUTE_RECALCULATION_INTERVAL_MS;
+  if (!targetChanged && tooSoon) return;
+  if (routeRequestInFlight) return;
+  if (!force && !targetChanged && lastRouteOrigin
+      && metersBetween(lastRouteOrigin, origin) < ROUTE_RECALCULATION_DISTANCE_METERS) {
     return;
   }
 
   const token = ++routeReqToken;
+  routeRequestInFlight = true;
   lastRouteOrigin = origin;
+  lastRouteTarget = destination;
+  lastRouteRequestedAt = Date.now();
 
   try {
     const result = await computeRoute(origin, destination);
     if (token !== routeReqToken) return; // la seleccion cambio mientras esperabamos
     drawRoute(result.path, destination, targetType);
-    lastRouteEtaSeconds = result.durationSeconds;
+    let matrixEtaSeconds = null;
+    try {
+      matrixEtaSeconds = await computeEtaMatrix(origin, destination);
+    } catch (_) {
+      // Directions sigue siendo un fallback valido si Matrix falla.
+    }
+    if (token !== routeReqToken) return;
+    lastRouteEtaSeconds = matrixEtaSeconds ?? result.durationSeconds;
   } catch (e) {
     if (token !== routeReqToken) return;
     drawRoute([origin, destination], destination, targetType);
     lastRouteEtaSeconds = null;
+  } finally {
+    routeRequestInFlight = false;
   }
   scheduleSidebarRender();
 }
@@ -684,7 +804,7 @@ if (mapFullscreenBtn && mapViewFullscreenEl) {
     mapFullscreenBtn.textContent = active ? 'X' : '⛶';
     mapFullscreenBtn.setAttribute('aria-label', active ? 'Salir de pantalla completa' : 'Ver mapa en pantalla completa');
     mapFullscreenBtn.setAttribute('title', active ? 'Salir de pantalla completa' : 'Ver mapa en pantalla completa');
-    if (map) setTimeout(() => google.maps.event.trigger(map, 'resize'), 80);
+    if (map) setTimeout(() => map.resize(), 80);
   }
 
   mapFullscreenBtn.addEventListener('click', async () => {
@@ -701,7 +821,7 @@ if (mapFullscreenBtn && mapViewFullscreenEl) {
     const active = document.fullscreenElement === mapViewFullscreenEl || mapViewFullscreenEl.classList.contains('map-fullscreen-fallback');
     mapFullscreenBtn.textContent = active ? '×' : '⛶';
     mapFullscreenBtn.setAttribute('aria-label', active ? 'Salir de pantalla completa' : 'Ver mapa en pantalla completa');
-    if (map) setTimeout(() => google.maps.event.trigger(map, 'resize'), 80);
+    if (map) setTimeout(() => map.resize(), 80);
   });
 }
 

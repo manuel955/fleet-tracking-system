@@ -13,6 +13,16 @@ class TripStateConflictException implements Exception {
   String toString() => message;
 }
 
+class TripActionRejectedException implements Exception {
+  final String message;
+  final int? distanceMeters;
+
+  const TripActionRejectedException(this.message, {this.distanceMeters});
+
+  @override
+  String toString() => message;
+}
+
 /// Lee/escribe el nodo `trips/{tripId}` y el `status`/`currentTripId` del
 /// conductor en `drivers/{uid}`. El emparejamiento automatico (elegir al
 /// conductor mas cercano y asignarlo, sin pedir confirmacion) lo hace Cloud
@@ -69,6 +79,12 @@ class TripService {
         data['error']?.toString() ??
             'El viaje cambio de estado. Actualizando la pantalla.',
         currentStatus: data['currentStatus']?.toString(),
+      );
+    }
+    if (response.statusCode == 422) {
+      throw TripActionRejectedException(
+        data['error']?.toString() ?? 'No se puede confirmar esta accion todavia.',
+        distanceMeters: (data['distanceMeters'] as num?)?.round(),
       );
     }
     if (response.statusCode != 200) {

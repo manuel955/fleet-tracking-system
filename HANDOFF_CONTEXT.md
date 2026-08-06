@@ -159,8 +159,4 @@ escrituras condicionales de servidor o cliente, replica este patrón.
 4. El repo ya tiene git inicializado con un commit inicial (ver más abajo) —
    así Codex puede ver diffs y tú puedes revertir cambios que no te gusten
    con `git diff` / `git checkout` normales.
-5. Ten a mano las credenciales que uses tú directamente (no las comparto en
-   texto plano en ningún archivo del repo): login de Firebase, la Maps API
-   key (está en `dashboard/js/google-maps-config.js` y en el
-   `AndroidManifest.xml` de cada app Flutter — ya están en el código, Codex
-   las va a poder leer igual que yo).
+5. Ten a mano las credenciales que uses tu directamente (no las compartas en texto plano en ningun archivo del repo): login de Firebase y tokens publicos de Mapbox. Se inyectan al compilar las apps con `--dart-define=MAPBOX_ACCESS_TOKEN=...` y en el dashboard con `scripts/inject-mapbox-config.mjs`.

@@ -155,6 +155,36 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
         here.latitude, here.longitude, target.lat, target.lng);
   }
 
+  Widget _passengerAvatar(String initial) {
+    final photoUrl = widget.trip['passengerPhotoUrl']?.toString().trim();
+    final fallback = CircleAvatar(
+      radius: 26,
+      backgroundColor: AppColors.ink,
+      child: Text(
+        initial,
+        style: const TextStyle(
+          color: AppColors.paper,
+          fontSize: 20,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+    if (photoUrl == null || photoUrl.isEmpty) return fallback;
+    return Container(
+      width: 52,
+      height: 52,
+      decoration: const BoxDecoration(shape: BoxShape.circle),
+      clipBehavior: Clip.antiAlias,
+      child: Image.network(
+        photoUrl,
+        fit: BoxFit.cover,
+        cacheWidth: 156,
+        cacheHeight: 156,
+        errorBuilder: (_, __, ___) => fallback,
+      ),
+    );
+  }
+
   // Sin un fix GPS actual no se permite confirmar. Esto evita que una app
   // recien reabierta pueda finalizar el viaje antes de recuperar la posicion.
   bool get _proximityBlocked {
@@ -292,10 +322,17 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
           ),
         );
       }
-    } catch (e) {
+    } on TripActionRejectedException catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(content: Text(error.message)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        final message = e.toString().replaceFirst('Exception: ', '');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
         );
       }
     } finally {
@@ -430,17 +467,7 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
                   const SizedBox(height: 16),
                   Row(
                     children: [
-                      CircleAvatar(
-                        radius: 26,
-                        backgroundColor: AppColors.ink,
-                        child: Text(
-                          initial,
-                          style: const TextStyle(
-                              color: AppColors.paper,
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold),
-                        ),
-                      ),
+                      _passengerAvatar(initial),
                       const SizedBox(width: 14),
                       Expanded(
                         child: Column(

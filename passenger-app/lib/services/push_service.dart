@@ -24,6 +24,11 @@ Future<void> pushBackgroundHandler(RemoteMessage message) async {
         'El destino de tu viaje cambió.',
       );
       break;
+    case 'trip_cancelled':
+      await NotificationService.showTripCancelled(
+        message.data['reason']?.toString(),
+      );
+      break;
   }
 }
 

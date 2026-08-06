@@ -1,7 +1,7 @@
 name: fleet_passenger_app
 description: App del pasajero - pide viajes y seguimiento en vivo del conductor asignado
 publish_to: "none"
-version: 1.0.0+21
+version: 1.0.0+35
 
 environment:
   sdk: ^3.12.2
@@ -13,9 +13,7 @@ dependencies:
   geolocator: ^12.0.0
   permission_handler: ^11.3.1
   shared_preferences: ^2.2.3
-  google_maps_flutter: ^2.9.0
-  google_maps_flutter_android: ^2.14.10
-  google_maps_flutter_platform_interface: ^2.9.0
+  mapbox_maps_flutter: 2.25.0
   image_picker: ^1.1.2
   url_launcher: ^6.3.0
   package_info_plus: ^10.2.1
@@ -33,8 +31,20 @@ flutter:
   assets:
     - assets/branding/apl-mark.png
     - assets/vehicles/vehicle-car.png
+    - assets/vehicles/vehicle-car-v2.png
+    - assets/vehicles/vehicle-car-new.png
     - assets/vehicles/vehicle-suv.png
     - assets/vehicles/vehicle-minivan.png
     - assets/vehicles/vehicle-van.png
+    - assets/vehicles/vehicle-van-v2.png
     - assets/vehicles/vehicle-minibus.png
     - assets/vehicles/vehicle-bus.png
+    - assets/vehicles/vehicle-bus-coach.png
+    - assets/vehicles/vehicle-bus-dispo.png
+    - assets/vehicles/vehicle-bus-v2.png
+    - assets/vehicles/vehicle-pickup-v2.png
+
+# Mantiene compileSdk 35, compatible con Mapbox Maps SDK 2.25 y los plugins
+# nativos existentes de esta app.
+dependency_overrides:
+  flutter_plugin_android_lifecycle: 2.0.24

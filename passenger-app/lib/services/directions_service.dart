@@ -1,76 +1,56 @@
 import 'dart:convert';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:http/http.dart' as http;
-import '../config.dart';
 
-/// Trae la ruta real entre dos puntos (Routes API) para dibujarla en el
-/// mapa antes de confirmar el viaje. Si la API falla (por ejemplo si no
-/// esta habilitada en el proyecto), se usa una linea recta entre los dos
-/// puntos como respaldo -- igual sirve para ubicar el trayecto aproximado.
+import 'package:http/http.dart' as http;
+
+import '../config.dart';
+import 'map_adapter.dart';
+
+/// Adapter de Mapbox Directions. Conserva la interfaz que ya usan las
+/// pantallas y devuelve una ruta segura para que la UI pueda aplicar su
+/// fallback de linea recta cuando no hay red o token.
 class DirectionsService {
-  static Future<List<LatLng>> getRoute(LatLng origin, LatLng destination) async {
-    final uri = Uri.parse('https://routes.googleapis.com/directions/v2:computeRoutes');
-    final response = await http.post(
-      uri,
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Goog-Api-Key': AppConfig.googleMapsApiKey,
-        'X-Goog-FieldMask': 'routes.polyline.encodedPolyline',
+  static Future<List<LatLng>> getRoute(
+    LatLng origin,
+    LatLng destination,
+  ) async {
+    final token = AppConfig.mapboxAccessToken;
+    if (token.isEmpty) throw Exception('MAPBOX_ACCESS_TOKEN no configurado');
+
+    final coordinates =
+        '${origin.longitude},${origin.latitude};'
+        '${destination.longitude},${destination.latitude}';
+    final uri = Uri.https(
+      'api.mapbox.com',
+      '/directions/v5/mapbox/driving/$coordinates',
+      <String, String>{
+        'access_token': token,
+        'geometries': 'geojson',
+        'overview': 'full',
+        'steps': 'true',
+        'language': 'es',
       },
-      body: jsonEncode({
-        'origin': {
-          'location': {
-            'latLng': {'latitude': origin.latitude, 'longitude': origin.longitude},
-          },
-        },
-        'destination': {
-          'location': {
-            'latLng': {'latitude': destination.latitude, 'longitude': destination.longitude},
-          },
-        },
-        'travelMode': 'DRIVE',
-        'languageCode': 'es',
-      }),
     );
+    final response = await http.get(uri).timeout(const Duration(seconds: 12));
     if (response.statusCode != 200) {
-      throw Exception('Routes API rechazo la consulta (${response.statusCode}): ${response.body}');
+      throw Exception('Mapbox Directions rechazo la consulta (${response.statusCode})');
     }
-    final data = jsonDecode(response.body);
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
     final routes = data['routes'] as List<dynamic>?;
     if (routes == null || routes.isEmpty) {
-      throw Exception('Routes API: sin rutas');
+      throw Exception('Mapbox Directions: sin rutas');
     }
-    final points = routes.first['polyline']['encodedPolyline'] as String;
-    return _decodePolyline(points);
-  }
-
-  static List<LatLng> _decodePolyline(String encoded) {
-    final points = <LatLng>[];
-    int index = 0, len = encoded.length;
-    int lat = 0, lng = 0;
-
-    while (index < len) {
-      int b, shift = 0, result = 0;
-      do {
-        b = encoded.codeUnitAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      final dlat = (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
-      lat += dlat;
-
-      shift = 0;
-      result = 0;
-      do {
-        b = encoded.codeUnitAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      final dlng = (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
-      lng += dlng;
-
-      points.add(LatLng(lat / 1e5, lng / 1e5));
+    final geometry = routes.first['geometry'] as Map<String, dynamic>?;
+    final rawCoordinates = geometry?['coordinates'] as List<dynamic>?;
+    if (rawCoordinates == null || rawCoordinates.length < 2) {
+      throw Exception('Mapbox Directions: geometria vacia');
     }
-    return points;
+    return rawCoordinates
+        .whereType<List<dynamic>>()
+        .where((point) => point.length >= 2)
+        .map((point) => LatLng(
+              (point[1] as num).toDouble(),
+              (point[0] as num).toDouble(),
+            ))
+        .toList();
   }
 }

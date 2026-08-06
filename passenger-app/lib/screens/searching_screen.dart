@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../services/trip_service.dart';
+import '../services/map_adapter.dart';
 import '../widgets/support_button.dart';
 import '../theme/app_theme.dart';
 
@@ -119,7 +119,7 @@ class _SearchingScreenState extends State<SearchingScreen> {
       body: Stack(
         children: [
           Positioned.fill(
-            child: GoogleMap(
+            child: MapboxMapView(
               initialCameraPosition: CameraPosition(target: pickup, zoom: 15),
               myLocationButtonEnabled: false,
               zoomControlsEnabled: false,
