@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../config.dart';
 import '../services/driver_profile_service.dart';
 import '../widgets/document_upload_tile.dart';
@@ -38,6 +39,7 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
 
   final Map<String, List<PickedDocument>> _documents = {};
   bool _busy = false;
+  bool _acceptedPrivacy = false;
   String? _error;
 
   static const _vehicleTypes = [
@@ -121,6 +123,11 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
+    if (!_acceptedPrivacy) {
+      setState(
+          () => _error = 'Acepta la política de privacidad para continuar.');
+      return;
+    }
     if (!_isDniSelectionValid) {
       setState(() => _error = 'El DNI requiere 2 fotos o 1 solo PDF.');
       return;
@@ -158,6 +165,13 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
         _error = e.toString().replaceFirst('Exception: ', '');
       });
     }
+  }
+
+  Future<void> _openPrivacyPolicy() async {
+    await launchUrl(
+      Uri.parse(AppConfig.privacyPolicyUrl),
+      mode: LaunchMode.externalApplication,
+    );
   }
 
   bool get _isDniSelectionValid {
@@ -334,20 +348,19 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
                           child: Text(color),
                         ))
                     .toList(),
-                onChanged: (value) => setState(
-                    () => _vehicleColorCtrl.text = value ?? ''),
+                onChanged: (value) =>
+                    setState(() => _vehicleColorCtrl.text = value ?? ''),
                 validator: (value) => value == null ? 'Requerido' : null,
               ),
               const SizedBox(height: 12),
               TextFormField(
                 controller: _vehicleSeatsCtrl,
-                decoration:
-                    InputDecoration(
-                      labelText: 'Numero de asientos',
-                      helperText: _vehicleType == null
-                          ? 'Selecciona primero el tipo de vehiculo'
-                          : 'Guia: ${_passengerRanges[_vehicleType]![0]} a ${_passengerRanges[_vehicleType]![1]} pasajeros',
-                    ),
+                decoration: InputDecoration(
+                  labelText: 'Numero de asientos',
+                  helperText: _vehicleType == null
+                      ? 'Selecciona primero el tipo de vehiculo'
+                      : 'Guia: ${_passengerRanges[_vehicleType]![0]} a ${_passengerRanges[_vehicleType]![1]} pasajeros',
+                ),
                 keyboardType: TextInputType.number,
                 validator: (v) {
                   final range = _passengerRanges[_vehicleType];
@@ -377,6 +390,25 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
                       }
                     });
                   },
+                ),
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _acceptedPrivacy,
+                onChanged: _busy
+                    ? null
+                    : (value) =>
+                        setState(() => _acceptedPrivacy = value ?? false),
+                controlAffinity: ListTileControlAffinity.leading,
+                title: GestureDetector(
+                  onTap: _openPrivacyPolicy,
+                  child: const Text(
+                    'He leído y acepto la política de privacidad y el uso operativo de mi ubicación durante el turno',
+                    style: TextStyle(
+                      decoration: TextDecoration.underline,
+                      fontSize: 13,
+                    ),
+                  ),
                 ),
               ),
               if (_error != null) ...[

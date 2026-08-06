@@ -51,6 +51,10 @@ class LocationService {
       androidConfiguration: AndroidConfiguration(
         onStart: onServiceStart,
         autoStart: false,
+        // El plugin puede volver a levantar el servicio despues de reiniciar
+        // Android; onServiceStart lo detiene inmediatamente si el conductor
+        // no habia iniciado un turno.
+        autoStartOnBoot: true,
         isForegroundMode: true,
         notificationChannelId: _notificationChannelId,
         initialNotificationTitle: 'Rastreo de flota activo',

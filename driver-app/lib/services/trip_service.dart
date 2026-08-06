@@ -83,7 +83,8 @@ class TripService {
     }
     if (response.statusCode == 422) {
       throw TripActionRejectedException(
-        data['error']?.toString() ?? 'No se puede confirmar esta accion todavia.',
+        data['error']?.toString() ??
+            'No se puede confirmar esta accion todavia.',
         distanceMeters: (data['distanceMeters'] as num?)?.round(),
       );
     }
@@ -97,18 +98,21 @@ class TripService {
   /// conserva la carrera contra una asignacion y registra cada desconexion.
   static Future<void> setAvailability(String uid,
       {required bool online}) async {
-    final auth = await AuthService.currentSession();
+    final auth =
+        await AuthService.currentSession().timeout(const Duration(seconds: 10));
     final uri = Uri.parse(
       '${AppConfig.cloudFunctionsBaseUrl}/setDriverAvailability',
     );
-    final response = await http.post(
-      uri,
-      headers: {
-        'Authorization': 'Bearer ${auth['idToken']}',
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({'uid': uid, 'online': online}),
-    );
+    final response = await http
+        .post(
+          uri,
+          headers: {
+            'Authorization': 'Bearer ${auth['idToken']}',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({'uid': uid, 'online': online}),
+        )
+        .timeout(const Duration(seconds: 15));
     final payload = jsonDecode(response.body);
     final data = payload is Map
         ? Map<String, dynamic>.from(payload)

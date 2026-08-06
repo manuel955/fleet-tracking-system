@@ -15,8 +15,7 @@ class DirectionsService {
     const token = AppConfig.mapboxAccessToken;
     if (token.isEmpty) throw Exception('MAPBOX_ACCESS_TOKEN no configurado');
 
-    final coordinates =
-        '${origin.longitude},${origin.latitude};'
+    final coordinates = '${origin.longitude},${origin.latitude};'
         '${destination.longitude},${destination.latitude}';
     final uri = Uri.https(
       'api.mapbox.com',
@@ -32,7 +31,8 @@ class DirectionsService {
 
     final response = await http.get(uri).timeout(const Duration(seconds: 12));
     if (response.statusCode != 200) {
-      throw Exception('Mapbox Directions rechazo la consulta (${response.statusCode})');
+      throw Exception(
+          'Mapbox Directions rechazo la consulta (${response.statusCode})');
     }
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     final routes = data['routes'] as List<dynamic>?;

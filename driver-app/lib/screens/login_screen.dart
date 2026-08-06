@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../config.dart';
 import '../services/auth_service.dart';
 import '../theme/app_theme.dart';
 import 'notifications_screen.dart';
@@ -144,6 +146,13 @@ class _LoginScreenState extends State<LoginScreen> {
                       style: TextStyle(
                           fontWeight: FontWeight.w600, color: AppColors.ink),
                     ),
+                  ),
+                  TextButton(
+                    onPressed: () => launchUrl(
+                      Uri.parse(AppConfig.privacyPolicyUrl),
+                      mode: LaunchMode.externalApplication,
+                    ),
+                    child: const Text('Política de privacidad'),
                   ),
                 ],
               ),
