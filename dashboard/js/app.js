@@ -963,7 +963,8 @@ function driverDetailHtml(driverId, d, state) {
       <div class="row"><b>Edad:</b> ${escapeHtml(String(d.age ?? '-'))}</div>
       <div class="row"><b>Lugar asignado:</b> ${escapeHtml(d.assignedPlace?.name || d.hotel || '-')}</div>
       <div class="row"><b>Teléfono:</b> ${escapeHtml(d.phone || '-')}</div>
-      <div class="row"><b>Viajes completados hoy:</b> ${completedTripsToday(driverId)}</div>
+      <div class="row"><b>Tipo de vehiculo:</b> ${escapeHtml(d.vehicleType || '-')}</div>
+      <div class="row"><b>Capacidad:</b> ${d.vehicleSeats ? `${escapeHtml(String(d.vehicleSeats))} pasajeros` : '-'}</div>
       <div class="row"><b>Última actualización GPS:</b> ${lastUpdateStr}</div>
     </div>
     ${tripBlock}
