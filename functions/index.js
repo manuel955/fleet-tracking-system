@@ -10,6 +10,11 @@ const {
   isAlertableDisconnectReason,
   normalizeDisconnectReason,
 } = require('./alert-policy');
+const {
+  effectiveDriverHeartbeat,
+  hasHeartbeatExpired,
+  isDriverShiftActive,
+} = require('./heartbeat-policy');
 
 const BRANDING_BUCKET = 'rastreoflota-53052.firebasestorage.app';
 const BRANDING_SIGNING_PATH = 'build_signing/android-debug.keystore';
@@ -30,8 +35,12 @@ const VEHICLE_PASSENGER_RANGES = {
 };
 const VEHICLE_COLORS = new Set(['Negro', 'Gris', 'Plata', 'Blanco']);
 const LIMA_TIME_ZONE = 'America/Lima';
-const DRIVER_HEARTBEAT_TIMEOUT_MS = 30 * 1000;
 const DRIVER_ARRIVAL_RADIUS_METERS = 100;
+const CLOSED_TRIP_STATUSES = new Set(['completed', 'cancelled']);
+// Es un token publico pk de Mapbox, el mismo proveedor que ya usa el mapa
+// cliente. Puede reemplazarse en Cloud Functions con MAPBOX_ACCESS_TOKEN sin
+// tener que modificar el codigo.
+const MAPBOX_PUBLIC_TOKEN = process.env.MAPBOX_ACCESS_TOKEN || 'pk.eyJ1IjoiYW5mdXJleCIsImEiOiJjbXNlMHFxamgwNGlvMndweXo2aGFtbGlpIn0.bxWU-uN8FFTm0u7HZai9oQ';
 
 function distanceMeters(lat1, lng1, lat2, lng2) {
   const toRadians = (value) => value * Math.PI / 180;
@@ -42,6 +51,84 @@ function distanceMeters(lat1, lng1, lat2, lng2) {
     Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) *
     Math.sin(dLng / 2) ** 2;
   return earthRadius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function tripPoint(lat, lng) {
+  const point = { lat: Number(lat), lng: Number(lng) };
+  return Number.isFinite(point.lat) && Number.isFinite(point.lng)
+    && point.lat >= -90 && point.lat <= 90
+    && point.lng >= -180 && point.lng <= 180
+    ? point
+    : null;
+}
+
+function sampleRoutePath(coordinates, maxPoints = 160) {
+  if (!Array.isArray(coordinates)) return [];
+  const points = coordinates
+    .map((coordinate) => tripPoint(coordinate?.[1], coordinate?.[0]))
+    .filter(Boolean);
+  if (points.length <= maxPoints) return points;
+  const step = (points.length - 1) / (maxPoints - 1);
+  return Array.from({ length: maxPoints }, (_, index) => points[Math.round(index * step)]);
+}
+
+function tripRouteSnapshotUrl(routePath, pickup, destination) {
+  if (!MAPBOX_PUBLIC_TOKEN || routePath.length < 2) return null;
+  const routeGeoJson = encodeURIComponent(JSON.stringify({
+    type: 'Feature',
+    properties: { stroke: '#081618', 'stroke-width': 5, 'stroke-opacity': 0.85 },
+    geometry: {
+      type: 'LineString',
+      coordinates: routePath.map((point) => [point.lng, point.lat]),
+    },
+  }));
+  const overlays = [
+    `pin-s+1d4ed8(${pickup.lng},${pickup.lat})`,
+    `pin-s+7c3aed(${destination.lng},${destination.lat})`,
+    `geojson(${routeGeoJson})`,
+  ].join(',');
+  return `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/${overlays}/auto/900x520@2x?access_token=${encodeURIComponent(MAPBOX_PUBLIC_TOKEN)}`;
+}
+
+async function createTripRouteSnapshot(trip) {
+  const pickup = tripPoint(trip.pickupLat, trip.pickupLng);
+  const destination = tripPoint(trip.destinationLat, trip.destinationLng);
+  if (!pickup || !destination || !MAPBOX_PUBLIC_TOKEN) return {};
+
+  const coordinates = `${pickup.lng},${pickup.lat};${destination.lng},${destination.lat}`;
+  const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${coordinates}?overview=full&geometries=geojson&access_token=${encodeURIComponent(MAPBOX_PUBLIC_TOKEN)}`;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Mapbox Directions ${response.status}`);
+    const route = (await response.json()).routes?.[0];
+    const routePath = sampleRoutePath(route?.geometry?.coordinates);
+    if (routePath.length < 2) throw new Error('Ruta sin geometria valida');
+    return {
+      routePath,
+      routeSnapshotUrl: tripRouteSnapshotUrl(routePath, pickup, destination),
+      routeDistanceMeters: Number.isFinite(Number(route.distance)) ? Number(route.distance) : null,
+      routeDurationSeconds: Number.isFinite(Number(route.duration)) ? Number(route.duration) : null,
+      routeSnapshotCreatedAt: Date.now(),
+    };
+  } catch (error) {
+    console.error('createTripRouteSnapshot', error.message || error);
+    return {};
+  }
+}
+
+async function buildTripHistoryRecord(trip) {
+  const driver = trip.driverId
+    ? ((await admin.database().ref(`drivers/${trip.driverId}`).once('value')).val() || {})
+    : {};
+  const routeSnapshot = await createTripRouteSnapshot(trip);
+  return {
+    ...trip,
+    archivedAt: Date.now(),
+    driverFinalLat: Number.isFinite(Number(driver.lat)) ? Number(driver.lat) : null,
+    driverFinalLng: Number.isFinite(Number(driver.lng)) ? Number(driver.lng) : null,
+    driverFinalHeading: Number.isFinite(Number(driver.heading)) ? Number(driver.heading) : null,
+    ...routeSnapshot,
+  };
 }
 
 function driverDisconnectReason(driver) {
@@ -103,6 +190,12 @@ async function requireDashboardAdmin(req) {
   return decoded;
 }
 
+async function requireAuthenticatedUser(req) {
+  const header = req.get('Authorization') || '';
+  if (!header.startsWith('Bearer ')) throw new Error('No autorizado');
+  return admin.auth().verifyIdToken(header.slice(7));
+}
+
 async function requireDashboardManager(req) {
   const user = await requireDashboardAdmin(req);
   // Los roles viven en Firebase Auth. Asi el acceso al dashboard no depende de
@@ -159,6 +252,49 @@ async function requireDashboardCoordinator(req) {
 
 function requestTokenHash(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+// Acceso controlado para pasajeros de hoteles. El valor nunca se guarda en
+// claro en RTDB: el QR contiene el token, pero Firebase solo conserva su hash.
+const LEGACY_PASSENGER_ACCESS_CUTOFF_MS = 1786084297175;
+
+function parsePassengerInviteToken(rawValue) {
+  let value = String(rawValue || '').trim();
+  if (!value) return '';
+  try {
+    if (/^apl-passenger:\/\//i.test(value)) {
+      value = new URL(value).searchParams.get('token') || '';
+    }
+  } catch (_) {
+    return '';
+  }
+  value = decodeURIComponent(value).trim();
+  if (/^APL-PASSENGER:/i.test(value)) value = value.slice('APL-PASSENGER:'.length).trim();
+  return /^[a-f0-9]{32}$/i.test(value) ? value.toLowerCase() : '';
+}
+
+function passengerAccessIsActive(access) {
+  if (!access || access.status !== 'authorized') return false;
+  if (access.legacy === true) return true;
+  return Number(access.expiresAt || 0) > Date.now();
+}
+
+function passengerAccessPayload(access, source = 'invite') {
+  const hotelLat = Number(access.hotelLat);
+  const hotelLng = Number(access.hotelLng);
+  return {
+    status: 'authorized',
+    source,
+    hotelId: String(access.hotelId || ''),
+    hotelName: String(access.hotelName || ''),
+    hotelAddress: String(access.hotelAddress || ''),
+    hotelLat: Number.isFinite(hotelLat) ? hotelLat : null,
+    hotelLng: Number.isFinite(hotelLng) ? hotelLng : null,
+    grantedAt: Number(access.grantedAt || Date.now()),
+    expiresAt: Number(access.expiresAt || 0),
+    legacy: source === 'legacy',
+    inviteHash: access.inviteHash || null,
+  };
 }
 
 async function functionsAccessToken() {
@@ -228,6 +364,127 @@ async function deleteDriverDocuments(driverId) {
   await Promise.all(files.map((file) => file.delete()));
   return files.length;
 }
+
+async function deleteStoragePrefix(prefix) {
+  const bucket = admin.storage().bucket(BRANDING_BUCKET);
+  const [files] = await bucket.getFiles({ prefix });
+  await Promise.all(files.map((file) => file.delete()));
+  return files.length;
+}
+
+// Borra los registros que contienen datos identificables de una cuenta. Se
+// usa desde la ruta de autoservicio de eliminacion, no desde el dashboard:
+// las cuentas eliminadas no deben dejar viajes ni documentos huérfanos.
+async function deleteUserTripRecords(uid) {
+  const db = admin.database();
+  const [tripsSnap, historySnap, driverHistorySnap, coordinatorSnap] = await Promise.all([
+    db.ref('trips').once('value'),
+    db.ref('tripHistory').once('value'),
+    db.ref('driverTripHistory').once('value'),
+    db.ref('coordinatorTrips').once('value'),
+  ]);
+
+  const removals = {};
+  const affectedTripIds = new Set();
+  const markTrip = (path, tripId, trip) => {
+    if (!trip || (trip.passengerId !== uid && trip.driverId !== uid)) return;
+    removals[path] = null;
+    if (tripId) affectedTripIds.add(tripId);
+  };
+
+  for (const [tripId, trip] of Object.entries(tripsSnap.val() || {})) {
+    markTrip(`trips/${tripId}`, tripId, trip);
+  }
+  for (const [tripId, trip] of Object.entries(historySnap.val() || {})) {
+    markTrip(`tripHistory/${tripId}`, tripId, trip);
+  }
+
+  for (const [driverId, driverTrips] of Object.entries(driverHistorySnap.val() || {})) {
+    if (driverId === uid) {
+      removals[`driverTripHistory/${driverId}`] = null;
+      for (const tripId of Object.keys(driverTrips || {})) affectedTripIds.add(tripId);
+      continue;
+    }
+    for (const [tripId, trip] of Object.entries(driverTrips || {})) {
+      markTrip(`driverTripHistory/${driverId}/${tripId}`, tripId, trip);
+    }
+  }
+
+  // Los coordinadores tienen espejos privados por sede. Quitamos los viajes
+  // afectados para que una cuenta eliminada tampoco quede visible allí.
+  for (const [coordinatorUid, coordinatorTrips] of Object.entries(coordinatorSnap.val() || {})) {
+    for (const tripId of affectedTripIds) {
+      if (coordinatorTrips?.[tripId]) {
+        removals[`coordinatorTrips/${coordinatorUid}/${tripId}`] = null;
+      }
+    }
+  }
+
+  if (Object.keys(removals).length) await db.ref().update(removals);
+  return affectedTripIds.size;
+}
+
+// Eliminacion de cuenta iniciada por el propio conductor o pasajero. La
+// identidad se valida con Firebase Auth y la cuenta se elimina al final,
+// despues de retirar perfil, documentos, ubicaciones y viajes identificables.
+exports.deleteMyAccount = functions.https.onRequest(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
+
+  try {
+    const user = await requireAuthenticatedUser(req);
+    const uid = user.uid;
+    const db = admin.database();
+    const driverRef = db.ref(`drivers/${uid}`);
+    const passengerRef = db.ref(`passengers/${uid}`);
+    const [driverSnap, passengerSnap, tripsSnap] = await Promise.all([
+      driverRef.once('value'),
+      passengerRef.once('value'),
+      db.ref('trips').once('value'),
+    ]);
+    const driver = driverSnap.val() || null;
+    const passenger = passengerSnap.val() || null;
+    const activeStatuses = new Set(['assigned_pending_accept', 'accepted', 'arrived_at_pickup', 'in_progress']);
+    const activeTrip = Object.values(tripsSnap.val() || {}).find((trip) =>
+      (trip?.driverId === uid || trip?.passengerId === uid) && activeStatuses.has(trip?.status));
+
+    if (activeTrip || driver?.currentTripId || driver?.status === 'busy') {
+      return res.status(409).json({
+        error: 'Termina o cancela el viaje activo antes de eliminar la cuenta.',
+      });
+    }
+
+    await deleteUserTripRecords(uid);
+    const removals = {
+      [`drivers/${uid}`]: driver ? null : undefined,
+      [`driverLocations/${uid}`]: driver ? null : undefined,
+      [`driverConnectionHistory/${uid}`]: driver ? null : undefined,
+      [`passengers/${uid}`]: passenger ? null : undefined,
+      [`passengerAccess/${uid}`]: passenger ? null : undefined,
+    };
+    Object.keys(removals).forEach((path) => {
+      if (removals[path] === undefined) delete removals[path];
+    });
+    if (Object.keys(removals).length) await db.ref().update(removals);
+
+    if (driver) {
+      await Promise.all([
+        deleteStoragePrefix(`driver_documents/${uid}/`),
+        releaseDriverIdentityReservations(uid, driver),
+      ]);
+    }
+    if (passenger) await deleteStoragePrefix(`passenger_credentials/${uid}/`);
+
+    await admin.auth().deleteUser(uid).catch((error) => {
+      if (error?.code !== 'auth/user-not-found') throw error;
+    });
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('deleteMyAccount', error);
+    return res.status(400).json({ error: error.message || 'No se pudo eliminar la cuenta.' });
+  }
+});
 
 async function reserveUniqueDriverValue(field, value, uid) {
   const ref = admin.database().ref(`driverUnique/${field}/${identityKey(value)}`);
@@ -308,7 +565,10 @@ exports.manageDrivers = functions.https.onRequest(async (req, res) => {
     if (!driverId) return res.status(400).json({ error: 'Conductor requerido' });
     const driverRef = admin.database().ref(`drivers/${driverId}`);
     const driver = (await driverRef.once('value')).val();
-    if (!driver) return res.status(404).json({ error: 'Conductor no encontrado' });
+    // La eliminacion debe poder reintentarse aunque una version anterior
+    // haya quitado el perfil y dejado la cuenta de Authentication o sus
+    // reservas unicas pendientes.
+    if (!driver && action !== 'delete') return res.status(404).json({ error: 'Conductor no encontrado' });
     if (action === 'assignPlace') {
       if (!place?.name || !place?.type) return res.status(400).json({ error: 'Selecciona un hotel o sede.' });
       const assignedPlace = { name: String(place.name), type: String(place.type), assignedAt: Date.now() };
@@ -361,7 +621,7 @@ exports.manageDrivers = functions.https.onRequest(async (req, res) => {
       // Primero libera todas las reservas de identidad. Se revisan también
       // reservas antiguas ligadas a este UID, para que un conductor eliminado
       // desde el dashboard pueda registrarse otra vez con sus mismos datos.
-      await releaseDriverIdentityReservations(driverId, driver);
+      await releaseDriverIdentityReservations(driverId, driver || {});
       await Promise.all([
         driverRef.remove(),
         admin.database().ref(`driverConnectionHistory/${driverId}`).remove(),
@@ -440,6 +700,8 @@ exports.setDriverAvailability = functions.https.onRequest(async (req, res) => {
         turno_activo: false,
         estado_conexion: 'OFFLINE',
         ultima_conexion: now,
+        gpsSessionStartedAt: null,
+        gpsReady: false,
         ultimo_motivo_desconexion: 'MANUAL',
       });
       return res.json({ ok: true, status: 'offline' });
@@ -457,6 +719,8 @@ exports.setDriverAvailability = functions.https.onRequest(async (req, res) => {
         turno_activo: true,
         estado_conexion: 'ONLINE',
         ultima_conexion: now,
+        gpsSessionStartedAt: now,
+        gpsReady: false,
         ultimo_motivo_desconexion: null,
       });
       return res.json({ ok: true, status: 'busy' });
@@ -470,6 +734,8 @@ exports.setDriverAvailability = functions.https.onRequest(async (req, res) => {
         turno_activo: true,
         estado_conexion: 'ONLINE',
         ultima_conexion: now,
+        gpsSessionStartedAt: now,
+        gpsReady: false,
         ultimo_motivo_desconexion: null,
       };
     });
@@ -520,7 +786,7 @@ exports.updateDriverLocation = functions.https.onRequest(async (req, res) => {
     if (driver.approvalStatus !== 'approved') {
       return res.status(403).json({ error: 'El conductor todavía no está aprobado.' });
     }
-    if (driver.turno_activo !== true && !['online', 'busy'].includes(driver.status)) {
+    if (!isDriverShiftActive(driver)) {
       return res.status(409).json({ error: 'El turno del conductor no está activo.' });
     }
 
@@ -528,13 +794,46 @@ exports.updateDriverLocation = functions.https.onRequest(async (req, res) => {
     // incorrecto del teléfono.
     const lastUpdate = Date.now();
     const location = { lat, lng, heading, lastUpdate };
-    await admin.database().ref().update({
-      [`drivers/${driverId}/lat`]: lat,
-      [`drivers/${driverId}/lng`]: lng,
-      [`drivers/${driverId}/heading`]: heading,
-      [`drivers/${driverId}/lastUpdate`]: lastUpdate,
-      [`driverLocations/${driverId}`]: location,
+    // El heartbeat recupera la disponibilidad si el worker la habia pausado,
+    // pero usa una transaccion para no reactivar un turno que el conductor
+    // acaba de terminar mientras un envio viejo seguia en vuelo.
+    const locationFields = {
+      lat,
+      lng,
+      heading,
+      lastUpdate,
+      status: driver.currentTripId ? 'busy' : 'online',
+      turno_activo: true,
+      estado_conexion: 'ONLINE',
+      ultima_conexion: lastUpdate,
+      gpsSessionStartedAt: null,
+      gpsReady: true,
+      ultimo_motivo_desconexion: null,
+    };
+    const transaction = await driverRef.transaction((current) => {
+      if (!current || current.approvalStatus !== 'approved') return;
+      if (!isDriverShiftActive(current)) return;
+      return {
+        ...current,
+        ...locationFields,
+        status: current.currentTripId ? 'busy' : 'online',
+      };
     });
+    if (!transaction.committed) {
+      // RTDB puede abortar una transaccion si el detector de heartbeat escribio
+      // el mismo nodo casi al mismo tiempo. Relee el estado antes de rechazar
+      // el punto: un turno que sigue abierto puede recuperarse sin obligar al
+      // conductor a apagar y encender la app.
+      const latest = (await driverRef.once('value')).val() || {};
+      if (!isDriverShiftActive(latest)) {
+        return res.status(409).json({ error: 'El turno ya no esta activo.' });
+      }
+      await driverRef.update({
+        ...locationFields,
+        status: latest.currentTripId ? 'busy' : 'online',
+      });
+    }
+    await admin.database().ref(`driverLocations/${driverId}`).set(location);
     return res.json({ ok: true, lastUpdate });
   } catch (error) {
     console.error('updateDriverLocation', error);
@@ -876,6 +1175,236 @@ exports.initializeDashboardAdmin = functions.https.onRequest(async (req, res) =>
   }
 });
 
+// Invitaciones QR para pasajeros autorizados por un hotel. Solo el
+// administrador puede crearlas o revocarlas; el token en claro se devuelve
+// una sola vez para que el dashboard lo convierta en QR.
+exports.managePassengerInvites = functions.https.onRequest(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
+  try {
+    const manager = await requireDashboardManager(req);
+    const action = String(req.body?.action || '').trim();
+    const invitesRef = admin.database().ref('passengerInvites');
+
+    if (action === 'list') {
+      const snapshot = await invitesRef.once('value');
+      const invites = Object.entries(snapshot.val() || {})
+        .map(([hash, invite]) => ({
+          id: hash,
+          hotelId: invite.hotelId || '',
+          hotelName: invite.hotelName || '',
+          hotelAddress: invite.hotelAddress || '',
+          createdAt: Number(invite.createdAt || 0),
+          expiresAt: Number(invite.expiresAt || 0),
+          maxUses: Number(invite.maxUses || 1),
+          uses: Number(invite.uses || 0),
+          status: invite.status || 'active',
+          createdBy: invite.createdBy || '',
+          lastUsedAt: Number(invite.lastUsedAt || 0),
+        }))
+        .sort((a, b) => b.createdAt - a.createdAt);
+      return res.json({ invites });
+    }
+
+    if (action === 'create') {
+      const hotelId = String(req.body?.hotelId || '').trim();
+      const place = await getDashboardPlace('hotels', hotelId);
+      if (!place) return res.status(400).json({ error: 'Selecciona un hotel válido.' });
+      const durationHours = Math.min(720, Math.max(1, Number(req.body?.durationHours || 24)));
+      const maxUses = Math.min(100, Math.max(1, Number(req.body?.maxUses || 1)));
+      const token = crypto.randomBytes(16).toString('hex');
+      const hash = requestTokenHash(token);
+      const now = Date.now();
+      const invite = {
+        type: 'hotel',
+        hotelId: place.id,
+        hotelName: place.name,
+        hotelAddress: place.address,
+        hotelLat: place.lat,
+        hotelLng: place.lng,
+        createdAt: now,
+        expiresAt: now + durationHours * 60 * 60 * 1000,
+        maxUses,
+        uses: 0,
+        status: 'active',
+        createdBy: manager.uid,
+      };
+      await invitesRef.child(hash).set(invite);
+      return res.status(201).json({
+        invite: {
+          id: hash,
+          token,
+          qrValue: `apl-passenger://access?token=${encodeURIComponent(token)}`,
+          hotelId: place.id,
+          hotelName: place.name,
+          hotelAddress: place.address,
+          createdAt: now,
+          expiresAt: invite.expiresAt,
+          maxUses,
+        },
+      });
+    }
+
+    if (action === 'revoke') {
+      const inviteId = String(req.body?.inviteId || '').trim().toLowerCase();
+      if (!/^[a-f0-9]{64}$/.test(inviteId)) return res.status(400).json({ error: 'Invitación inválida.' });
+      await invitesRef.child(inviteId).update({ status: 'revoked', revokedAt: Date.now(), revokedBy: manager.uid });
+      return res.json({ ok: true });
+    }
+
+    return res.status(400).json({ error: 'Acción inválida.' });
+  } catch (error) {
+    console.error('managePassengerInvites', error);
+    return res.status(403).json({ error: error.message || 'No autorizado' });
+  }
+});
+
+// Canjea un QR desde la app de pasajeros. La transacción hace que un QR de
+// un solo uso no pueda ser reclamado simultáneamente por dos dispositivos.
+exports.redeemPassengerInvite = functions.https.onRequest(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
+  try {
+    const user = await requireAuthenticatedUser(req);
+    const token = parsePassengerInviteToken(req.body?.code || req.body?.token);
+    if (!token) return res.status(400).json({ error: 'Código QR inválido.' });
+    const inviteHash = requestTokenHash(token);
+    const inviteRef = admin.database().ref(`passengerInvites/${inviteHash}`);
+    const result = await inviteRef.transaction((current) => {
+      if (!current || current.status === 'revoked' || Number(current.expiresAt || 0) <= Date.now()) return current;
+      const usedBy = current.usedBy && typeof current.usedBy === 'object' ? current.usedBy : {};
+      if (usedBy[user.uid]) return current;
+      const uses = Number(current.uses || 0);
+      const maxUses = Math.max(1, Number(current.maxUses || 1));
+      if (uses >= maxUses) return current;
+      return {
+        ...current,
+        uses: uses + 1,
+        lastUsedAt: Date.now(),
+        status: uses + 1 >= maxUses ? 'used' : 'active',
+        usedBy: { ...usedBy, [user.uid]: Date.now() },
+      };
+    });
+    const invite = result.snapshot.val();
+    if (!result.committed || !invite?.usedBy?.[user.uid]) {
+      return res.status(409).json({ error: 'El código QR está vencido, revocado o ya fue utilizado.' });
+    }
+    const access = passengerAccessPayload({ ...invite, inviteHash }, 'invite');
+    await admin.database().ref(`passengerAccess/${user.uid}`).set(access);
+    return res.json({ ok: true, access });
+  } catch (error) {
+    console.error('redeemPassengerInvite', error);
+    return res.status(403).json({ error: error.message || 'No se pudo activar el acceso' });
+  }
+});
+
+// Conserva las cuentas de pasajeros ya existentes al activar el control QR.
+// Solo un perfil creado antes del corte puede usar esta migración automática.
+exports.ensurePassengerAccess = functions.https.onRequest(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
+  try {
+    const user = await requireAuthenticatedUser(req);
+    const accessRef = admin.database().ref(`passengerAccess/${user.uid}`);
+    const access = (await accessRef.once('value')).val();
+    if (passengerAccessIsActive(access)) return res.json({ ok: true, access });
+    const passenger = (await admin.database().ref(`passengers/${user.uid}`).once('value')).val();
+    if (!passenger || Number(passenger.registeredAt || 0) >= LEGACY_PASSENGER_ACCESS_CUTOFF_MS) {
+      return res.status(403).json({ error: 'Activa primero el acceso con el código QR del hotel.' });
+    }
+    const legacyAccess = passengerAccessPayload({
+      hotelId: passenger.hotelId || '',
+      hotelName: passenger.hotelName || 'Acceso anterior',
+      hotelAddress: passenger.hotelAddress || '',
+      hotelLat: Number(passenger.hotelLat),
+      hotelLng: Number(passenger.hotelLng),
+      grantedAt: Number(passenger.registeredAt),
+    }, 'legacy');
+    await accessRef.set(legacyAccess);
+    return res.json({ ok: true, access: legacyAccess });
+  } catch (error) {
+    console.error('ensurePassengerAccess', error);
+    return res.status(403).json({ error: error.message || 'No se pudo validar el acceso' });
+  }
+});
+
+// La escritura del perfil queda del lado del servidor después de validar la
+// autorización. Así una cuenta anónima no puede autoconcederse acceso.
+exports.registerPassengerProfile = functions.https.onRequest(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
+  try {
+    const user = await requireAuthenticatedUser(req);
+    const access = (await admin.database().ref(`passengerAccess/${user.uid}`).once('value')).val();
+    if (!passengerAccessIsActive(access)) return res.status(403).json({ error: 'Activa primero el acceso con el código QR del hotel.' });
+    const name = String(req.body?.name || '').trim().slice(0, 120);
+    const phone = String(req.body?.phone || '').trim().slice(0, 40);
+    const credentialPhotoUrl = String(req.body?.credentialPhotoUrl || '').trim();
+    if (!name || !phone || !credentialPhotoUrl) return res.status(400).json({ error: 'Nombre, teléfono y credencial son obligatorios.' });
+    const passengerRef = admin.database().ref(`passengers/${user.uid}`);
+    const current = (await passengerRef.once('value')).val() || {};
+    await passengerRef.set({
+      name,
+      phone,
+      credentialPhotoUrl,
+      registeredAt: Number(current.registeredAt || Date.now()),
+    });
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('registerPassengerProfile', error);
+    return res.status(403).json({ error: error.message || 'No se pudo registrar el pasajero' });
+  }
+});
+
+// Vincula una cuenta anónima existente con el UID creado por Firebase Phone
+// Auth. Se conserva el historial y el acceso del hotel; no se sobrescribe un
+// perfil telefónico que ya exista.
+exports.migratePassengerAccount = functions.https.onRequest(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
+  try {
+    const targetUser = await requireAuthenticatedUser(req);
+    const oldToken = String(req.body?.oldIdToken || '').trim();
+    if (!oldToken) return res.json({ ok: true, migrated: false });
+    const oldUser = await admin.auth().verifyIdToken(oldToken);
+    if (!oldUser.uid || oldUser.uid === targetUser.uid) return res.json({ ok: true, migrated: false });
+
+    const db = admin.database();
+    const [oldPassengerSnap, oldAccessSnap, targetPassengerSnap] = await Promise.all([
+      db.ref(`passengers/${oldUser.uid}`).once('value'),
+      db.ref(`passengerAccess/${oldUser.uid}`).once('value'),
+      db.ref(`passengers/${targetUser.uid}`).once('value'),
+    ]);
+    const oldPassenger = oldPassengerSnap.val();
+    const oldAccess = oldAccessSnap.val();
+    if (!oldPassenger && !oldAccess) return res.json({ ok: true, migrated: false });
+    if (targetPassengerSnap.exists()) return res.status(409).json({ error: 'El número ya tiene otra cuenta de pasajero.' });
+
+    const updates = {};
+    if (oldPassenger) updates[`passengers/${targetUser.uid}`] = oldPassenger;
+    if (oldAccess) updates[`passengerAccess/${targetUser.uid}`] = oldAccess;
+    const tripsSnap = await db.ref('trips').orderByChild('passengerId').equalTo(oldUser.uid).once('value');
+    Object.keys(tripsSnap.val() || {}).forEach((tripId) => {
+      updates[`trips/${tripId}/passengerId`] = targetUser.uid;
+    });
+    if (Object.keys(updates).length) await db.ref().update(updates);
+    await db.ref(`passengers/${oldUser.uid}`).remove();
+    await db.ref(`passengerAccess/${oldUser.uid}`).remove();
+    await admin.auth().deleteUser(oldUser.uid).catch((error) => {
+      if (error?.code !== 'auth/user-not-found') throw error;
+    });
+    return res.json({ ok: true, migrated: true, tripCount: Object.keys(tripsSnap.val() || {}).length });
+  } catch (error) {
+    console.error('migratePassengerAccount', error);
+    return res.status(403).json({ error: error.message || 'No se pudo recuperar la cuenta' });
+  }
+});
+
 exports.manageDashboardUsers = functions.https.onRequest(async (req, res) => {
   cors(res);
   if (req.method === 'OPTIONS') return res.status(204).send('');
@@ -1157,6 +1686,38 @@ exports.dispatchScheduledTrips = functions.pubsub
     return null;
   });
 
+// Repara asignaciones que quedaron persistidas por una carrera entre la
+// cancelacion/completado y el siguiente ping GPS del conductor. Es seguro:
+// solo libera si el viaje que figura en currentTripId existe, esta cerrado y
+// sigue perteneciendo al mismo conductor.
+exports.reconcileClosedTripAssignments = functions.pubsub
+  .schedule('every 1 minutes')
+  .onRun(async () => {
+    const db = admin.database();
+    const [driversSnap, tripsSnap] = await Promise.all([
+      db.ref('drivers').once('value'),
+      db.ref('trips').once('value'),
+    ]);
+    const drivers = driversSnap.val() || {};
+    const trips = tripsSnap.val() || {};
+    const repairs = [];
+
+    for (const [driverId, driver] of Object.entries(drivers)) {
+      const tripId = driver?.currentTripId;
+      const trip = tripId ? trips[tripId] : null;
+      if (
+        tripId &&
+        trip?.driverId === driverId &&
+        CLOSED_TRIP_STATUSES.has(trip.status)
+      ) {
+        repairs.push(releaseDriver(driverId, tripId));
+      }
+    }
+
+    await Promise.all(repairs);
+    return null;
+  });
+
 // Reacciona solo a las transiciones que necesitan coordinacion en el
 // servidor:
 //  - 'no_drivers_available' -> 'searching' (el pasajero reintento manualmente)
@@ -1168,6 +1729,7 @@ exports.dispatchScheduledTrips = functions.pubsub
 // servidor tenga que hacer nada mas.
 exports.handleTripStatusChange = functions.database
   .ref('/trips/{tripId}/status')
+  // Archiva datos, ruta y snapshot del mapa al cerrar cada viaje.
   .onUpdate(async (change, context) => {
     const tripId = context.params.tripId;
     const before = change.before.val();
@@ -1190,16 +1752,29 @@ exports.handleTripStatusChange = functions.database
     if (after === 'completed' || after === 'cancelled') {
       const tripSnap = await db.ref(`trips/${tripId}`).once('value');
       const trip = tripSnap.val();
+      if (!trip) return null;
       if (trip.driverId) await releaseDriver(trip.driverId, tripId);
-      if (after === 'cancelled' && trip.passengerId && trip.cancelledBy !== 'passenger') {
-        const passengerSnap = await db.ref(`passengers/${trip.passengerId}`).once('value');
-        const passenger = passengerSnap.val() || {};
-        await sendPush(passenger.fcmToken, 'trip_cancelled', {
-          tripId,
-          reason: trip.cancelReason || 'El viaje fue cancelado.',
-        });
+      if (after === 'cancelled') {
+        const reason = trip.cancelReason || 'El viaje fue cancelado.';
+        if (trip.driverId) {
+          const driverSnap = await db.ref(`drivers/${trip.driverId}`).once('value');
+          const driver = driverSnap.val() || {};
+          await sendPush(driver.fcmToken, 'trip_cancelled', { tripId, reason });
+        }
+        if (trip.passengerId && trip.cancelledBy !== 'passenger') {
+          const passengerSnap = await db.ref(`passengers/${trip.passengerId}`).once('value');
+          const passenger = passengerSnap.val() || {};
+          await sendPush(passenger.fcmToken, 'trip_cancelled', { tripId, reason });
+        }
       }
-      await db.ref(`tripHistory/${tripId}`).set({ ...trip, archivedAt: Date.now() });
+      const historyTrip = await buildTripHistoryRecord(trip);
+      const historyWrites = {
+        [`tripHistory/${tripId}`]: historyTrip,
+      };
+      if (trip.driverId) {
+        historyWrites[`driverTripHistory/${trip.driverId}/${tripId}`] = historyTrip;
+      }
+      await db.ref().update(historyWrites);
       return null;
     }
 
@@ -1269,23 +1844,28 @@ exports.detectPrematureDriverDisconnects = functions.pubsub
       const driverId = child.key;
       const driver = child.val() || {};
       const connected = driver.status === 'online' || driver.status === 'busy';
-      const lastHeartbeat = Number(driver.lastUpdate || driver.ultima_conexion || 0);
-      if (!connected || !lastHeartbeat || now - lastHeartbeat <= DRIVER_HEARTBEAT_TIMEOUT_MS) return;
+      const lastHeartbeat = effectiveDriverHeartbeat(driver);
+      if (!connected || !hasHeartbeatExpired(lastHeartbeat, now)) return;
       if (Number(driver.ultimo_alerta_desconexion_at || 0) >= lastHeartbeat) return;
 
       tasks.push((async () => {
         const currentSnap = await db.ref(`drivers/${driverId}`).once('value');
         const current = currentSnap.val() || {};
         const stillConnected = current.status === 'online' || current.status === 'busy';
-        const currentHeartbeat = Number(current.lastUpdate || current.ultima_conexion || 0);
-        if (!stillConnected || currentHeartbeat !== lastHeartbeat || now - currentHeartbeat <= DRIVER_HEARTBEAT_TIMEOUT_MS) return;
+        const currentHeartbeat = effectiveDriverHeartbeat(current);
+        if (!stillConnected || currentHeartbeat !== lastHeartbeat || !hasHeartbeatExpired(currentHeartbeat, now)) return;
 
         const disconnectedAt = now;
         await createPrematureDisconnectAlert(driverId, current, 'HEARTBEAT', disconnectedAt);
         await db.ref(`drivers/${driverId}`).update({
           status: null,
+          // A lost heartbeat is not an explicit end-of-shift action. Keep the
+          // shift open so the app can reconcile and resume after suspension.
+          turno_activo: true,
           estado_conexion: 'OFFLINE',
-          ultima_conexion: disconnectedAt,
+          // Keep ultima_conexion as the last real ping; do not overwrite it
+          // with the time when the server detected the timeout.
+          gpsReady: false,
           ultimo_motivo_desconexion: 'HEARTBEAT',
         });
       })());

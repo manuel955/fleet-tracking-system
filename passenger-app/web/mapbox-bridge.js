@@ -20,11 +20,27 @@
   function createMarkerElement(marker) {
     const element = document.createElement('div');
     element.className = 'fleet-mapbox-web-marker';
-    element.style.width = '18px';
-    element.style.height = '18px';
-    element.style.borderRadius = '50%';
-    element.style.border = '2px solid #ffffff';
-    element.style.background = colorToCss(marker.color);
+    const glyph = marker.glyph === 'person'
+      ? '👤'
+      : marker.glyph === 'vehicle' ? '🚗' : '';
+    if (glyph) {
+      element.textContent = glyph;
+      element.style.display = 'grid';
+      element.style.placeItems = 'center';
+      element.style.width = '42px';
+      element.style.height = '42px';
+      element.style.borderRadius = '50%';
+      element.style.background = '#ffffff';
+      element.style.fontSize = '29px';
+      element.style.lineHeight = '1';
+      element.style.textShadow = '0 1px 2px rgba(0,0,0,.35)';
+    } else {
+      element.style.width = '18px';
+      element.style.height = '18px';
+      element.style.borderRadius = '50%';
+      element.style.border = '2px solid #ffffff';
+      element.style.background = colorToCss(marker.color);
+    }
     element.style.opacity = String(marker.opacity == null ? 1 : marker.opacity);
     element.style.boxShadow = '0 2px 6px rgba(0,0,0,.35)';
     element.style.cursor = marker.draggable ? 'grab' : 'pointer';
@@ -37,38 +53,6 @@
       global.cancelAnimationFrame(marker.__fleetAnimationFrame);
       marker.__fleetAnimationFrame = null;
     }
-  }
-
-  function animateMarkerTo(marker, lng, lat, durationMs) {
-    const target = [Number(lng), Number(lat)];
-    const previousTarget = marker.__fleetTarget;
-    if (previousTarget && previousTarget[0] === target[0] && previousTarget[1] === target[1]) return;
-
-    const current = marker.getLngLat();
-    marker.__fleetTarget = target;
-    stopMarkerAnimation(marker);
-    if (!current || marker.__fleetHasPosition !== true || durationMs <= 0) {
-      marker.setLngLat(target);
-      marker.__fleetHasPosition = true;
-      return;
-    }
-
-    const start = { lng: current.lng, lat: current.lat };
-    const startedAt = global.performance.now();
-    const animate = (now) => {
-      if (marker.__fleetTarget !== target) return;
-      const progress = Math.min(1, (now - startedAt) / durationMs);
-      marker.setLngLat([
-        start.lng + (target[0] - start.lng) * progress,
-        start.lat + (target[1] - start.lat) * progress,
-      ]);
-      if (progress < 1) {
-        marker.__fleetAnimationFrame = global.requestAnimationFrame(animate);
-      } else {
-        marker.__fleetAnimationFrame = null;
-      }
-    };
-    marker.__fleetAnimationFrame = global.requestAnimationFrame(animate);
   }
 
   global.fleetMapboxCreate = function (id, token, styleUri, lat, lng, zoom, scroll, zoomGestures) {
@@ -143,10 +127,15 @@
         });
         state.markers.set(markerId, marker);
       } else {
-        animateMarkerTo(marker, data.lng, data.lat, 5000);
+        marker.setLngLat([data.lng, data.lat]);
+        marker.__fleetTarget = [Number(data.lng), Number(data.lat)];
         marker.setDraggable(!!data.draggable);
         const element = marker.getElement();
-        element.style.background = colorToCss(data.color);
+        const glyph = data.glyph === 'person'
+          ? '👤'
+          : data.glyph === 'vehicle' ? '🚗' : '';
+        if (!glyph) element.style.background = colorToCss(data.color);
+        element.textContent = glyph;
         element.style.opacity = String(data.opacity == null ? 1 : data.opacity);
         element.title = data.title || '';
       }

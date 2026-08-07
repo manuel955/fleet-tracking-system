@@ -51,6 +51,13 @@ let attendanceClickTimer = null;
 let attendanceSearch = '';
 let attendanceOutsideListenerBound = false;
 let tripHistorySearch = '';
+let tripHistoryDriverFilter = '';
+let tripHistoryDateFilter = '';
+let tripHistoryDateToFilter = '';
+let tripHistoryCalendarMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+let tripHistoryHoverDate = '';
+let tripHistoryClickTimer = null;
+let tripHistoryOutsideListenerBound = false;
 
 const mapViewEl = document.getElementById('map-view');
 const adminViewEl = document.getElementById('drivers-admin-view');
@@ -137,13 +144,16 @@ function docCellHtml(driverId, field, url) {
 }
 
 function driverConnectionHtml(driverId, d) {
-  const connection = d.estado_conexion || ((d.status === 'online' || d.status === 'busy') ? 'ONLINE' : 'OFFLINE');
+  const suspended = d.turno_activo === true && d.ultimo_motivo_desconexion === 'HEARTBEAT';
+  const connection = suspended
+    ? 'SIN SE&Ntilde;AL'
+    : (d.estado_conexion || ((d.status === 'online' || d.status === 'busy') ? 'ONLINE' : 'OFFLINE'));
   const lastConnection = d.ultima_conexion ? new Date(Number(d.ultima_conexion)).toLocaleString('es-PE') : 'Sin registro';
   return `
     <div class="driver-connection-box" data-connection-box="${driverId}">
       <div class="driver-connection-heading">
         <div><b>Estado de conexión</b><small>${connection === 'ONLINE' ? 'En línea' : 'Fuera de línea'} · última conexión: ${escapeHtml(lastConnection)}</small></div>
-        <span class="connection-state ${connection === 'ONLINE' ? 'online' : 'offline'}">${connection}</span>
+        <span class="connection-state ${suspended ? 'suspended' : (connection === 'ONLINE' ? 'online' : 'offline')}">${connection}</span>
       </div>
       <small class="connection-note">Las desconexiones manuales y las pérdidas de señal generan una alerta automática.</small>
     </div>
@@ -494,32 +504,867 @@ function renderDriversAttendance() {
   document.getElementById('attendance-clear').addEventListener('click', () => { attendanceDateFilter = { from: '', to: '' }; renderDriversAttendance(); });
 }
 
+const TRIP_HISTORY_STATUS_LABELS = {
+  completed: 'Completado',
+  cancelled: 'Cancelado',
+};
+
+function tripHistoryTimestamp(trip) {
+  return Number(trip.completedAt || trip.cancelledAt || trip.archivedAt || trip.requestedAt || 0);
+}
+
+function tripHistoryDateKey(trip) {
+  return tripHistoryTimestamp(trip) ? attendanceDateKey(tripHistoryTimestamp(trip)) : '';
+}
+
+function tripHistoryDriverLabel(driverId, trip) {
+  const driver = adminDriversCache[driverId] || {};
+  return trip.driverName || driver.name || driverId || 'Sin conductor';
+}
+
+function tripHistoryDateRangeLabel() {
+  if (!tripHistoryDateFilter && !tripHistoryDateToFilter) return 'Seleccionar fechas';
+  return `${attendanceDateLabel(tripHistoryDateFilter) || '\u2026'} - ${attendanceDateLabel(tripHistoryDateToFilter) || '\u2026'}`;
+}
+
+function setTripHistoryRange(from, to) {
+  tripHistoryDateFilter = from;
+  tripHistoryDateToFilter = to || from;
+  tripHistoryHoverDate = '';
+  renderDriversHistory();
+}
+
+function markTripHistoryStart(date) {
+  tripHistoryDateFilter = date;
+  tripHistoryDateToFilter = '';
+  tripHistoryHoverDate = '';
+  const label = document.querySelector('#trip-history-date-toggle span');
+  if (label) label.textContent = `${attendanceDateLabel(date)} - \u2026`;
+  const pdfButton = document.getElementById('trip-history-pdf');
+  if (pdfButton) pdfButton.disabled = true;
+  document.querySelectorAll('[data-trip-history-date]').forEach((button) => {
+    button.classList.toggle('selected', button.getAttribute('data-trip-history-date') === date);
+    button.classList.remove('preview');
+  });
+}
+
+function tripHistoryMonthHtml(monthDate) {
+  const year = monthDate.getFullYear();
+  const month = monthDate.getMonth();
+  const firstDay = (new Date(year, month, 1).getDay() + 6) % 7;
+  const days = new Date(year, month + 1, 0).getDate();
+  const weekdays = ['lu', 'ma', 'mi', 'ju', 'vi', 's\u00e1', 'do'];
+  let cells = weekdays.map((day) => `<span class="attendance-weekday">${day}</span>`).join('');
+  for (let index = 0; index < 42; index += 1) {
+    const day = index - firstDay + 1;
+    if (day < 1 || day > days) {
+      cells += '<span class="attendance-day empty"></span>';
+      continue;
+    }
+    const date = new Date(year, month, day);
+    const key = localDateInputValue(date);
+    const selected = key === tripHistoryDateFilter || key === tripHistoryDateToFilter;
+    const low = tripHistoryDateFilter && tripHistoryDateToFilter && tripHistoryDateFilter < tripHistoryDateToFilter ? tripHistoryDateFilter : tripHistoryDateToFilter;
+    const high = tripHistoryDateFilter && tripHistoryDateToFilter && tripHistoryDateFilter > tripHistoryDateToFilter ? tripHistoryDateFilter : tripHistoryDateToFilter;
+    const between = low && high && key > low && key < high;
+    cells += `<button type="button" class="attendance-day${selected ? ' selected' : ''}${between ? ' between' : ''}" data-trip-history-date="${key}">${day}</button>`;
+  }
+  return `<section class="attendance-month"><h4>${monthDate.toLocaleDateString('es-PE', { month: 'short', year: 'numeric' })}</h4><div class="attendance-calendar-grid">${cells}</div></section>`;
+}
+
+function tripHistoryCalendarHtml() {
+  const nextMonth = new Date(tripHistoryCalendarMonth.getFullYear(), tripHistoryCalendarMonth.getMonth() + 1, 1);
+  return `<div class="attendance-calendar-toolbar"><button type="button" id="trip-history-calendar-prev" aria-label="Mes anterior">\u2039</button><strong>${tripHistoryCalendarMonth.toLocaleDateString('es-PE', { month: 'long', year: 'numeric' })}</strong><strong>${nextMonth.toLocaleDateString('es-PE', { month: 'long', year: 'numeric' })}</strong><button type="button" id="trip-history-calendar-next" aria-label="Mes siguiente">\u203a</button></div><div class="attendance-calendar-months">${tripHistoryMonthHtml(tripHistoryCalendarMonth)}${tripHistoryMonthHtml(nextMonth)}</div>`;
+}
+
+function tripHistoryEntries() {
+  const query = tripHistorySearch.trim().toLowerCase();
+  return Object.entries(adminTripHistory)
+    .filter(([, trip]) => {
+      if (!trip || tripHistoryDriverFilter && trip.driverId !== tripHistoryDriverFilter) return false;
+      if (tripHistoryDateFilter) {
+        const from = tripHistoryDateToFilter && tripHistoryDateToFilter < tripHistoryDateFilter ? tripHistoryDateToFilter : tripHistoryDateFilter;
+        const to = tripHistoryDateToFilter && tripHistoryDateToFilter > tripHistoryDateFilter ? tripHistoryDateToFilter : tripHistoryDateFilter;
+        const key = tripHistoryDateKey(trip);
+        if (!key || key < from || key > to) return false;
+      }
+      if (!query) return true;
+      const driver = adminDriversCache[trip.driverId] || {};
+      return [trip.driverName, trip.driverPlate, driver.name, driver.plate]
+        .some((value) => String(value || '').toLowerCase().includes(query));
+    })
+    .sort(([, a], [, b]) => tripHistoryTimestamp(b) - tripHistoryTimestamp(a));
+}
+
+function tripHistoryDriverOptions() {
+  const drivers = new Map();
+  Object.entries(adminDriversCache).forEach(([driverId, driver]) => {
+    drivers.set(driverId, { name: driver.name || driverId, plate: driver.plate || '' });
+  });
+  Object.values(adminTripHistory).forEach((trip) => {
+    if (!trip?.driverId || drivers.has(trip.driverId)) return;
+    drivers.set(trip.driverId, { name: trip.driverName || trip.driverId, plate: trip.driverPlate || '' });
+  });
+  return [...drivers.entries()]
+    .sort(([, a], [, b]) => String(a.name).localeCompare(String(b.name), 'es'))
+    .map(([driverId, driver]) => `<option value="${escapeHtml(driverId)}"${tripHistoryDriverFilter === driverId ? ' selected' : ''}>${escapeHtml(driver.name)}${driver.plate ? ` · ${escapeHtml(driver.plate)}` : ''}</option>`)
+    .join('');
+}
+
+function tripHistoryMapCell(trip) {
+  if (!trip.routeSnapshotUrl) return '<span class="trip-history-map-pending">Se genera en PDF</span>';
+  return `<a href="${escapeHtml(trip.routeSnapshotUrl)}" target="_blank" rel="noopener" class="trip-history-map-link"><img src="${escapeHtml(trip.routeSnapshotUrl)}" alt="Mapa de la ruta" loading="lazy" /></a>`;
+}
+
+function tripHistoryRowsHtml(entries) {
+  return entries.map(([id, trip]) => {
+    const status = trip.status === 'cancelled' ? 'cancelled' : 'completed';
+    const statusLabel = TRIP_HISTORY_STATUS_LABELS[trip.status] || trip.status || 'Archivado';
+    const timestamp = tripHistoryTimestamp(trip);
+    return `<tr>
+      <td>${timestamp ? new Date(timestamp).toLocaleString('es-PE') : '—'}</td>
+      <td><strong>${escapeHtml(tripHistoryDriverLabel(trip.driverId, trip))}</strong><small>${escapeHtml(trip.driverPlate || adminDriversCache[trip.driverId]?.plate || '—')}</small></td>
+      <td>${escapeHtml(trip.passengerName || '—')}<small>${escapeHtml(trip.passengerCount ? `${trip.passengerCount} pasajero${Number(trip.passengerCount) === 1 ? '' : 's'}` : '')}</small></td>
+      <td>${escapeHtml(trip.pickupAddress || '—')}</td>
+      <td>${escapeHtml(trip.destinationAddress || '—')}</td>
+      <td><span class="trip-history-status ${status}">${escapeHtml(statusLabel)}</span>${trip.cancelReason ? `<small>${escapeHtml(trip.cancelReason)}</small>` : ''}</td>
+      <td>${tripHistoryMapCell(trip)}</td>
+    </tr>`;
+  }).join('');
+}
+
 function renderDriversHistory() {
   const isTrips = adminActiveFilter === 'trip-history';
-  const query = tripHistorySearch.trim().toLowerCase();
-  const tripEntries = Object.entries(adminTripHistory).filter(([, trip]) => {
-    if (!query) return true;
-    const driver = adminDriversCache[trip.driverId] || {};
-    return [trip.driverName, trip.driverPlate, driver.name, driver.plate].some((value) => String(value || '').toLowerCase().includes(query));
-  });
+  const tripEntries = isTrips ? tripHistoryEntries() : [];
+  const reportReady = Boolean(tripHistoryDriverFilter && tripHistoryDateFilter && tripHistoryDateToFilter);
   const rows = isTrips
-    ? tripEntries.map(([id, trip]) => `<tr><td>${new Date(trip.completedAt || trip.cancelledAt || trip.archivedAt).toLocaleString('es-PE')}</td><td><strong>${escapeHtml(trip.driverName || adminDriversCache[trip.driverId]?.name || '-')}</strong><small>${escapeHtml(trip.driverPlate || adminDriversCache[trip.driverId]?.plate || '-')}</small></td><td>${escapeHtml(trip.passengerName || '-')}</td><td>${escapeHtml(trip.pickupAddress || '-')}</td><td>${escapeHtml(trip.destinationAddress || '-')}</td><td>${escapeHtml(trip.status || '-')}</td></tr>`)
-    : Object.entries(adminConnectionHistory).flatMap(([driverId, events]) => Object.values(events || {}).map((event) => `<tr><td>${new Date(event.at).toLocaleString('es-PE')}</td><td>${escapeHtml(event.driverName || driverId)}</td><td>${event.status === 'online' ? 'Conectado' : 'Desconectado'}</td></tr>`));
-  adminViewEl.innerHTML = `${historyToolbarHtml()}${isTrips ? `<div class="history-search-row"><label for="trip-history-search">Buscar conductor</label><input id="trip-history-search" type="search" value="${escapeHtml(tripHistorySearch)}" placeholder="Nombre o placa..." /></div>` : ''}<div class="dashboard-users-table-wrap"><table class="dashboard-users-table"><thead><tr>${isTrips ? '<th>Fecha</th><th>Conductor / placa</th><th>Pasajero</th><th>Origen</th><th>Destino</th><th>Estado</th>' : '<th>Fecha</th><th>Conductor</th><th>Evento</th>'}</tr></thead><tbody>${rows.join('') || `<tr><td colspan="${isTrips ? 6 : 3}" class="dashboard-empty-row">Sin registros todavía.</td></tr>`}</tbody></table></div>`;
+    ? tripHistoryRowsHtml(tripEntries)
+    : Object.entries(adminConnectionHistory).flatMap(([driverId, events]) => Object.values(events || {}).map((event) => `<tr><td>${new Date(event.at).toLocaleString('es-PE')}</td><td>${escapeHtml(event.driverName || driverId)}</td><td>${event.status === 'online' ? 'Conectado' : 'Desconectado'}</td></tr>`)).join('');
+  const toolbar = historyToolbarHtml();
+  const controls = isTrips ? `
+    <section class="trip-history-report-card">
+      <div class="trip-history-report-heading"><div><span class="overview-eyebrow">REPORTE HISTÓRICO</span><h3>Viajes de un conductor</h3><p>Selecciona un conductor y un día para revisar sus viajes y descargar el PDF.</p></div><span class="trip-history-total">${tripEntries.length} viaje${tripEntries.length === 1 ? '' : 's'}</span></div>
+      <div class="trip-history-report-controls">
+        <label>Conductor<select id="trip-history-driver"><option value="">Seleccionar conductor…</option>${tripHistoryDriverOptions()}</select></label>
+        <div class="trip-history-date-field"><span>Día</span><div class="attendance-date-picker" id="trip-history-date-picker"><button type="button" class="attendance-date-toggle" id="trip-history-date-toggle">▣ <span>${tripHistoryDateRangeLabel()}</span></button><div class="attendance-date-popover hidden" id="trip-history-date-popover"><div class="attendance-presets"><button type="button" data-trip-history-preset="today">Hoy</button><button type="button" data-trip-history-preset="yesterday">Ayer</button><button type="button" data-trip-history-preset="7">Últimos 7 días</button><button type="button" data-trip-history-preset="30">Últimos 30 días</button><button type="button" data-trip-history-preset="month">Mes actual</button></div><div class="attendance-calendar">${tripHistoryCalendarHtml()}</div></div></div></div>
+        <button type="button" id="trip-history-clear" class="attendance-clear-btn">Limpiar</button>
+        <button type="button" id="trip-history-pdf" class="trip-history-pdf-btn"${reportReady ? '' : ' disabled'}>Descargar PDF</button>
+      </div>
+    </section>
+  ` : '';
+  adminViewEl.innerHTML = `${toolbar}${controls}<div class="dashboard-users-table-wrap"><table class="dashboard-users-table trip-history-table"><thead><tr>${isTrips ? '<th>Fecha</th><th>Conductor / placa</th><th>Pasajero</th><th>Origen</th><th>Destino</th><th>Estado</th><th>Mapa</th>' : '<th>Fecha</th><th>Conductor</th><th>Evento</th>'}</tr></thead><tbody>${rows || `<tr><td colspan="${isTrips ? 7 : 3}" class="dashboard-empty-row">${isTrips && reportReady ? 'No hay viajes de ese conductor en el día seleccionado.' : 'Selecciona un conductor y un día para preparar el reporte.'}</td></tr>`}</tbody></table></div>`;
   adminViewEl.querySelectorAll('[data-admin-filter]').forEach((btn) => btn.addEventListener('click', () => { adminActiveFilter = btn.getAttribute('data-admin-filter'); renderDriversAdmin(); }));
-  if (isTrips) {
-    const searchInput = document.getElementById('trip-history-search');
-    searchInput.addEventListener('input', () => {
-      tripHistorySearch = searchInput.value;
-      const nextQuery = tripHistorySearch.trim().toLowerCase();
-      const filtered = Object.entries(adminTripHistory).filter(([, trip]) => {
-        if (!nextQuery) return true;
-        const driver = adminDriversCache[trip.driverId] || {};
-        return [trip.driverName, trip.driverPlate, driver.name, driver.plate].some((value) => String(value || '').toLowerCase().includes(nextQuery));
-      });
-      const tbody = adminViewEl.querySelector('tbody');
-      tbody.innerHTML = filtered.map(([, trip]) => `<tr><td>${new Date(trip.completedAt || trip.cancelledAt || trip.archivedAt).toLocaleString('es-PE')}</td><td><strong>${escapeHtml(trip.driverName || adminDriversCache[trip.driverId]?.name || '-')}</strong><small>${escapeHtml(trip.driverPlate || adminDriversCache[trip.driverId]?.plate || '-')}</small></td><td>${escapeHtml(trip.passengerName || '-')}</td><td>${escapeHtml(trip.pickupAddress || '-')}</td><td>${escapeHtml(trip.destinationAddress || '-')}</td><td>${escapeHtml(trip.status || '-')}</td></tr>`).join('') || '<tr><td colspan="6" class="dashboard-empty-row">Sin resultados para esa búsqueda.</td></tr>';
+  if (!isTrips) return;
+  document.getElementById('trip-history-driver').addEventListener('change', (event) => {
+    tripHistoryDriverFilter = event.target.value;
+    renderDriversHistory();
+  });
+  const dateToggle = document.getElementById('trip-history-date-toggle');
+  const datePopover = document.getElementById('trip-history-date-popover');
+  dateToggle.addEventListener('click', () => datePopover.classList.toggle('hidden'));
+  if (!tripHistoryOutsideListenerBound) {
+    tripHistoryOutsideListenerBound = true;
+    document.addEventListener('click', (event) => {
+      const picker = document.getElementById('trip-history-date-picker');
+      const popover = document.getElementById('trip-history-date-popover');
+      if (popover && picker && !picker.contains(event.target)) popover.classList.add('hidden');
     });
+  }
+  document.getElementById('trip-history-calendar-prev').addEventListener('click', () => { tripHistoryCalendarMonth = new Date(tripHistoryCalendarMonth.getFullYear(), tripHistoryCalendarMonth.getMonth() - 1, 1); renderDriversHistory(); });
+  document.getElementById('trip-history-calendar-next').addEventListener('click', () => { tripHistoryCalendarMonth = new Date(tripHistoryCalendarMonth.getFullYear(), tripHistoryCalendarMonth.getMonth() + 1, 1); renderDriversHistory(); });
+  adminViewEl.querySelectorAll('[data-trip-history-date]').forEach((dateButton) => dateButton.addEventListener('click', () => {
+    const date = dateButton.getAttribute('data-trip-history-date');
+    if (!tripHistoryDateFilter || tripHistoryDateToFilter) markTripHistoryStart(date);
+    else setTripHistoryRange(date < tripHistoryDateFilter ? date : tripHistoryDateFilter, date < tripHistoryDateFilter ? tripHistoryDateFilter : date);
+  }));
+  adminViewEl.querySelectorAll('[data-trip-history-date]').forEach((dateButton) => dateButton.addEventListener('dblclick', () => {
+    clearTimeout(tripHistoryClickTimer);
+    const date = dateButton.getAttribute('data-trip-history-date');
+    setTripHistoryRange(date, date);
+  }));
+  const updateTripHistoryDatePreview = (date) => {
+    tripHistoryHoverDate = date;
+    const from = tripHistoryDateFilter;
+    const to = tripHistoryDateToFilter || date;
+    const low = from && to ? (from < to ? from : to) : '';
+    const high = from && to ? (from < to ? to : from) : '';
+    adminViewEl.querySelectorAll('[data-trip-history-date]').forEach((dateButton) => {
+      const key = dateButton.getAttribute('data-trip-history-date');
+      dateButton.classList.toggle('preview', Boolean(low && high && key > low && key < high && !tripHistoryDateToFilter));
+    });
+  };
+  adminViewEl.querySelectorAll('[data-trip-history-date]').forEach((dateButton) => dateButton.addEventListener('mouseenter', () => {
+    if (tripHistoryDateFilter && !tripHistoryDateToFilter) updateTripHistoryDatePreview(dateButton.getAttribute('data-trip-history-date'));
+  }));
+  datePopover.addEventListener('mouseleave', () => {
+    if (!tripHistoryDateToFilter) {
+      tripHistoryHoverDate = '';
+      adminViewEl.querySelectorAll('.attendance-day.preview').forEach((dateButton) => dateButton.classList.remove('preview'));
+    }
+  });
+  adminViewEl.querySelectorAll('[data-trip-history-preset]').forEach((presetButton) => presetButton.addEventListener('click', () => {
+    const preset = presetButton.getAttribute('data-trip-history-preset');
+    const today = localDateInputValue();
+    if (preset === 'today') setTripHistoryRange(today, today);
+    else if (preset === 'yesterday') setTripHistoryRange(dateDaysAgo(1), dateDaysAgo(1));
+    else if (preset === 'month') setTripHistoryRange(`${today.slice(0, 8)}01`, today);
+    else setTripHistoryRange(dateDaysAgo(Number(preset) - 1), today);
+  }));
+  document.getElementById('trip-history-clear').addEventListener('click', () => { tripHistoryDateFilter = ''; tripHistoryDateToFilter = ''; tripHistoryHoverDate = ''; renderDriversHistory(); });
+  document.getElementById('trip-history-pdf').addEventListener('click', (event) => downloadTripHistoryPdfV2(event.currentTarget));
+}
+
+function dashboardMapboxToken() {
+  return window.DASHBOARD_MAP_CONFIG?.accessToken || window.__MAPBOX_ACCESS_TOKEN__ || '';
+}
+
+function tripSnapshotPoint(lat, lng) {
+  const point = { lat: Number(lat), lng: Number(lng) };
+  return Number.isFinite(point.lat) && Number.isFinite(point.lng)
+    && point.lat >= -90 && point.lat <= 90
+    && point.lng >= -180 && point.lng <= 180
+    ? point
+    : null;
+}
+
+function tripSnapshotRoutePath(trip) {
+  const raw = trip.routePath;
+  const values = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === 'object'
+      ? Object.keys(raw).sort((a, b) => Number(a) - Number(b)).map((key) => raw[key])
+      : [];
+  return values.map((point) => {
+    if (Array.isArray(point)) return tripSnapshotPoint(point[0], point[1]);
+    return tripSnapshotPoint(point?.lat, point?.lng);
+  }).filter(Boolean);
+}
+
+function tripStaticMapUrl(trip, routePath) {
+  const token = dashboardMapboxToken();
+  const pickup = tripSnapshotPoint(trip.pickupLat, trip.pickupLng);
+  const destination = tripSnapshotPoint(trip.destinationLat, trip.destinationLng);
+  if (!token || !pickup || !destination || routePath.length < 2) return null;
+  const routeGeoJson = encodeURIComponent(JSON.stringify({
+    type: 'Feature',
+    properties: { stroke: '#081618', 'stroke-width': 5, 'stroke-opacity': 0.85 },
+    geometry: {
+      type: 'LineString',
+      coordinates: routePath.map((point) => [point.lng, point.lat]),
+    },
+  }));
+  const overlays = [
+    `pin-s+1d4ed8(${pickup.lng},${pickup.lat})`,
+    `pin-s+7c3aed(${destination.lng},${destination.lat})`,
+    `geojson(${routeGeoJson})`,
+  ].join(',');
+  return `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/${overlays}/auto/900x520@2x?access_token=${encodeURIComponent(token)}`;
+}
+
+async function tripHistorySnapshot(trip) {
+  if (trip.routeSnapshotUrl) {
+    return {
+      url: trip.routeSnapshotUrl,
+      routeDistanceMeters: Number.isFinite(Number(trip.routeDistanceMeters)) ? Number(trip.routeDistanceMeters) : null,
+    };
+  }
+  const pickup = tripSnapshotPoint(trip.pickupLat, trip.pickupLng);
+  const destination = tripSnapshotPoint(trip.destinationLat, trip.destinationLng);
+  let routePath = tripSnapshotRoutePath(trip);
+  let routeDistanceMeters = Number.isFinite(Number(trip.routeDistanceMeters)) ? Number(trip.routeDistanceMeters) : null;
+  if (routePath.length < 2 && pickup && destination && dashboardMapboxToken()) {
+    const coordinates = `${pickup.lng},${pickup.lat};${destination.lng},${destination.lat}`;
+    const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${coordinates}?overview=full&geometries=geojson&access_token=${encodeURIComponent(dashboardMapboxToken())}`;
+    try {
+      const response = await fetch(url);
+      if (response.ok) {
+        const route = (await response.json()).routes?.[0];
+        routeDistanceMeters = Number.isFinite(Number(route?.distance)) ? Number(route.distance) : routeDistanceMeters;
+        routePath = (route?.geometry?.coordinates || [])
+          .map((point) => tripSnapshotPoint(point?.[1], point?.[0]))
+          .filter(Boolean);
+      }
+    } catch (_) {
+      // El reporte sigue siendo valido aunque el proveedor de mapas falle.
+    }
+  }
+  const snapshotUrl = tripStaticMapUrl(trip, routePath);
+  return snapshotUrl ? { url: snapshotUrl, routePath, routeDistanceMeters } : null;
+}
+
+function pdfTripStatusColor(doc, status) {
+  if (status === 'cancelled') {
+    doc.setFillColor(254, 238, 237);
+    doc.setTextColor(182, 72, 66);
+  } else {
+    doc.setFillColor(232, 248, 239);
+    doc.setTextColor(0, 135, 74);
+  }
+}
+
+function pdfTripStatusLabel(status) {
+  return TRIP_HISTORY_STATUS_LABELS[status] || status || 'Archivado';
+}
+
+async function downloadTripHistoryPdfV2(button) {
+  const driverId = tripHistoryDriverFilter;
+  const dateKey = tripHistoryDateFilter;
+  const dateToKey = tripHistoryDateToFilter || dateKey;
+  if (!driverId || !dateKey) {
+    alert('Selecciona un conductor y un d\u00eda para generar el PDF.');
+    return;
+  }
+  const entries = tripHistoryEntries();
+  if (!entries.length) {
+    alert('No hay viajes de ese conductor en el d\u00eda seleccionado.');
+    return;
+  }
+
+  const driver = adminDriversCache[driverId] || {};
+  const driverName = driver.name || entries[0][1].driverName || driverId;
+  const driverPlate = driver.plate || entries[0][1].driverPlate || '\u2014';
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Generando PDF\u2026';
+
+  try {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 36;
+    const contentWidth = pageWidth - margin * 2;
+    const reportDate = dateKey === dateToKey
+      ? attendanceDateLabel(dateKey)
+      : `${attendanceDateLabel(dateKey)} - ${attendanceDateLabel(dateToKey)}`;
+    const navy = [10, 38, 73];
+    const dark = [14, 29, 50];
+    const muted = [82, 101, 121];
+    const border = [214, 223, 231];
+    const greenBorder = [72, 143, 111];
+    const snapshots = new Map();
+    let logoDataUrl = null;
+
+    for (const [tripId, trip] of entries) {
+      snapshots.set(tripId, await tripHistorySnapshot(trip));
+    }
+    try {
+      logoDataUrl = await fetchAsDataUrl('assets/apl-mark.png');
+    } catch (_) {
+      // El texto de marca se mantiene aunque el PNG no pueda cargarse.
+    }
+
+    const tripTime = (trip) => {
+      const timestamp = tripHistoryTimestamp(trip);
+      return timestamp
+        ? new Date(timestamp).toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' })
+        : '\u2014';
+    };
+    const tripStatus = (trip) => pdfTripStatusLabel(trip.status).toUpperCase();
+    const totalKm = entries.reduce((sum, [tripId, trip]) => {
+      return sum + (Number(trip.routeDistanceMeters) || Number(snapshots.get(tripId)?.routeDistanceMeters) || 0);
+    }, 0) / 1000;
+    const completed = entries.filter(([, trip]) => trip.status === 'completed').length;
+    const cancelled = entries.filter(([, trip]) => trip.status === 'cancelled').length;
+
+    const drawBrandHeader = () => {
+      doc.setFillColor(255, 255, 255);
+      doc.rect(0, 0, pageWidth, 74, 'F');
+      doc.setDrawColor(222, 229, 235);
+      doc.setLineWidth(0.8);
+      doc.line(margin, 72, pageWidth - margin, 72);
+      if (logoDataUrl) {
+        doc.addImage(logoDataUrl, 'PNG', margin, 16, 42, 42);
+      } else {
+        doc.setFillColor(...navy);
+        doc.roundedRect(margin, 16, 42, 42, 8, 8, 'F');
+      }
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(19);
+      doc.setTextColor(...navy);
+      doc.text('APL', margin + 52, 34);
+      doc.setFontSize(8);
+      doc.setTextColor(33, 143, 143);
+      doc.text('LOGISTICS', margin + 53, 47);
+      doc.setFontSize(22);
+      doc.setTextColor(...navy);
+      doc.text('REPORTE DE VIAJES', pageWidth - margin, 43, { align: 'right' });
+    };
+
+    const drawIdentityStrip = () => {
+      const y = 86;
+      doc.setFillColor(244, 247, 251);
+      doc.setDrawColor(218, 227, 236);
+      doc.roundedRect(margin, y, contentWidth, 38, 7, 7, 'FD');
+      doc.setFillColor(...navy);
+      doc.circle(margin + 22, y + 19, 10, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.text('i', margin + 22, y + 22, { align: 'center' });
+      doc.setTextColor(...dark);
+      doc.setFontSize(10);
+      doc.text('Conductor:', margin + 39, y + 23);
+      doc.setFont('helvetica', 'normal');
+      doc.text(String(driverName), margin + 98, y + 23);
+      doc.setDrawColor(182, 193, 204);
+      doc.line(pageWidth / 2, y + 8, pageWidth / 2, y + 30);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Fecha:', pageWidth / 2 + 18, y + 23);
+      doc.setFont('helvetica', 'normal');
+      doc.text(String(reportDate), pageWidth / 2 + 58, y + 23);
+      doc.setTextColor(...muted);
+      doc.setFontSize(8);
+      doc.text(`Placa ${driverPlate}`, pageWidth - margin - 10, y + 11, { align: 'right' });
+    };
+
+    const drawSectionBar = (label) => {
+      const y = 214;
+      doc.setFillColor(...navy);
+      doc.roundedRect(margin, y, contentWidth, 27, 6, 6, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text(label, margin + 11, y + 18);
+      return y + 27;
+    };
+
+    const drawSummaryCard = (x, y, width, label, value, fill, accent, symbol) => {
+      doc.setFillColor(...fill);
+      doc.setDrawColor(222, 228, 234);
+      doc.roundedRect(x, y, width, 62, 9, 9, 'FD');
+      doc.setFillColor(...accent);
+      doc.circle(x + 28, y + 31, 14, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(symbol === 'km' ? 10 : 14);
+      doc.text(symbol === 'km' ? 'km' : symbol, x + 28, y + 35, { align: 'center' });
+      doc.setTextColor(...navy);
+      doc.setFontSize(8);
+      doc.text(label, x + 51, y + 21);
+      doc.setFontSize(20);
+      doc.text(value, x + 51, y + 46);
+    };
+
+    const drawTableCell = (value, x, y, width, height, bold = false) => {
+      doc.setTextColor(...dark);
+      doc.setFont('helvetica', bold ? 'bold' : 'normal');
+      doc.setFontSize(7.4);
+      const lines = doc.splitTextToSize(String(value || '\u2014'), width - 10).slice(0, 2);
+      doc.text(lines, x + 5, y + (lines.length > 1 ? 12 : 17));
+      doc.setDrawColor(224, 230, 235);
+      doc.rect(x, y, width, height);
+    };
+
+    const drawSummaryPage = () => {
+      drawBrandHeader();
+      drawIdentityStrip();
+      const gap = 8;
+      const cardWidth = (contentWidth - gap * 3) / 4;
+      const summaryY = 137;
+      drawSummaryCard(margin, summaryY, cardWidth, 'VIAJES', String(entries.length), [235, 245, 253], [39, 111, 190], '\u25A0');
+      drawSummaryCard(margin + cardWidth + gap, summaryY, cardWidth, 'COMPLETADOS', String(completed), [235, 249, 239], [51, 157, 81], '\u2713');
+      drawSummaryCard(margin + (cardWidth + gap) * 2, summaryY, cardWidth, 'CANCELADOS', String(cancelled), [254, 239, 239], [210, 57, 57], '\u00D7');
+      drawSummaryCard(margin + (cardWidth + gap) * 3, summaryY, cardWidth, 'KM TOTALES', totalKm ? totalKm.toFixed(1) : '\u2014', [235, 249, 249], [35, 145, 145], 'km');
+
+      const tableTop = drawSectionBar('Detalle de viajes del d\u00eda');
+      const columns = [
+        ['Hora', 54],
+        ['Origen', 130],
+        ['Destino', 130],
+        ['Pasajero', 100],
+        ['Estado', contentWidth - 414],
+      ];
+      let x = margin;
+      const headHeight = 25;
+      doc.setFillColor(22, 54, 91);
+      doc.rect(margin, tableTop, contentWidth, headHeight, 'F');
+      columns.forEach(([label, width]) => {
+        doc.setTextColor(255, 255, 255);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(8);
+        doc.text(label, x + 7, tableTop + 16);
+        x += width;
+      });
+      entries.forEach(([, trip], rowIndex) => {
+        const y = tableTop + headHeight + rowIndex * 35;
+        if (rowIndex % 2 === 0) {
+          doc.setFillColor(249, 251, 253);
+          doc.rect(margin, y, contentWidth, 35, 'F');
+        }
+        x = margin;
+        const values = [tripTime(trip), trip.pickupAddress, trip.destinationAddress, trip.passengerName];
+        columns.slice(0, 4).forEach(([_, width], index) => {
+          drawTableCell(values[index], x, y, width, 35);
+          x += width;
+        });
+        const statusWidth = columns[4][1];
+        drawTableCell('', x, y, statusWidth, 35);
+        pdfTripStatusColor(doc, trip.status);
+        const pillWidth = Math.min(statusWidth - 12, 84);
+        doc.roundedRect(x + 6, y + 9, pillWidth, 17, 8, 8, 'F');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7);
+        doc.text(tripStatus(trip), x + 6 + pillWidth / 2, y + 20, { align: 'center' });
+      });
+    };
+
+    const drawTripCard = async (tripIndex, tripId, trip, x, y, width, height) => {
+      doc.setFillColor(255, 255, 255);
+      doc.setDrawColor(...greenBorder);
+      doc.setLineWidth(1.1);
+      doc.roundedRect(x, y, width, height, 8, 8, 'FD');
+      doc.setFillColor(trip.status === 'cancelled' ? 213 : 48, trip.status === 'cancelled' ? 63 : 151, trip.status === 'cancelled' ? 63 : 83);
+      doc.circle(x + 20, y + 21, 9, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.text(trip.status === 'cancelled' ? '\u00D7' : '\u2713', x + 20, y + 25, { align: 'center' });
+      doc.setTextColor(...navy);
+      doc.setFontSize(12);
+      doc.text(`Viaje ${tripIndex + 1}`, x + 36, y + 25);
+      doc.setTextColor(trip.status === 'cancelled' ? 188 : 40, trip.status === 'cancelled' ? 57 : 120, trip.status === 'cancelled' ? 57 : 72);
+      doc.text(`\u00B7 ${tripStatus(trip)}`, x + 96, y + 25);
+      doc.setDrawColor(220, 227, 232);
+      doc.setLineWidth(0.7);
+      doc.line(x + 12, y + 38, x + width - 12, y + 38);
+
+      const columnWidth = (width - 40) / 2;
+      const leftX = x + 18;
+      const rightX = x + width / 2 + 2;
+      const labelsY = y + 57;
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(34, 113, 183);
+      doc.text('ORIGEN', leftX + 12, labelsY);
+      doc.setTextColor(113, 72, 168);
+      doc.text('DESTINO', rightX + 12, labelsY);
+      doc.setFillColor(34, 113, 183);
+      doc.circle(leftX + 4, labelsY - 3, 4, 'F');
+      doc.setFillColor(113, 72, 168);
+      doc.circle(rightX + 4, labelsY - 3, 4, 'F');
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.7);
+      doc.setTextColor(...dark);
+      doc.text(doc.splitTextToSize(trip.pickupAddress || '\u2014', columnWidth - 12).slice(0, 2), leftX, labelsY + 14);
+      doc.text(doc.splitTextToSize(trip.destinationAddress || '\u2014', columnWidth - 12).slice(0, 2), rightX, labelsY + 14);
+      doc.setTextColor(...muted);
+      doc.setFontSize(7.5);
+      doc.text(tripTime(trip), leftX, labelsY + 34);
+      doc.text(trip.passengerName ? `Pasajero: ${trip.passengerName}` : '\u2014', rightX, labelsY + 34);
+
+      const mapX = x + 10;
+      const mapY = y + 101;
+      const mapWidth = width - 20;
+      const mapHeight = height - 119;
+      doc.setFillColor(239, 245, 242);
+      doc.roundedRect(mapX, mapY, mapWidth, mapHeight, 5, 5, 'F');
+      const snapshot = snapshots.get(tripId);
+      if (snapshot?.url) {
+        try {
+          const dataUrl = await fetchAsDataUrl(snapshot.url);
+          const props = doc.getImageProperties(dataUrl);
+          const scale = Math.min(mapWidth / props.width, mapHeight / props.height);
+          const imageWidth = props.width * scale;
+          const imageHeight = props.height * scale;
+          doc.addImage(dataUrl, props.fileType || 'PNG', mapX + (mapWidth - imageWidth) / 2, mapY + (mapHeight - imageHeight) / 2, imageWidth, imageHeight);
+        } catch (_) {
+          doc.setTextColor(...muted);
+          doc.setFontSize(8);
+          doc.text('Mapa no disponible', mapX + mapWidth / 2, mapY + mapHeight / 2, { align: 'center' });
+        }
+      } else {
+        doc.setTextColor(...muted);
+        doc.setFontSize(8);
+        doc.text('No hay imagen de ruta guardada', mapX + mapWidth / 2, mapY + mapHeight / 2, { align: 'center' });
+      }
+      doc.setDrawColor(207, 217, 212);
+      doc.roundedRect(mapX, mapY, mapWidth, mapHeight, 5, 5, 'S');
+      doc.setTextColor(...muted);
+      doc.setFontSize(7.2);
+      const note = trip.status === 'cancelled' && trip.cancelReason
+        ? `Motivo: ${trip.cancelReason}`
+        : 'Ruta registrada al finalizar el viaje';
+      doc.text(doc.splitTextToSize(note, mapWidth - 8).slice(0, 1), mapX + 4, y + height - 8);
+    };
+
+    const drawFooter = () => {
+      const pageCount = doc.getNumberOfPages();
+      for (let page = 1; page <= pageCount; page += 1) {
+        doc.setPage(page);
+        doc.setDrawColor(220, 228, 234);
+        doc.setLineWidth(0.7);
+        doc.line(margin, pageHeight - 28, pageWidth - margin, pageHeight - 28);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        doc.setTextColor(...muted);
+        doc.text('Generado por Operaciones', margin, pageHeight - 14);
+        doc.text(`P\u00e1gina ${page} de ${pageCount}`, pageWidth - margin, pageHeight - 14, { align: 'right' });
+      }
+    };
+
+    drawSummaryPage();
+    const detailCardHeight = 304;
+    const detailCardWidth = contentWidth;
+    for (let groupStart = 0; groupStart < entries.length; groupStart += 2) {
+      doc.addPage();
+      drawBrandHeader();
+      drawIdentityStrip();
+      const sectionY = 132;
+      doc.setFillColor(...navy);
+      doc.roundedRect(margin, sectionY, contentWidth, 27, 6, 6, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text('Detalle de viajes del d\u00eda \u00B7 2 viajes por hoja', margin + 11, sectionY + 18);
+      const firstY = 171;
+      for (let offset = 0; offset < 2 && groupStart + offset < entries.length; offset += 1) {
+        const [tripId, trip] = entries[groupStart + offset];
+        await drawTripCard(groupStart + offset, tripId, trip, margin, firstY + offset * (detailCardHeight + 12), detailCardWidth, detailCardHeight);
+      }
+    }
+
+    drawFooter();
+    const slug = (value) => String(value || '').trim().replace(/\s+/g, '_').replace(/[\\/:*?"<>|]/g, '');
+    const fileDate = dateKey === dateToKey ? dateKey : `${dateKey}_a_${dateToKey}`;
+    doc.save(`reporte_viajes_${slug(driverName)}_${fileDate}.pdf`);
+  } catch (error) {
+    alert(`No se pudo generar el PDF: ${error.message || error}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+}
+
+async function downloadTripHistoryPdf(button) {
+  const driverId = tripHistoryDriverFilter;
+  const dateKey = tripHistoryDateFilter;
+  if (!driverId || !dateKey) {
+    alert('Selecciona un conductor y un día para generar el PDF.');
+    return;
+  }
+  const entries = tripHistoryEntries();
+  if (!entries.length) {
+    alert('No hay viajes de ese conductor en el día seleccionado.');
+    return;
+  }
+  const driver = adminDriversCache[driverId] || {};
+  const driverName = driver.name || entries[0][1].driverName || driverId;
+  const driverPlate = driver.plate || entries[0][1].driverPlate || '—';
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Generando PDF…';
+
+  try {
+    const { jsPDF } = window.jspdf;
+    const snapshots = new Map();
+    for (const [tripId, trip] of entries) {
+      snapshots.set(tripId, await tripHistorySnapshot(trip));
+    }
+    const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 36;
+    const contentWidth = pageWidth - margin * 2;
+    const reportDate = attendanceDateLabel(dateKey);
+    const completed = entries.filter(([, trip]) => trip.status === 'completed').length;
+    const cancelled = entries.filter(([, trip]) => trip.status === 'cancelled').length;
+    const totalKm = entries.reduce((sum, [tripId, trip]) => {
+      return sum + (Number(trip.routeDistanceMeters) || Number(snapshots.get(tripId)?.routeDistanceMeters) || 0);
+    }, 0) / 1000;
+
+    const drawPageHeader = (title = 'REPORTE DE VIAJES') => {
+      doc.setFillColor(8, 22, 24);
+      doc.rect(0, 0, pageWidth, 74, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(10);
+      doc.setFont(undefined, 'bold');
+      doc.text('APL LOGISTICS', margin, 27);
+      doc.setFontSize(20);
+      doc.text(title, margin, 54);
+      doc.setFontSize(9);
+      doc.setFont(undefined, 'normal');
+      doc.text(`Generado ${new Date().toLocaleString('es-PE')}`, pageWidth - margin, 27, { align: 'right' });
+      doc.setTextColor(8, 22, 24);
+    };
+
+    const drawFooter = () => {
+      const pageCount = doc.getNumberOfPages();
+      for (let page = 1; page <= pageCount; page += 1) {
+        doc.setPage(page);
+        doc.setDrawColor(220, 230, 225);
+        doc.line(margin, pageHeight - 27, pageWidth - margin, pageHeight - 27);
+        doc.setFontSize(8);
+        doc.setTextColor(105, 125, 119);
+        doc.text('Operaciones · Historial de viajes', margin, pageHeight - 13);
+        doc.text(`Página ${page} de ${pageCount}`, pageWidth - margin, pageHeight - 13, { align: 'right' });
+      }
+    };
+
+    drawPageHeader();
+    let y = 105;
+    doc.setFontSize(15);
+    doc.setFont(undefined, 'bold');
+    doc.text(`Conductor: ${driverName}`, margin, y);
+    doc.setFontSize(10);
+    doc.setFont(undefined, 'normal');
+    doc.setTextColor(91, 111, 104);
+    doc.text(`Placa: ${driverPlate}   ·   Día: ${reportDate}`, margin, y + 18);
+    doc.setTextColor(8, 22, 24);
+    y += 52;
+
+    const summary = [
+      ['VIAJES', String(entries.length), [223, 237, 250]],
+      ['COMPLETADOS', String(completed), [232, 248, 239]],
+      ['CANCELADOS', String(cancelled), [254, 238, 237]],
+      ['KM TOTALES', totalKm ? totalKm.toFixed(1) : '—', [232, 247, 247]],
+    ];
+    const gap = 8;
+    const cardWidth = (contentWidth - gap * 3) / 4;
+    summary.forEach(([label, value, color], index) => {
+      const x = margin + index * (cardWidth + gap);
+      doc.setFillColor(...color);
+      doc.roundedRect(x, y, cardWidth, 62, 10, 10, 'F');
+      doc.setTextColor(82, 104, 97);
+      doc.setFontSize(8);
+      doc.setFont(undefined, 'bold');
+      doc.text(label, x + 10, y + 18);
+      doc.setTextColor(8, 22, 24);
+      doc.setFontSize(20);
+      doc.text(value, x + 10, y + 45);
+    });
+    y += 88;
+
+    doc.setFillColor(8, 35, 67);
+    doc.roundedRect(margin, y, contentWidth, 26, 6, 6, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(10);
+    doc.setFont(undefined, 'bold');
+    doc.text('Detalle de viajes del día', margin + 10, y + 17);
+    y += 26;
+    const columns = [
+      ['Hora', 52], ['Origen', 112], ['Destino', 112], ['Pasajero', 82], ['Estado', 80], ['Mapa', 85],
+    ];
+    let x = margin;
+    doc.setFillColor(241, 246, 243);
+    doc.rect(margin, y, contentWidth, 24, 'F');
+    columns.forEach(([label, width]) => {
+      doc.setTextColor(72, 94, 87);
+      doc.setFontSize(8);
+      doc.text(label, x + 6, y + 15);
+      x += width;
+    });
+    y += 24;
+    entries.forEach(([, trip], rowIndex) => {
+      if (y > pageHeight - 90) {
+        doc.addPage();
+        drawPageHeader('DETALLE DE VIAJES');
+        y = 105;
+      }
+      if (rowIndex % 2 === 0) {
+        doc.setFillColor(250, 252, 251);
+        doc.rect(margin, y, contentWidth, 38, 'F');
+      }
+      const rowValues = [
+        tripHistoryTimestamp(trip) ? new Date(tripHistoryTimestamp(trip)).toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' }) : '—',
+        trip.pickupAddress || '—',
+        trip.destinationAddress || '—',
+        trip.passengerName || '—',
+      ];
+      x = margin;
+      [52, 112, 112, 82].forEach((width, index) => {
+        doc.setTextColor(37, 55, 50);
+        doc.setFontSize(7.5);
+        const lines = doc.splitTextToSize(String(rowValues[index]), width - 10).slice(0, 2);
+        doc.text(lines, x + 6, y + 14);
+        x += width;
+      });
+      pdfTripStatusColor(doc, trip.status);
+      doc.roundedRect(x + 5, y + 9, 67, 17, 8, 8, 'F');
+      doc.setFontSize(7);
+      doc.text(pdfTripStatusLabel(trip.status), x + 38.5, y + 20, { align: 'center' });
+      x += 80;
+      doc.setTextColor(37, 55, 50);
+      doc.setFontSize(7.5);
+      doc.text(trip.routeSnapshotUrl || trip.routePath ? 'Incluido' : 'Al generar', x + 6, y + 19);
+      y += 38;
+    });
+
+    for (let index = 0; index < entries.length; index += 1) {
+      const [tripId, trip] = entries[index];
+      doc.addPage();
+      drawPageHeader(`VIAJE ${index + 1} · ${pdfTripStatusLabel(trip.status).toUpperCase()}`);
+      y = 105;
+      pdfTripStatusColor(doc, trip.status);
+      doc.roundedRect(margin, y, 92, 21, 10, 10, 'F');
+      doc.setFontSize(9);
+      doc.text(pdfTripStatusLabel(trip.status), margin + 46, y + 14, { align: 'center' });
+      y += 42;
+      doc.setTextColor(8, 22, 24);
+      doc.setFontSize(11);
+      doc.setFont(undefined, 'bold');
+      doc.text(`Viaje ${String(tripId).slice(-8)}`, margin, y);
+      doc.setFont(undefined, 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(75, 96, 89);
+      doc.text(`Hora: ${tripHistoryTimestamp(trip) ? new Date(tripHistoryTimestamp(trip)).toLocaleTimeString('es-PE') : '—'}   ·   Pasajero: ${trip.passengerName || '—'}   ·   Pasajeros: ${trip.passengerCount || 1}`, margin, y + 17);
+      y += 48;
+      doc.setTextColor(8, 22, 24);
+      doc.setFontSize(9);
+      doc.setFont(undefined, 'bold');
+      doc.text('ORIGEN', margin, y);
+      doc.text('DESTINO', pageWidth / 2, y);
+      doc.setFont(undefined, 'normal');
+      doc.setTextColor(45, 64, 58);
+      doc.text(doc.splitTextToSize(trip.pickupAddress || '—', pageWidth / 2 - margin - 16).slice(0, 2), margin, y + 16);
+      doc.text(doc.splitTextToSize(trip.destinationAddress || '—', pageWidth / 2 - margin - 16).slice(0, 2), pageWidth / 2, y + 16);
+      y += 58;
+      if (trip.cancelReason) {
+        doc.setTextColor(182, 72, 66);
+        doc.text(`Motivo: ${trip.cancelReason}`, margin, y);
+        y += 24;
+      }
+      const snapshot = snapshots.get(tripId) || null;
+      if (snapshot?.url) {
+        try {
+          const dataUrl = await fetchAsDataUrl(snapshot.url);
+          const props = doc.getImageProperties(dataUrl);
+          const maxWidth = contentWidth;
+          const maxHeight = pageHeight - y - 78;
+          const scale = Math.min(maxWidth / props.width, maxHeight / props.height);
+          const width = props.width * scale;
+          const height = props.height * scale;
+          doc.addImage(dataUrl, props.fileType || 'JPEG', margin, y, width, height);
+          y += height + 18;
+        } catch (_) {
+          doc.setFillColor(242, 247, 244);
+          doc.roundedRect(margin, y, contentWidth, 220, 10, 10, 'F');
+          doc.setTextColor(90, 112, 103);
+          doc.setFontSize(10);
+          doc.text('No se pudo cargar la imagen guardada del mapa.', pageWidth / 2, y + 110, { align: 'center' });
+          y += 238;
+        }
+      } else {
+        doc.setFillColor(242, 247, 244);
+        doc.roundedRect(margin, y, contentWidth, 220, 10, 10, 'F');
+        doc.setTextColor(90, 112, 103);
+        doc.setFontSize(10);
+        doc.text('No hay geometría de ruta disponible para este viaje.', pageWidth / 2, y + 105, { align: 'center' });
+        y += 238;
+      }
+      doc.setTextColor(90, 112, 103);
+      doc.setFontSize(9);
+      doc.text('Ruta registrada al finalizar el viaje · Los puntos azules y violetas indican origen y destino.', margin, Math.min(y, pageHeight - 48));
+    }
+
+    drawFooter();
+    const slug = (value) => String(value || '').trim().replace(/\s+/g, '_').replace(/[\\/:*?"<>|]/g, '');
+    doc.save(`reporte_viajes_${slug(driverName)}_${dateKey}.pdf`);
+  } catch (error) {
+    alert(`No se pudo generar el PDF: ${error.message || error}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
   }
 }
 

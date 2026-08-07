@@ -13,6 +13,9 @@ npm-debug.log*
 **/android/.kotlin/
 **/android/local.properties
 **/android/app/google-services.json
+*.jks
+*.keystore
+**/key.properties
 
 # IDE
 **/.idea/
@@ -37,3 +40,6 @@ passenger-app/assets/vehicles/vehicle-bus-new.png
 
 # APKs publicados en Firebase Hosting; no versionar binarios pesados
 dashboard/downloads/*.apk
+
+# Entregables y evidencias locales; se conservan fuera del control de versiones
+artifacts/

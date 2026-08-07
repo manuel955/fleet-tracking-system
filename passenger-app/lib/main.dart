@@ -2,12 +2,14 @@ import 'dart:async';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' show MapboxOptions;
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart'
+    show MapboxOptions;
 import 'config.dart';
 import 'screens/account_tab_screen.dart';
 import 'screens/active_trip_tracking_screen.dart';
 import 'screens/activity_tab_screen.dart';
 import 'screens/home_tab_screen.dart';
+import 'screens/passenger_access_screen.dart';
 import 'screens/registration_screen.dart';
 import 'screens/searching_screen.dart';
 import 'services/notification_service.dart';
@@ -146,6 +148,7 @@ class PassengerHomePage extends StatefulWidget {
 class _PassengerHomePageState extends State<PassengerHomePage> {
   bool _loading = true;
   bool _registered = false;
+  bool _accessGranted = false;
   String? _activeTripId;
   Map<String, dynamic>? _activeTrip;
   // Viaje programado, aparte del "activo": no bloquea las pestañas -- el
@@ -234,15 +237,27 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
 
   Future<void> _bootstrap() async {
     final registered = await PassengerService.isRegistered();
+    // Un pasajero que ya tenía registro antes de activar los QR conserva la
+    // entrada aunque el primer intento de sincronización esté sin red.
+    var accessGranted = registered || await PassengerService.hasAccess();
+    if (registered) {
+      // Conserva el acceso de cuentas antiguas. El servidor solo migra
+      // perfiles creados antes de activar el control QR.
+      try {
+        accessGranted = await PassengerService.ensureAccess() || accessGranted;
+      } catch (_) {
+        // Si no hay red, no se rompe la pantalla ya registrada; el siguiente
+        // intento volverá a sincronizar la autorización.
+      }
+    }
 
     // Con la app visible, el push llega por aqui en vez de por el handler
     // de background -- mismo patron que driver-app/lib/main.dart.
     FirebaseMessaging.onMessage.listen((message) {
       switch (message.data['type']) {
         case 'driver_arrived':
-          NotificationService.showSimple(
-            'Tu conductor llegó',
-            'Te está esperando en el punto de recogida.',
+          NotificationService.showDriverArrived(
+            message.data['tripId']?.toString(),
           );
           break;
         case 'trip_updated':
@@ -250,13 +265,13 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
             'Viaje actualizado',
             'El destino de tu viaje cambió.',
           );
-           break;
-         case 'trip_cancelled':
-           NotificationService.showTripCancelled(
-             message.data['reason']?.toString(),
-           );
-           break;
-       }
+          break;
+        case 'trip_cancelled':
+          NotificationService.showTripCancelled(
+            message.data['reason']?.toString(),
+          );
+          break;
+      }
     });
     if (registered) PushService.registerToken();
 
@@ -307,6 +322,7 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
 
     setState(() {
       _registered = registered;
+      _accessGranted = accessGranted;
       _activeTripId = trip != null ? activeTripId : null;
       _activeTrip = trip;
       _scheduledTripId = scheduledTrip != null ? scheduledTripId : null;
@@ -320,9 +336,38 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
     setState(() => _registered = true);
   }
 
+  void _onAccessAuthorized(Map<String, dynamic> _) {
+    setState(() => _accessGranted = true);
+  }
+
+  Future<void> _onPhoneAuthenticated(Map<String, dynamic> _) async {
+    final accessGranted = await PassengerService.ensureAccess();
+    final profile = await PassengerService.loadProfile();
+    if (!mounted) return;
+    setState(() {
+      _accessGranted = accessGranted || profile != null;
+      _registered = profile != null;
+      _tabIndex = 0;
+    });
+    PushService.registerToken();
+  }
+
+  Future<void> _onEmailAuthenticated(Map<String, dynamic> _) async {
+    final accessGranted = await PassengerService.ensureAccess();
+    final profile = await PassengerService.loadProfile();
+    if (!mounted) return;
+    setState(() {
+      _accessGranted = accessGranted || profile != null;
+      _registered = profile != null;
+      _tabIndex = 0;
+    });
+    PushService.registerToken();
+  }
+
   void _onLoggedOut() {
     setState(() {
       _registered = false;
+      _accessGranted = false;
       _tabIndex = 0;
       _activeTripId = null;
       _activeTrip = null;
@@ -386,6 +431,14 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
+    if (!_accessGranted) {
+      return PassengerAccessScreen(
+        onAuthorized: _onAccessAuthorized,
+        onPhoneAuthenticated: _onPhoneAuthenticated,
+        onEmailAuthenticated: _onEmailAuthenticated,
+      );
+    }
+
     if (!_registered) {
       return RegistrationScreen(onDone: _onRegistered);
     }
@@ -417,7 +470,10 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
         onScheduledTripCancelled: _onScheduledTripCancelled,
       ),
       const ActivityTabScreen(),
-      AccountTabScreen(onLoggedOut: _onLoggedOut),
+      AccountTabScreen(
+        onLoggedOut: _onLoggedOut,
+        onPhoneAuthenticated: _onPhoneAuthenticated,
+      ),
     ];
 
     return Scaffold(

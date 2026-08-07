@@ -12,6 +12,8 @@ const ROUTE_RECALCULATION_INTERVAL_MS = 30 * 1000;
 const ROUTE_RECALCULATION_DISTANCE_METERS = 50;
 
 const STATE_COLORS = {
+  connecting: '#0ea5e9',
+  suspended: '#f59e0b',
   available: '#06c167', // verde: libre en la red
   to_pickup: '#ff9500', // naranja: yendo a recoger / esperando en el punto de recogida
   on_trip: '#276ef1',   // azul: pasajero a bordo, rumbo al destino
@@ -19,6 +21,8 @@ const STATE_COLORS = {
 };
 
 const STATE_LABELS = {
+  connecting: 'Conectando GPS',
+  suspended: 'Sin se\u00f1al',
   available: 'Disponible',
   to_pickup: 'En ruta de recogida',
   on_trip: 'En viaje',
@@ -308,35 +312,14 @@ function centerMapOnFleet() {
 }
 
 function freshnessStatus(lastUpdate) {
-  const age = Date.now() - lastUpdate;
-  if (age <= STALE_AFTER_MS) return 'online';
-  if (age <= OFFLINE_AFTER_MS) return 'stale';
-  return 'offline';
+  return window.DriverState.freshnessStatus(lastUpdate);
 }
 
 // Estado operativo real del conductor (el que define el color en el mapa),
 // combinando disponibilidad (drivers.status), el viaje que trae asignado
 // (si aplica) y si sigue reportando GPS.
 function driverState(d) {
-  if (typeof d.lat !== 'number' || typeof d.lng !== 'number') return 'offline';
-  if (freshnessStatus(d.lastUpdate || 0) === 'offline') return 'offline';
-
-  // currentTripId manda sobre 'status': si el conductor tiene un viaje
-  // asignado se considera ocupado aunque 'status' haya quedado
-  // desincronizado en 'online' (bug conocido -- reabrir driver-app a mitad
-  // de un viaje pisaba la disponibilidad sin tocar currentTripId, dejando
-  // al conductor "disponible" en el mapa mientras el viaje seguia en
-  // curso). Sin esto tambien se perdia el listener del viaje activo
-  // (ver syncActiveTripListeners) y el boton de cancelar desaparecia.
-  if (d.currentTripId) {
-    const trip = activeTripsCache[d.currentTripId];
-    if (trip && trip.status === 'in_progress') return 'on_trip';
-    return 'to_pickup'; // accepted / arrived_at_pickup, o el trip aun no cargo
-  }
-
-  if (d.status === 'online') return 'available';
-
-  return 'offline'; // sin disponibilidad operativa, aunque siga reportando GPS
+  return window.DriverState.driverState(d, activeTripsCache);
 }
 
 function buildCarIcon(state) {
@@ -519,12 +502,16 @@ function updateMarkerForDriver(driverId, d) {
     return;
   }
   if (freshnessStatus(d.lastUpdate || 0) === 'offline') {
+    const state = driverState(d);
     // Conserva visible la ultima posicion solo mientras el conductor esta
     // seleccionado; el resto de los marcadores antiguos se retira como
     // antes para no presentar una ubicacion como si fuera actual.
-    if (expandedDriverId === driverId) {
-      if (!markers[driverId]) createLastKnownMarker(driverId, d);
-      if (markers[driverId]) markers[driverId].setOpacity(0.55);
+    if (state === 'connecting' || state === 'suspended' || expandedDriverId === driverId) {
+      if (!markers[driverId]) createLastKnownMarker(driverId, d, state);
+      if (markers[driverId]) {
+        markers[driverId].setIcon(buildCarIcon(state));
+        markers[driverId].setOpacity(0.55);
+      }
       updateSelectionHalo();
       return;
     }
@@ -563,12 +550,12 @@ function updateMarkerForDriver(driverId, d) {
   }
 }
 
-function createLastKnownMarker(driverId, d) {
+function createLastKnownMarker(driverId, d, state = 'offline') {
   if (!map || typeof d?.lat !== 'number' || typeof d?.lng !== 'number') return null;
   const marker = map.createMarker({
     position: { lat: d.lat, lng: d.lng },
     map,
-    icon: buildCarIcon('offline'),
+    icon: buildCarIcon(state),
     opacity: 0.55,
     title: `${d.name || driverId} · última ubicación conocida`,
     zIndex: 10,
@@ -704,7 +691,7 @@ async function refreshRouteForSelected(force = false) {
   }
 
   const trip = activeTripsCache[d.currentTripId];
-  if (!trip) {
+  if (!trip || trip.status === 'cancelled' || trip.status === 'completed') {
     lastRouteOrigin = null;
     lastRouteTarget = null;
     lastRouteRequestedAt = 0;
@@ -950,8 +937,9 @@ function driverDetailHtml(driverId, d, state) {
   const trip = d.currentTripId ? activeTripsCache[d.currentTripId] : null;
   const eta = formatEta(lastRouteEtaSeconds);
 
-  const tripCancellable = trip && trip.status !== 'completed' && trip.status !== 'cancelled';
-  const tripBlock = trip
+  const tripIsActive = trip && !['completed', 'cancelled'].includes(trip.status);
+  const tripCancellable = tripIsActive;
+  const tripBlock = tripIsActive
     ? `
       <div class="detail-section trip-section">
         <h4>Viaje actual</h4>

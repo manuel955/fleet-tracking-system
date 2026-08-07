@@ -5,9 +5,9 @@ const { sendPush } = require('./notifications');
 // (dashboard/js/app.js -> OFFLINE_AFTER_MS): si no reporto GPS en los
 // ultimos 3 minutos, no lo considero candidato aunque diga status=online.
 const STALE_LOCATION_MS = 3 * 60 * 1000;
+const SEARCH_RADII_KM = [2, 4];
 
 const DB_URL = 'https://rastreoflota-53052-default-rtdb.firebaseio.com';
-const CATEGORY_RADIUS_KM = 2;
 const VEHICLE_CATEGORIES = [
   { type: 'Auto', maxSeats: 4 },
   { type: 'SUV', maxSeats: 7 },
@@ -88,34 +88,28 @@ function rankCandidates(candidates, requestedPassengers) {
   );
   if (minimumCategory < 0) return [];
 
-  const minimumNearby = candidates
-    .filter(
-      (candidate) =>
-        candidate.categoryIndex === minimumCategory &&
-        candidate.dist <= CATEGORY_RADIUS_KM,
-    )
-    .sort(sortByDistance);
-
-  const nextCategory = candidates
-    .filter((candidate) => candidate.categoryIndex > minimumCategory)
+  // La prioridad es la categoria minima que cubre la cantidad solicitada.
+  // La distancia solo desempata dentro de esa categoria: un Auto mas lejano
+  // debe ganar a un SUV cercano cuando se pidio un viaje de 1 a 4 pasajeros.
+  return candidates
+    .filter((candidate) => candidate.categoryIndex >= minimumCategory)
     .sort(
       (a, b) =>
         a.categoryIndex - b.categoryIndex || sortByDistance(a, b),
     );
-
-  const minimumFar = candidates
-    .filter(
-      (candidate) =>
-        candidate.categoryIndex === minimumCategory &&
-        candidate.dist > CATEGORY_RADIUS_KM,
-    )
-    .sort(sortByDistance);
-
-  return [...minimumNearby, ...nextCategory, ...minimumFar];
 }
 
 function selectCandidate(candidates, requestedPassengers) {
   return rankCandidates(candidates, requestedPassengers)[0] || null;
+}
+
+function rankedCandidatesByRadius(candidates, requestedPassengers) {
+  return SEARCH_RADII_KM.map((radiusKm) =>
+    rankCandidates(
+      candidates.filter((candidate) => candidate.dist <= radiusKm),
+      requestedPassengers,
+    ),
+  );
 }
 
 function buildNoDriversReason(requestedPassengers, stats) {
@@ -189,8 +183,12 @@ async function attemptAssignment(
     });
   });
 
-  for (const c of rankCandidates(candidates, requestedPassengers)) {
-    const claimed = await claimDriver(c.id, tripId);
+  for (const rankedCandidates of rankedCandidatesByRadius(
+    candidates,
+    requestedPassengers,
+  )) {
+    for (const c of rankedCandidates) {
+      const claimed = await claimDriver(c.id, tripId);
     if (claimed) {
       // Asignacion automatica: no hay paso de aceptar/rechazar por parte
       // del conductor, el viaje queda "accepted" de una vez.
@@ -222,8 +220,9 @@ async function attemptAssignment(
       );
       return;
     }
-    // Perdi la carrera contra otra asignacion; sigo con el siguiente
-    // candidato elegible respetando el orden de prioridad.
+      // Perdi la carrera contra otra asignacion; sigo con el siguiente
+      // candidato elegible respetando el orden de prioridad.
+    }
   }
 
   await db.ref(`trips/${tripId}`).update({
@@ -239,31 +238,52 @@ async function releaseDriver(driverId, tripId) {
   const token = await accessToken();
   const headers = { Authorization: `Bearer ${token}` };
 
-  const getRes = await fetch(`${DB_URL}/drivers/${driverId}.json`, {
-    headers: { ...headers, 'X-Firebase-ETag': 'true' },
-  });
-  const etag = getRes.headers.get('ETag');
-  const current = await getRes.json();
-  if (!current || current.currentTripId !== tripId) return;
+  // El GPS y el cambio de estado actualizan el mismo nodo del conductor.
+  // Si una de esas escrituras ocurre entre el GET y el PUT, Firebase responde
+  // 412 (ETag vencido). Reintentamos con el estado mas reciente para no dejar
+  // un currentTripId colgado despues de cancelar o completar un viaje.
+  const maxAttempts = 4;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const getRes = await fetch(`${DB_URL}/drivers/${driverId}.json`, {
+      headers: { ...headers, 'X-Firebase-ETag': 'true' },
+    });
+    if (!getRes.ok) {
+      throw new Error(`No se pudo leer el conductor para liberarlo (${getRes.status}).`);
+    }
+    const etag = getRes.headers.get('ETag');
+    const current = await getRes.json();
+    // Si otro viaje ya tomo el vehiculo, no debemos liberarlo ni pisar esa
+    // nueva asignacion.
+    if (!current || current.currentTripId !== tripId) return false;
 
-  const updated = {
-    ...current,
-    status: current.turno_activo === false ? null : 'online',
-    currentTripId: null,
-  };
-  await fetch(`${DB_URL}/drivers/${driverId}.json`, {
-    method: 'PUT',
-    headers: { ...headers, 'if-match': etag, 'Content-Type': 'application/json' },
-    body: JSON.stringify(updated),
-  });
+    const updated = {
+      ...current,
+      status: current.turno_activo === false ? null : 'online',
+      currentTripId: null,
+    };
+    const putRes = await fetch(`${DB_URL}/drivers/${driverId}.json`, {
+      method: 'PUT',
+      headers: { ...headers, 'if-match': etag, 'Content-Type': 'application/json' },
+      body: JSON.stringify(updated),
+    });
+    if (putRes.status === 200) return true;
+    if (putRes.status !== 412) {
+      throw new Error(`No se pudo liberar el conductor (${putRes.status}).`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
+  }
+
+  throw new Error(`La liberacion del conductor ${driverId} perdio varias carreras de escritura.`);
 }
 
 module.exports = {
+  SEARCH_RADII_KM,
   haversineKm,
   attemptAssignment,
   releaseDriver,
   categoryIndexForDriver,
   buildNoDriversReason,
   rankCandidates,
+  rankedCandidatesByRadius,
   selectCandidate,
 };

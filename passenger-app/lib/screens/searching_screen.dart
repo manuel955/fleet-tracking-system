@@ -130,9 +130,7 @@ class _SearchingScreenState extends State<SearchingScreen> {
                 Marker(
                   markerId: const MarkerId('pickup'),
                   position: pickup,
-                  icon: BitmapDescriptor.defaultMarkerWithHue(
-                    BitmapDescriptor.hueAzure,
-                  ),
+                  icon: BitmapDescriptor.personMarker,
                 ),
               },
             ),

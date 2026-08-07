@@ -2,7 +2,7 @@
 // (Firebase Console > Configuracion del proyecto > General / Cuentas de servicio).
 class AppConfig {
   static const String firebaseApiKey =
-      'AIzaSyABbcM0za__wtLsRm3amZa9P10OciEgkBY';
+      'AIzaSyBEGrZ6pl88j_GXExrdepJOvNiVA7UjoNQ';
   static const String firebaseDbUrl =
       'https://rastreoflota-53052-default-rtdb.firebaseio.com';
   static const String firebaseStorageBucket =

@@ -6,8 +6,7 @@ import '../config.dart';
 import 'map_adapter.dart';
 
 /// Adapter de Mapbox Directions. Conserva la interfaz que ya usan las
-/// pantallas y devuelve una ruta segura para que la UI pueda aplicar su
-/// fallback de linea recta cuando no hay red o token.
+/// pantallas y devuelve solo geometria real por carretera.
 class DirectionsService {
   static Future<List<LatLng>> getRoute(
     LatLng origin,
@@ -32,7 +31,9 @@ class DirectionsService {
     );
     final response = await http.get(uri).timeout(const Duration(seconds: 12));
     if (response.statusCode != 200) {
-      throw Exception('Mapbox Directions rechazo la consulta (${response.statusCode})');
+      throw Exception(
+        'Mapbox Directions rechazo la consulta (${response.statusCode})',
+      );
     }
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     final routes = data['routes'] as List<dynamic>?;
@@ -47,10 +48,12 @@ class DirectionsService {
     return rawCoordinates
         .whereType<List<dynamic>>()
         .where((point) => point.length >= 2)
-        .map((point) => LatLng(
-              (point[1] as num).toDouble(),
-              (point[0] as num).toDouble(),
-            ))
+        .map(
+          (point) => LatLng(
+            (point[1] as num).toDouble(),
+            (point[0] as num).toDouble(),
+          ),
+        )
         .toList();
   }
 }

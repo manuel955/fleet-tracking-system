@@ -43,7 +43,8 @@
       ".indexOn": ["status", "approvalStatus"],
       "$driverId": {
         ".read": "auth != null && (auth.uid === $driverId || (auth.token.dashboardUser === true && auth.token.dashboardRole !== 'COORDINATOR'))",
-        ".write": false,
+        ".write": "auth != null && auth.uid === $driverId && !data.exists() && newData.child('approvalStatus').val() === 'pending_review'",
+        ".validate": "newData.hasChildren(['email', 'name', 'age', 'phone', 'dni', 'plate', 'vehicleBrand', 'vehicleType', 'vehicleColor', 'vehicleSeats', 'approvalStatus', 'registeredAt', 'documentsSubmittedAt'])",
         "email": { ".write": "auth != null && auth.uid === $driverId", ".validate": "newData.isString() && newData.val().length > 0 && (data.parent().child('approvalStatus').val() != 'rejected' || newData.val() == data.val())" },
         "name": { ".write": "auth != null && auth.uid === $driverId", ".validate": "newData.isString() && newData.val().length > 0 && (data.parent().child('approvalStatus').val() != 'rejected' || newData.val() == data.val())" },
         "age": { ".write": "auth != null && auth.uid === $driverId", ".validate": "newData.isNumber() && newData.val() > 17 && newData.val() < 100 && (data.parent().child('approvalStatus').val() != 'rejected' || newData.val() == data.val())" },
@@ -129,21 +130,31 @@
       ".read": "auth != null && auth.token.dashboardUser === true && auth.token.dashboardRole !== 'COORDINATOR'",
       "$passengerId": {
         ".read": "auth != null && (auth.uid === $passengerId || (auth.token.dashboardUser === true && auth.token.dashboardRole !== 'COORDINATOR'))",
-        ".write": "auth != null && auth.uid === $passengerId",
-        "name": { ".validate": "newData.isString() && newData.val().length > 0" },
-        "phone": { ".validate": "newData.isString()" },
-        "credentialPhotoUrl": { ".validate": "newData.isString()" },
-        "registeredAt": { ".validate": "newData.isNumber()" },
-        "fcmToken": { ".validate": "newData.isString()" },
+        ".write": false,
+        "fcmToken": {
+          ".write": "auth != null && auth.uid === $passengerId",
+          ".validate": "newData.isString() && newData.val().length > 0"
+        },
+        "$other": { ".write": false, ".validate": false }
+      }
+    },
+    "passengerAccess": {
+      "$passengerId": {
+        ".read": "auth != null && (auth.uid === $passengerId || auth.token.dashboardAdmin === true)",
+        ".write": false,
         "$other": { ".validate": false }
       }
+    },
+    "passengerInvites": {
+      ".read": false,
+      ".write": false
     },
     "trips": {
       ".read": "auth != null && auth.token.dashboardUser === true && auth.token.dashboardRole !== 'COORDINATOR'",
       ".indexOn": ["passengerId", "driverId", "dispatcherUid", "requestedAt", "status"],
       "$tripId": {
         ".read": "auth != null && (data.child('passengerId').val() === auth.uid || data.child('driverId').val() === auth.uid || (auth.token.dashboardUser === true && auth.token.dashboardRole !== 'COORDINATOR'))",
-        ".write": "auth != null && ((!data.exists() && newData.child('passengerId').val() === auth.uid && auth.token.dashboardRole !== 'COORDINATOR' && (newData.child('status').val() === 'searching' || newData.child('status').val() === 'scheduled')) || (data.exists() && data.child('passengerId').val() === auth.uid && !data.child('status').val().matches(/^(completed|cancelled)$/) && (newData.child('status').val() === data.child('status').val() || (newData.child('status').val() === 'cancelled' && !data.child('status').val().matches(/^(in_progress|completed|cancelled)$/)))) || (data.exists() && auth.token.dashboardUser === true && auth.token.dashboardRole !== 'COORDINATOR'))",
+        ".write": "auth != null && ((!data.exists() && newData.child('passengerId').val() === auth.uid && auth.token.dashboardRole !== 'COORDINATOR' && ((root.child('passengerAccess').child(auth.uid).child('status').val() === 'authorized' && (root.child('passengerAccess').child(auth.uid).child('legacy').val() === true || root.child('passengerAccess').child(auth.uid).child('expiresAt').val() > now)) || root.child('passengers').child(auth.uid).child('registeredAt').val() < 1786084297175) && (newData.child('status').val() === 'searching' || newData.child('status').val() === 'scheduled')) || (data.exists() && data.child('passengerId').val() === auth.uid && !data.child('status').val().matches(/^(completed|cancelled)$/) && (newData.child('status').val() === data.child('status').val() || (newData.child('status').val() === 'cancelled' && !data.child('status').val().matches(/^(in_progress|completed|cancelled)$/)))) || (data.exists() && auth.token.dashboardUser === true && auth.token.dashboardRole !== 'COORDINATOR'))",
         "passengerId": { ".validate": "newData.isString() && (!data.exists() || newData.val() == data.val())" },
         "passengerName": { ".validate": "newData.isString()" },
         "passengerPhone": { ".validate": "newData.isString()" },
@@ -196,7 +207,17 @@
     },
     "tripHistory": {
       ".read": "auth != null && auth.token.dashboardAdmin === true",
+      ".indexOn": ["driverId", "completedAt", "cancelledAt", "archivedAt"],
       ".write": false
+    },
+    "driverTripHistory": {
+      "$driverId": {
+        ".read": "auth != null && (auth.uid === $driverId || auth.token.dashboardAdmin === true)",
+        ".write": false,
+        "$tripId": {
+          ".validate": "newData.hasChildren(['driverId', 'pickupAddress', 'destinationAddress', 'status', 'requestedAt'])"
+        }
+      }
     },
     "driverConnectionHistory": {
       ".read": "auth != null && auth.token.dashboardAdmin === true",

@@ -6,8 +6,6 @@ class CarIcon {
   static BitmapDescriptor? _cached;
 
   static Future<BitmapDescriptor> build() async {
-    return _cached ??= BitmapDescriptor.defaultMarkerWithHue(
-      BitmapDescriptor.hueBlue,
-    );
+    return _cached ??= BitmapDescriptor.vehicleMarker;
   }
 }

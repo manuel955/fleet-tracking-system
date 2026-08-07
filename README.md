@@ -153,16 +153,22 @@ Storage y Cloud Messaging.
 
 ### Publicar el dashboard en el VPS
 
-En esta maquina, despues de modificar cualquier archivo dentro de
-`dashboard/`, ejecuta desde la raiz del repositorio:
+El dashboard se publica en el Caddy que ya forma parte del stack del VPS.
+Despues de modificar cualquier archivo dentro de `dashboard/`, ejecuta desde
+la raiz del repositorio:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\publicar-dashboard.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\publicar-dashboard.ps1 `
+  -Dominio apl.tucomprass.com
 ```
 
-El script publica solamente el dashboard en `http://86.48.19.189:8081/`,
-sin reiniciar los contenedores ni modificar los servicios de Sistema POS.
-Tambien puedes hacer doble clic en `scripts/publicar-dashboard.cmd`.
+El script solo reinicia el contenedor Caddy para añadir la ruta del dashboard;
+no reinicia backend, frontend ni base de datos de Sistema POS. Guarda respaldos
+del `Caddyfile` y del override antes de actualizar la ruta.
+
+Antes de ejecutarlo, crea en el proveedor DNS un registro `A` para
+`apl.tucomprass.com` apuntando a `86.48.19.189`. Caddy emitira el certificado
+HTTPS automaticamente cuando el registro ya se haya propagado.
 
 ## Notas de seguridad para produccion
 

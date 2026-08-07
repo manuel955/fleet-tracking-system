@@ -46,6 +46,9 @@ let currentDashboardLogoUrl = '';
 let dashboardUsers = [];
 let dashboardUserCreateOpen = false;
 let dashboardPlacesCache = { hotels: {}, sportVenues: {} };
+let passengerInvites = null;
+let passengerInviteCreateOpen = false;
+let currentPassengerInvite = null;
 
 function applyDashboardName(name) {
   const value = name || 'APL Logistic';
@@ -129,6 +132,10 @@ function renderSettings() {
     renderDashboardUsers();
     return;
   }
+  if (settingsSection === 'passenger-access') {
+    renderPassengerAccess();
+    return;
+  }
   if (settingsSection === 'dashboard') {
     renderDashboardSettings();
     return;
@@ -163,6 +170,13 @@ function renderSettings() {
         <span>
           <b>Usuarios del dashboard</b>
           <small>Crea y administra quién puede ingresar</small>
+        </span>
+        <span aria-hidden="true">›</span>
+      </button>
+      <button type="button" id="open-passenger-access" class="settings-section-link">
+        <span>
+          <b>Acceso de pasajeros</b>
+          <small>Genera QR temporales para huéspedes autorizados</small>
         </span>
         <span aria-hidden="true">›</span>
       </button>
@@ -202,6 +216,11 @@ function renderSettings() {
   });
   const dashboardButton = document.getElementById('open-dashboard-settings');
   if (dashboardButton) dashboardButton.addEventListener('click', () => { settingsSection = 'dashboard'; renderSettings(); });
+  const passengerAccessButton = document.getElementById('open-passenger-access');
+  if (passengerAccessButton) passengerAccessButton.addEventListener('click', () => {
+    settingsSection = 'passenger-access';
+    loadPassengerInvites();
+  });
   document.getElementById('open-support-settings').addEventListener('click', () => { settingsSection = 'support'; renderSettings(); });
 }
 
@@ -220,6 +239,130 @@ function renderDashboardSettings() {
   document.getElementById('back-to-settings').addEventListener('click', () => { settingsSection = 'home'; renderSettings(); });
   document.getElementById('dashboard-name-form').addEventListener('submit', (event) => { event.preventDefault(); const name = document.getElementById('dashboard-name-input').value.trim(); if (name) saveDashboardName(name); });
   document.getElementById('dashboard-logo-form').addEventListener('submit', (event) => { event.preventDefault(); saveDashboardLogo(document.getElementById('dashboard-logo-input').files[0]); });
+}
+
+async function passengerInvitesRequest(payload) {
+  const token = await auth.currentUser.getIdToken();
+  const response = await fetch(
+    'https://us-central1-rastreoflota-53052.cloudfunctions.net/managePassengerInvites',
+    { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) },
+  );
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || 'No se pudo administrar el acceso de pasajeros.');
+  return result;
+}
+
+async function loadPassengerInvites() {
+  passengerInvites = null;
+  renderSettings();
+  try {
+    passengerInvites = (await passengerInvitesRequest({ action: 'list' })).invites || [];
+  } catch (error) {
+    passengerInvites = { error: error.message || String(error) };
+  }
+  renderSettings();
+}
+
+function passengerInviteHotelOptions() {
+  const hotels = Object.entries(dashboardPlacesCache.hotels || {});
+  return `<option value="">Selecciona un hotel…</option>${hotels.map(([id, place]) => `<option value="${escapeHtml(id)}">${escapeHtml(place.name || id)}${place.address ? ` · ${escapeHtml(place.address)}` : ''}</option>`).join('')}`;
+}
+
+function passengerInviteStatus(invite) {
+  if (invite.status === 'revoked') return 'Revocado';
+  if (invite.status === 'used' || Number(invite.uses) >= Number(invite.maxUses)) return 'Utilizado';
+  if (Number(invite.expiresAt) <= Date.now()) return 'Vencido';
+  return 'Activo';
+}
+
+function passengerInviteDate(value) {
+  return value ? new Date(Number(value)).toLocaleString('es-PE') : '—';
+}
+
+function renderPassengerAccess() {
+  if (passengerInvites === null) {
+    settingsViewEl.innerHTML = '<p class="settings-hint">Cargando invitaciones…</p>';
+    return;
+  }
+  if (passengerInvites?.error) {
+    settingsViewEl.innerHTML = `<button type="button" id="back-to-settings" class="settings-back">← Configuración</button><p class="settings-feedback error">${escapeHtml(passengerInvites.error)}</p>`;
+    document.getElementById('back-to-settings').addEventListener('click', () => { settingsSection = 'home'; renderSettings(); });
+    return;
+  }
+  const current = currentPassengerInvite;
+  const rows = passengerInvites.map((invite) => {
+    const status = passengerInviteStatus(invite);
+    const canRevoke = status === 'Activo';
+    return `<tr>
+      <td><strong>${escapeHtml(invite.hotelName || 'Hotel')}</strong><small>${escapeHtml(invite.hotelAddress || '')}</small></td>
+      <td>${passengerInviteDate(invite.createdAt)}</td>
+      <td>${passengerInviteDate(invite.expiresAt)}</td>
+      <td>${Number(invite.uses || 0)} / ${Number(invite.maxUses || 1)}</td>
+      <td><span class="attendance-status ${status === 'Activo' ? 'active' : 'closed'}">${status}</span></td>
+      <td>${canRevoke ? `<button type="button" class="settings-table-action" data-revoke-passenger-invite="${escapeHtml(invite.id)}">Revocar</button>` : '—'}</td>
+    </tr>`;
+  }).join('');
+  const hotelsExist = Object.keys(dashboardPlacesCache.hotels || {}).length > 0;
+  settingsViewEl.innerHTML = `
+    <button type="button" id="back-to-settings" class="settings-back">← Configuración</button>
+    <div class="dashboard-users-toolbar">
+      <div><span class="overview-eyebrow">ACCESO CONTROLADO</span><h2>QR para pasajeros</h2><p>Genera invitaciones temporales para huéspedes autorizados.</p></div>
+      <button type="button" id="toggle-passenger-invite" class="dashboard-add-user-btn">${passengerInviteCreateOpen ? 'Cerrar' : 'Generar QR'}</button>
+    </div>
+    <div class="settings-card passenger-invite-create ${passengerInviteCreateOpen ? '' : 'hidden'}">
+      <h3>Nueva invitación</h3>
+      <p class="settings-hint">El QR no contiene datos personales. Solo activa el acceso al hotel seleccionado.</p>
+      <form id="passenger-invite-form" class="app-branding-form">
+        <label>Hotel<select id="passenger-invite-hotel" required>${passengerInviteHotelOptions()}</select></label>
+        <label>Válido por horas<input id="passenger-invite-hours" type="number" min="1" max="720" value="24" required /></label>
+        <label>Usos máximos<input id="passenger-invite-uses" type="number" min="1" max="100" value="1" required /></label>
+        <button type="submit" ${hotelsExist ? '' : 'disabled'}>Crear invitación</button>
+      </form>
+      ${hotelsExist ? '' : '<p class="settings-feedback error">Primero registra un hotel en Lugares.</p>'}
+      <p id="passenger-invite-feedback" class="settings-feedback"></p>
+    </div>
+    ${current ? `<div class="settings-card passenger-invite-result"><h3>QR listo para entregar</h3><p><b>${escapeHtml(current.hotelName)}</b><br>Válido hasta ${escapeHtml(passengerInviteDate(current.expiresAt))}</p><canvas id="passenger-invite-qr" width="280" height="280"></canvas><p class="settings-hint">También puedes compartir este código manualmente:</p><code>${escapeHtml(current.token)}</code><button type="button" id="copy-passenger-invite" class="settings-secondary-btn">Copiar código</button></div>` : ''}
+    <div class="dashboard-users-table-wrap"><table class="dashboard-users-table"><thead><tr><th>Hotel</th><th>Creado</th><th>Vence</th><th>Usos</th><th>Estado</th><th>Acción</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="dashboard-empty-row">Todavía no hay invitaciones.</td></tr>'}</tbody></table></div>
+  `;
+  document.getElementById('back-to-settings').addEventListener('click', () => { settingsSection = 'home'; currentPassengerInvite = null; renderSettings(); });
+  document.getElementById('toggle-passenger-invite').addEventListener('click', () => { passengerInviteCreateOpen = !passengerInviteCreateOpen; renderPassengerAccess(); });
+  const form = document.getElementById('passenger-invite-form');
+  if (form) form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const feedback = document.getElementById('passenger-invite-feedback');
+    feedback.textContent = 'Generando QR…';
+    try {
+      const result = await passengerInvitesRequest({
+        action: 'create',
+        hotelId: document.getElementById('passenger-invite-hotel').value,
+        durationHours: Number(document.getElementById('passenger-invite-hours').value),
+        maxUses: Number(document.getElementById('passenger-invite-uses').value),
+      });
+      currentPassengerInvite = result.invite;
+      passengerInviteCreateOpen = false;
+      await loadPassengerInvites();
+      renderPassengerAccess();
+      const canvas = document.getElementById('passenger-invite-qr');
+      if (canvas && window.QRCode?.toCanvas) window.QRCode.toCanvas(canvas, currentPassengerInvite.qrValue, { width: 280, margin: 2 });
+    } catch (error) {
+      feedback.textContent = error.message || String(error);
+      feedback.className = 'settings-feedback error';
+    }
+  });
+  settingsViewEl.querySelectorAll('[data-revoke-passenger-invite]').forEach((button) => button.addEventListener('click', async () => {
+    if (!confirm('¿Revocar esta invitación QR?')) return;
+    await passengerInvitesRequest({ action: 'revoke', inviteId: button.getAttribute('data-revoke-passenger-invite') });
+    loadPassengerInvites();
+  }));
+  const copyButton = document.getElementById('copy-passenger-invite');
+  if (copyButton) copyButton.addEventListener('click', async () => {
+    await navigator.clipboard.writeText(currentPassengerInvite.token);
+    copyButton.textContent = 'Código copiado';
+  });
+  if (current) {
+    const canvas = document.getElementById('passenger-invite-qr');
+    if (canvas && window.QRCode?.toCanvas) window.QRCode.toCanvas(canvas, current.qrValue, { width: 280, margin: 2 });
+  }
 }
 
 function renderSupportSettings() {

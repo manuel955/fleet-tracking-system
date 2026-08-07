@@ -18,6 +18,7 @@ import 'services/auth_service.dart';
 import 'services/driver_profile_service.dart';
 import 'services/location_service.dart';
 import 'services/map_adapter.dart';
+import 'services/manufacturer_protection_service.dart';
 import 'services/notification_service.dart';
 import 'services/notification_inbox_service.dart';
 import 'services/push_service.dart';
@@ -203,6 +204,7 @@ class _DriverHomePageState extends State<DriverHomePage>
   // sesion solo (ver _checkSessionStillActive).
   Timer? _sessionCheckTimer;
   bool _locationReadInFlight = false;
+  bool _shiftReconcileInFlight = false;
 
   @override
   void initState() {
@@ -343,18 +345,35 @@ class _DriverHomePageState extends State<DriverHomePage>
       FirebaseMessaging.onMessage.listen((message) async {
         switch (message.data['type']) {
           case 'trip_assigned':
-            _pollForTrip();
+            await NotificationService.showTripAssigned(
+              tripId: message.data['tripId']?.toString(),
+              scheduledPickupLabel:
+                  message.data['scheduledPickupLabel']?.toString(),
+            );
+            await _pollForTrip(suppressAssignedNotification: true);
             break;
           case 'trip_updated':
+            await NotificationService.showTripUpdated(
+              tripId: message.data['tripId']?.toString(),
+              destinationAddress:
+                  message.data['destinationAddress']?.toString(),
+            );
             await _pollForTrip();
-            if (_tripId == message.data['tripId'] &&
-                const ['accepted', 'arrived_at_pickup', 'in_progress']
-                    .contains(_tripData?['status'])) {
-              NotificationService.showTripUpdated(
-                destinationAddress:
-                    message.data['destinationAddress']?.toString(),
-              );
+            break;
+          case 'trip_cancelled':
+            await NotificationService.showTripCancelled(
+              tripId: message.data['tripId']?.toString(),
+              reason: message.data['reason']?.toString(),
+            );
+            if (_tripId == message.data['tripId']) {
+              if (mounted) {
+                setState(() {
+                  _tripId = null;
+                  _tripData = null;
+                });
+              }
             }
+            await _pollForTrip();
             break;
           case 'place_assigned':
             _refreshAssignedPlace(
@@ -591,6 +610,12 @@ class _DriverHomePageState extends State<DriverHomePage>
               .toString();
           await NotificationService.showPlaceAssigned(newPlace, type);
         }
+
+        // El worker de heartbeat puede haber cerrado la conexion del servidor
+        // mientras este telefono seguia mostrando el turno localmente activo.
+        // Si el conductor no pulso "Terminar turno", vuelve a registrar la
+        // disponibilidad y reanuda el servicio GPS sin pedir otra accion.
+        await _reconcileRemoteShift(profile);
       }
       final remoteSessionId = profile?['activeSessionId'] as String?;
       final localSessionId = await SessionService.localSessionId();
@@ -604,6 +629,62 @@ class _DriverHomePageState extends State<DriverHomePage>
       }
     } catch (_) {
       // Fallo de red puntual: se reintenta en el siguiente tick.
+    }
+  }
+
+  bool _remoteShiftIsActive(Map<String, dynamic> profile) {
+    return profile['turno_activo'] == true ||
+        profile['status'] == 'online' ||
+        profile['status'] == 'busy';
+  }
+
+  bool _remoteConnectionIsActive(Map<String, dynamic> profile) {
+    return profile['status'] == 'online' || profile['status'] == 'busy';
+  }
+
+  Future<void> _reconcileRemoteShift(Map<String, dynamic> profile) async {
+    if (_driverId == null ||
+        !_tracking ||
+        _startingShift ||
+        _shiftReconcileInFlight) {
+      return;
+    }
+
+    final shiftIsActive = _remoteShiftIsActive(profile);
+    final heartbeatClosedShift =
+        profile['ultimo_motivo_desconexion'] == 'HEARTBEAT';
+    final needsReconnect = shiftIsActive &&
+        (!_remoteConnectionIsActive(profile) ||
+            profile['estado_conexion'] != 'ONLINE');
+
+    // Un cierre manual no debe reabrirse silenciosamente. Solo se recuperan
+    // turnos que el conductor dejo abiertos o que cerro el detector automatico
+    // por perdida temporal del heartbeat.
+    if (!needsReconnect && !(heartbeatClosedShift && !shiftIsActive)) {
+      if (!shiftIsActive) {
+        if (_supportsMobileServices) {
+          LocationService.stop();
+          unawaited(_setScreenAwake(false));
+        }
+        if (mounted) setState(() => _tracking = false);
+        _addLog('El servidor cerro el turno; el rastreo se detuvo.');
+      }
+      return;
+    }
+
+    _shiftReconcileInFlight = true;
+    try {
+      await TripService.setAvailability(_driverId!, online: true);
+      if (mounted) setState(() => _tracking = true);
+      _addLog('Conexion GPS recuperada automaticamente.');
+      if (_supportsMobileServices) {
+        await LocationService.start();
+        unawaited(LocationService.sendCurrentLocationNow());
+      }
+    } catch (error) {
+      _addLog('No se pudo recuperar la conexion GPS: $error');
+    } finally {
+      _shiftReconcileInFlight = false;
     }
   }
 
@@ -638,7 +719,7 @@ class _DriverHomePageState extends State<DriverHomePage>
     return keys.any((key) => current[key] != next[key]);
   }
 
-  Future<void> _pollForTrip() async {
+  Future<void> _pollForTrip({bool suppressAssignedNotification = false}) async {
     if (_driverId == null || _driverProfile?['approvalStatus'] != 'approved') {
       return;
     }
@@ -693,9 +774,11 @@ class _DriverHomePageState extends State<DriverHomePage>
       // background (push_service.dart) y avisar aqui tambien duplicaria la
       // voz. El estado del viaje se actualiza igual, para que al volver a
       // la app ya este la pantalla del viaje activo.
-      if (_tripId != tripId &&
+      if (!suppressAssignedNotification &&
+          _tripId != tripId &&
           WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
         NotificationService.showTripAssigned(
+          tripId: tripId,
           scheduledPickupLabel: trip['scheduledPickupLabel'] as String?,
         );
       }
@@ -792,7 +875,8 @@ class _DriverHomePageState extends State<DriverHomePage>
     if (defaultTargetPlatform == TargetPlatform.android) {
       final battery = await Permission.ignoreBatteryOptimizations.request();
       if (!battery.isGranted) {
-        _addLog('Ahorro de baterÃ­a activo: el sistema puede suspender el rastreo al bloquear la pantalla.');
+        _addLog(
+            'Ahorro de baterÃ­a activo: el sistema puede suspender el rastreo al bloquear la pantalla.');
       }
     }
 
@@ -860,6 +944,13 @@ class _DriverHomePageState extends State<DriverHomePage>
           });
         }
         return;
+      }
+
+      // Huawei/EMUI, MIUI, ColorOS y One UI aplican reglas adicionales que
+      // Android no expone por permisos. Se muestran una vez por fabricante
+      // para que el foreground service sobreviva con la pantalla apagada.
+      if (defaultTargetPlatform == TargetPlatform.android && mounted) {
+        await ManufacturerProtectionService.showIfNeeded(context);
       }
 
       await TripService.setAvailability(_driverId!, online: true);

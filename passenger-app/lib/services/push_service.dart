@@ -13,9 +13,8 @@ import 'notification_service.dart';
 Future<void> pushBackgroundHandler(RemoteMessage message) async {
   switch (message.data['type']) {
     case 'driver_arrived':
-      await NotificationService.showSimple(
-        'Tu conductor llegó',
-        'Te está esperando en el punto de recogida.',
+      await NotificationService.showDriverArrived(
+        message.data['tripId']?.toString(),
       );
       break;
     case 'trip_updated':

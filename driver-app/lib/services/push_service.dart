@@ -1,12 +1,13 @@
 import 'dart:convert';
+import 'dart:ui';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
 import '../config.dart';
 import 'auth_service.dart';
 import 'notification_service.dart';
 import 'notification_inbox_service.dart';
-import 'trip_service.dart';
 
 // Corre en un isolate propio cuando llega un mensaje FCM con la app
 // minimizada o cerrada. Cloud Functions manda mensajes solo-datos (sin
@@ -17,20 +18,35 @@ import 'trip_service.dart';
 // onMessage y lo atiende el polling de main.dart, no este handler.
 @pragma('vm:entry-point')
 Future<void> pushBackgroundHandler(RemoteMessage message) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  DartPluginRegistrant.ensureInitialized();
+  try {
+    await Firebase.initializeApp();
+  } catch (_) {
+    // Firebase ya puede estar inicializado en el isolate de la app.
+  }
   switch (message.data['type']) {
     case 'trip_assigned':
-      if (await _isActiveTrip(message.data['tripId']?.toString())) {
-        await NotificationService.showTripAssigned(
-          scheduledPickupLabel: message.data['scheduledPickupLabel'] as String?,
-        );
-      }
+      // El push lo envia el servidor al token del conductor justo despues de
+      // reclamar el viaje. No se bloquea el aviso esperando otra consulta de
+      // Firebase: con la app suspendida esa consulta puede fallar y dejar al
+      // conductor sin alerta aunque el viaje ya este asignado.
+      await NotificationService.showTripAssigned(
+        tripId: message.data['tripId']?.toString(),
+        scheduledPickupLabel: message.data['scheduledPickupLabel']?.toString(),
+      );
       break;
     case 'trip_updated':
-      if (await _isActiveTrip(message.data['tripId']?.toString())) {
-        await NotificationService.showTripUpdated(
-          destinationAddress: message.data['destinationAddress']?.toString(),
-        );
-      }
+      await NotificationService.showTripUpdated(
+        tripId: message.data['tripId']?.toString(),
+        destinationAddress: message.data['destinationAddress']?.toString(),
+      );
+      break;
+    case 'trip_cancelled':
+      await NotificationService.showTripCancelled(
+        tripId: message.data['tripId']?.toString(),
+        reason: message.data['reason']?.toString(),
+      );
       break;
     case 'place_assigned':
       await NotificationService.showPlaceAssigned(
@@ -62,25 +78,6 @@ Future<void> pushBackgroundHandler(RemoteMessage message) async {
         );
       }
       break;
-  }
-}
-
-Future<bool> _isActiveTrip(String? tripId) async {
-  if (tripId == null || tripId.isEmpty) return false;
-  try {
-    final auth = await AuthService.currentSession();
-    final driver = await TripService.getMyDriverNode(auth['uid'] as String);
-    if (driver?['currentTripId'] != tripId || driver?['status'] != 'busy') {
-      return false;
-    }
-    final trip = await TripService.getTrip(tripId);
-    return trip?['driverId'] == auth['uid'] &&
-        const ['accepted', 'arrived_at_pickup', 'in_progress']
-            .contains(trip?['status']);
-  } catch (_) {
-    // Si no se puede confirmar el estado, no se muestra una alerta atrasada.
-    // El polling la recupera al abrir la app.
-    return false;
   }
 }
 

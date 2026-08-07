@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Alerta con sonido, vibracion y voz cuando Cloud Functions le asigna un
 /// viaje nuevo al conductor. Es un canal separado del de rastreo en
@@ -13,16 +14,34 @@ class NotificationService {
   // despues -- se cambia el id para forzar un canal nuevo con el patron de
   // vibracion explicito (el enableVibration simple, sin patron, no vibraba
   // de forma confiable en algunos telefonos Samsung).
-  static const String _channelId = 'trip_alert_channel_v2';
+  static const String _channelId = 'trip_alert_channel_v3';
   // Canal aparte, importancia normal (sin el patron de vibracion/TTS del de
   // arriba): para avisos que no necesitan interrumpir con sonido fuerte,
   // como aprobacion/rechazo de cuenta o un cambio de destino en un viaje.
   static const String _generalChannelId = 'general_alert_channel';
-  static final Int64List _vibrationPattern = Int64List.fromList([0, 800, 400, 800, 400, 800]);
-  static final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
+  static final Int64List _vibrationPattern =
+      Int64List.fromList([0, 800, 400, 800, 400, 800]);
+  static final FlutterLocalNotificationsPlugin _plugin =
+      FlutterLocalNotificationsPlugin();
   static final FlutterTts _tts = FlutterTts();
   static bool _initialized = false;
   static bool _ttsInitialized = false;
+
+  static int _notificationId(String key) {
+    var hash = 0;
+    for (final codeUnit in key.codeUnits) {
+      hash = (hash * 31 + codeUnit) & 0x7fffffff;
+    }
+    return 1000 + (hash % 900000000);
+  }
+
+  static Future<bool> _claimEvent(String key) async {
+    final prefs = await SharedPreferences.getInstance();
+    final marker = 'notification_event:$key';
+    if (prefs.getString(marker) == 'shown') return false;
+    await prefs.setString(marker, 'shown');
+    return true;
+  }
 
   static Future<void> initialize() async {
     if (_initialized) return;
@@ -31,7 +50,7 @@ class NotificationService {
       _channelId,
       'Nuevo viaje asignado',
       description: 'Suena y vibra cuando el sistema te asigna un viaje.',
-      importance: Importance.high,
+      importance: Importance.max,
       playSound: true,
       enableVibration: true,
       vibrationPattern: _vibrationPattern,
@@ -43,8 +62,8 @@ class NotificationService {
       importance: Importance.defaultImportance,
     );
 
-    final androidPlugin = _plugin
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    final androidPlugin = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
     await androidPlugin?.createNotificationChannel(channel);
     await androidPlugin?.createNotificationChannel(generalChannel);
 
@@ -77,7 +96,8 @@ class NotificationService {
           if (v is Map) {
             final locale = v['locale']?.toString().toLowerCase() ?? '';
             final name = v['name']?.toString().toLowerCase() ?? '';
-            if (locale.startsWith('es') && (name.contains('female') || name.contains('#female'))) {
+            if (locale.startsWith('es') &&
+                (name.contains('female') || name.contains('#female'))) {
               femaleVoice = v;
               break;
             }
@@ -101,6 +121,7 @@ class NotificationService {
   static Future<void> _speak(String text) async {
     try {
       await _initTts();
+      await _tts.stop();
       await _tts.speak(text);
     } catch (_) {
       // Sin texto a voz disponible en este telefono; el sonido y la
@@ -112,11 +133,18 @@ class NotificationService {
   // programado por el pasajero (ver dispatchScheduledTrips en
   // functions/index.js) -- en ese caso se avisa la hora en vez del
   // generico "nuevo servicio".
-  static Future<void> showTripAssigned({String? scheduledPickupLabel}) async {
-    final hasSchedule = scheduledPickupLabel != null && scheduledPickupLabel.isNotEmpty;
+  static Future<void> showTripAssigned({
+    String? tripId,
+    String? scheduledPickupLabel,
+  }) async {
+    final hasSchedule =
+        scheduledPickupLabel != null && scheduledPickupLabel.isNotEmpty;
+    final eventKey =
+        'assigned:${tripId ?? DateTime.now().millisecondsSinceEpoch}';
+    if (!await _claimEvent(eventKey)) return;
     await initialize();
     await _plugin.show(
-      900,
+      _notificationId(eventKey),
       hasSchedule ? 'Viaje Programado Asignado' : 'Nuevo Servicio Asignado',
       hasSchedule
           ? 'Viaje programado para las $scheduledPickupLabel. Abre la app para ver los detalles.'
@@ -125,24 +153,34 @@ class NotificationService {
         android: AndroidNotificationDetails(
           _channelId,
           'Nuevo viaje asignado',
-          channelDescription: 'Suena y vibra cuando el sistema te asigna un viaje.',
-          importance: Importance.high,
-          priority: Priority.high,
+          channelDescription:
+              'Suena y vibra cuando el sistema te asigna un viaje.',
+          importance: Importance.max,
+          priority: Priority.max,
           playSound: true,
           enableVibration: true,
           vibrationPattern: _vibrationPattern,
+          onlyAlertOnce: false,
+          ticker: 'Nuevo servicio asignado',
         ),
       ),
     );
-    _speak(hasSchedule ? 'Nuevo servicio programado para las $scheduledPickupLabel' : 'Nuevo servicio asignado');
+    _speak(hasSchedule
+        ? 'Nuevo servicio programado para las $scheduledPickupLabel'
+        : 'Nuevo servicio asignado');
   }
 
-  // El pasajero cambio el destino de un viaje ya asignado: notificacion del
-  // canal general (sonido normal, sin el patron fuerte de "viaje asignado")
-  // + aviso hablado, para que el conductor lo note aunque no este mirando
-  // el telefono en ese momento.
-  static Future<void> showTripUpdated({String? destinationAddress}) async {
-    await showSimple('Viaje actualizado', 'El pasajero cambió el destino del viaje.');
+  // El pasajero cambio el destino de un viaje ya asignado: alerta urgente
+  // con sonido, vibracion y aviso hablado.
+  static Future<void> showTripUpdated({
+    String? tripId,
+    String? destinationAddress,
+  }) async {
+    final eventKey =
+        'updated:${tripId ?? ''}:${destinationAddress ?? DateTime.now().millisecondsSinceEpoch}';
+    if (!await _claimEvent(eventKey)) return;
+    await showSimple(
+        'Viaje actualizado', 'El pasajero cambió el destino del viaje.');
     await _speak(destinationAddress == null || destinationAddress.trim().isEmpty
         ? 'Cambio de destino'
         : 'Cambio de destino. Nuevo destino: ${destinationAddress.trim()}');
@@ -154,7 +192,7 @@ class NotificationService {
       901,
       '$type asignado',
       name,
-      const NotificationDetails(
+      NotificationDetails(
         android: AndroidNotificationDetails(
           _generalChannelId,
           'Avisos generales',
@@ -168,21 +206,38 @@ class NotificationService {
     );
   }
 
-  // Aviso simple (aprobacion/rechazo de cuenta, etc.): sin sonido fuerte ni
-  // TTS, solo notificacion normal.
+  static Future<void> showTripCancelled(
+      {String? tripId, String? reason}) async {
+    final detail = reason == null || reason.trim().isEmpty
+        ? 'El viaje fue cancelado.'
+        : reason.trim();
+    final eventKey =
+        'cancelled:${tripId ?? DateTime.now().millisecondsSinceEpoch}';
+    if (!await _claimEvent(eventKey)) return;
+    await showSimple('Viaje cancelado', detail);
+    await _speak('Atención. Viaje cancelado. $detail');
+  }
+
+  // Aviso simple. Se mantiene en el canal urgente para que los eventos de
+  // viaje no queden silenciosos en telefonos que ya crearon el canal anterior.
   static Future<void> showSimple(String title, String body) async {
     await initialize();
     await _plugin.show(
       DateTime.now().millisecondsSinceEpoch.remainder(100000),
       title,
       body,
-      const NotificationDetails(
+      NotificationDetails(
         android: AndroidNotificationDetails(
-          _generalChannelId,
-          'Avisos generales',
-          channelDescription: 'Aprobacion de cuenta, cambios de viaje, etc.',
-          importance: Importance.defaultImportance,
-          priority: Priority.defaultPriority,
+          _channelId,
+          'Alertas de viajes',
+          channelDescription: 'Alertas con sonido, vibración y voz.',
+          importance: Importance.max,
+          priority: Priority.max,
+          playSound: true,
+          enableVibration: true,
+          vibrationPattern: _vibrationPattern,
+          onlyAlertOnce: false,
+          ticker: title,
         ),
       ),
     );

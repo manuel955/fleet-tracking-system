@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../services/car_icon.dart';
 import '../services/directions_service.dart';
 import '../services/map_adapter.dart';
+import '../services/notification_service.dart';
 import '../services/trip_service.dart';
 import '../config.dart';
 import '../theme/app_theme.dart';
@@ -36,6 +37,7 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
   Timer? _tripTimer;
   Timer? _driverTimer;
   late Map<String, dynamic> _trip;
+  String? _lastKnownTripStatus;
   LatLng? _driverLatLng;
 
   // Ruta real conductor -> punto de recogida (o destino, una vez a bordo),
@@ -51,7 +53,7 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
   bool _driverPollInFlight = false;
   bool _busy = false;
   // La brújula/recentrado no forma parte de la interfaz operativa.
-  final bool _showMapRecenterControl = false;
+  final bool _showMapRecenterControl = true;
   BitmapDescriptor? _carIcon;
   MapboxMapController? _mapController;
   bool _followDriver = false;
@@ -98,35 +100,12 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
     return '';
   }
 
-  String get _driverVehicleColor {
-    final value = _firstPopulatedValue('vehicleColor')?.toString().trim();
-    return value ?? '';
-  }
-
   String get _driverVehicleLabel {
     final parts = [
       _driverVehicleType,
       _driverVehicleSeats,
     ].where((value) => value.isNotEmpty).toList();
     return parts.isEmpty ? 'Datos no disponibles' : parts.join(' \u00b7 ');
-  }
-
-  Color get _driverVehicleIconColor {
-    final color = _driverVehicleColor.toLowerCase();
-    switch (color) {
-      case 'negro':
-        return const Color(0xFF1F2937);
-      case 'gris':
-        return const Color(0xFF6B7280);
-      case 'plata':
-        return const Color(0xFFB8C0CC);
-      case 'blanco':
-        return Colors.white;
-      default:
-        // El registro solo permite estos cuatro colores. Si llega un valor
-        // antiguo o invalido, mostramos el vehiculo en blanco.
-        return Colors.white;
-    }
   }
 
   String get _driverVehicleAssetPath {
@@ -148,10 +127,13 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
     }
     // "Pickup" era una categoría antigua. La categoría vigente es SUV;
     // ambos valores deben mostrar la misma imagen para viajes históricos.
-    if (type == 'pickup' || type == 'pick-up' || type == 'suv' || type == 'camioneta') {
+    if (type == 'pickup' ||
+        type == 'pick-up' ||
+        type == 'suv' ||
+        type == 'camioneta') {
       return 'assets/vehicles/vehicle-suv.png';
     }
-    return 'assets/vehicles/vehicle-car-new.png';
+    return 'assets/vehicles/vehicle-car-v2.png';
   }
 
   Widget _vehicleImage() {
@@ -161,25 +143,20 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
     return SizedBox(
       width: double.infinity,
       height: 92,
-      child: ColorFiltered(
-        colorFilter: ColorFilter.mode(
-          _driverVehicleIconColor,
-          BlendMode.modulate,
-        ),
-        child: Image.asset(
-          _driverVehicleAssetPath,
-          cacheWidth: 480,
-          cacheHeight: 280,
-          fit: BoxFit.contain,
-        ),
+      child: Image.asset(
+        _driverVehicleAssetPath,
+        cacheWidth: 480,
+        cacheHeight: 280,
+        fit: BoxFit.contain,
       ),
     );
   }
 
   String? get _driverPhotoUrl {
-    final value = (_driverProfile?['profilePhotoUrl'] ?? _trip['driverPhotoUrl'])
-        ?.toString()
-        .trim();
+    final value =
+        (_driverProfile?['profilePhotoUrl'] ?? _trip['driverPhotoUrl'])
+            ?.toString()
+            .trim();
     return value == null || value.isEmpty ? null : value;
   }
 
@@ -226,6 +203,7 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
   void initState() {
     super.initState();
     _trip = widget.trip;
+    _lastKnownTripStatus = _trip['status']?.toString();
     _tripTimer = Timer.periodic(const Duration(seconds: 4), (_) => _pollTrip());
     _driverTimer = Timer.periodic(
       AppConfig.driverLocationPollInterval,
@@ -250,6 +228,12 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
     try {
       final trip = await TripService.getTrip(widget.tripId);
       if (trip == null) return;
+      final nextStatus = trip['status']?.toString();
+      if (_lastKnownTripStatus != 'arrived_at_pickup' &&
+          nextStatus == 'arrived_at_pickup') {
+        unawaited(NotificationService.showDriverArrived(widget.tripId));
+      }
+      _lastKnownTripStatus = nextStatus;
       if (mounted && _tripViewChanged(trip)) setState(() => _trip = trip);
       if (trip['status'] == 'completed' || trip['status'] == 'cancelled') {
         await TripService.clearActiveTrip();
@@ -351,6 +335,8 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
     _lastRouteTarget = target;
     _lastRouteRequestedAt = DateTime.now();
     final destination = LatLng(target.lat, target.lng);
+    // Mantener el mapa sin linea hasta recibir geometria real por carretera.
+    if (mounted) setState(() => _routePoints = []);
 
     try {
       final points = await DirectionsService.getRoute(origin, destination);
@@ -358,7 +344,7 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
       setState(() => _routePoints = points);
     } catch (_) {
       if (token != _routeReqToken || !mounted) return;
-      setState(() => _routePoints = [origin, destination]);
+      setState(() => _routePoints = []);
     } finally {
       _routeRequestInFlight = false;
     }
@@ -511,13 +497,9 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
       ),
     );
 
-    return Container(
+    return SizedBox(
       width: 82,
       height: 82,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: AppColors.lime, width: 2),
-      ),
       child: ClipOval(
         child: photoUrl == null
             ? fallback
@@ -585,20 +567,14 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
                 Marker(
                   markerId: const MarkerId('pickup'),
                   position: pickup,
-                  icon: BitmapDescriptor.defaultMarkerWithHue(
-                    BitmapDescriptor.hueAzure,
-                  ),
+                  icon: BitmapDescriptor.personMarker,
                   infoWindow: const InfoWindow(title: 'Punto de recogida'),
                 ),
                 if (_driverLatLng != null)
                   Marker(
                     markerId: const MarkerId('driver'),
                     position: _driverLatLng!,
-                    icon:
-                        _carIcon ??
-                        BitmapDescriptor.defaultMarkerWithHue(
-                          BitmapDescriptor.hueBlue,
-                        ),
+                    icon: _carIcon ?? BitmapDescriptor.vehicleMarker,
                     anchor: const Offset(0.5, 0.5),
                     infoWindow: const InfoWindow(title: 'Conductor'),
                   ),
@@ -648,30 +624,33 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  if (_showMapRecenterControl) Padding(
-                    padding: const EdgeInsets.only(right: 16, bottom: 10),
-                    child: Material(
-                      color: _followDriver ? AppColors.blue : AppColors.paper,
-                      shape: const CircleBorder(),
-                      elevation: 4,
-                      child: IconButton(
-                        tooltip: _followDriver
-                            ? 'Dejar de seguir al conductor'
-                            : 'Centrar mapa',
-                        onPressed: () {
-                          if (_followDriver) {
-                            setState(() => _followDriver = false);
-                          } else {
-                            _centerMap(pickup);
-                          }
-                        },
-                        color: _followDriver ? AppColors.paper : AppColors.blue,
-                        icon: Icon(
-                          _followDriver ? Icons.gps_fixed : Icons.my_location,
+                  if (_showMapRecenterControl)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 16, bottom: 10),
+                      child: Material(
+                        color: _followDriver ? AppColors.blue : AppColors.paper,
+                        shape: const CircleBorder(),
+                        elevation: 4,
+                        child: IconButton(
+                          tooltip: _followDriver
+                              ? 'Dejar de seguir al conductor'
+                              : 'Centrar mapa',
+                          onPressed: () {
+                            if (_followDriver) {
+                              setState(() => _followDriver = false);
+                            } else {
+                              _centerMap(pickup);
+                            }
+                          },
+                          color: _followDriver
+                              ? AppColors.paper
+                              : AppColors.blue,
+                          icon: Icon(
+                            _followDriver ? Icons.gps_fixed : Icons.my_location,
+                          ),
                         ),
                       ),
                     ),
-                  ),
                   Container(
                     decoration: const BoxDecoration(
                       color: AppColors.paper,

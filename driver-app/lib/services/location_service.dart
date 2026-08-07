@@ -8,9 +8,13 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
 import 'auth_service.dart';
+import 'notification_service.dart';
 
 const String _notificationChannelId = 'fleet_tracking_channel';
 const int _notificationId = 888;
+const Duration _gpsFixTimeout = Duration(seconds: 4);
+const Duration _networkTimeout = Duration(seconds: 8);
+const Duration _maxAcceptedLastKnownAge = Duration(seconds: 30);
 
 /// Clave persistida que indica si el usuario pidio explicitamente el
 /// rastreo. Android puede reiniciar el servicio en segundo plano por su
@@ -19,6 +23,8 @@ const int _notificationId = 888;
 /// autodetiene si nadie lo solicito, garantizando que el rastreo sea
 /// siempre manual.
 const String _trackingEnabledKey = 'tracking_enabled';
+const String _alertedTripIdKey = 'background_alert_trip_id';
+const String _alertedDestinationKey = 'background_alert_destination';
 
 /// Servicio en segundo plano que obtiene el GPS y lo envia a Firebase.
 ///
@@ -44,7 +50,8 @@ class LocationService {
     );
 
     await FlutterLocalNotificationsPlugin()
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
         ?.createNotificationChannel(channel);
 
     await service.configure(
@@ -58,7 +65,8 @@ class LocationService {
         isForegroundMode: true,
         notificationChannelId: _notificationChannelId,
         initialNotificationTitle: 'Rastreo de flota activo',
-        initialNotificationContent: 'Enviando tu ubicación cada ${AppConfig.locationIntervalSeconds}s',
+        initialNotificationContent:
+            'Enviando tu ubicación cada ${AppConfig.locationIntervalSeconds}s',
         foregroundServiceNotificationId: _notificationId,
       ),
       iosConfiguration: IosConfiguration(
@@ -97,7 +105,7 @@ class LocationService {
     try {
       final position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 12),
+        timeLimit: _gpsFixTimeout,
       );
       return isUsableCoordinates(position.latitude, position.longitude)
           ? position
@@ -105,7 +113,8 @@ class LocationService {
     } catch (_) {
       final last = await Geolocator.getLastKnownPosition();
       if (last == null ||
-          !isUsableCoordinates(last.latitude, last.longitude)) {
+          !isUsableCoordinates(last.latitude, last.longitude) ||
+          !_isRecentPosition(last)) {
         return null;
       }
       return last;
@@ -133,14 +142,17 @@ class LocationService {
         'lng': position.longitude,
         'heading': heading,
       });
-      final response = await http.post(
-        Uri.parse('${AppConfig.cloudFunctionsBaseUrl}/updateDriverLocation'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
-        },
-        body: payload,
-      ).timeout(const Duration(seconds: 12));
+      final response = await http
+          .post(
+            Uri.parse(
+                '${AppConfig.cloudFunctionsBaseUrl}/updateDriverLocation'),
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Content-Type': 'application/json',
+            },
+            body: payload,
+          )
+          .timeout(_networkTimeout);
       if (response.statusCode == 200) {
         return position;
       }
@@ -148,6 +160,12 @@ class LocationService {
       // El servicio en segundo plano reintentara en el siguiente ciclo.
     }
     return null;
+  }
+
+  static bool _isRecentPosition(Position position, {DateTime? now}) {
+    final reference = now ?? DateTime.now();
+    return reference.difference(position.timestamp).abs() <=
+        _maxAcceptedLastKnownAge;
   }
 
   static bool isUsableCoordinates(double latitude, double longitude) {
@@ -190,17 +208,28 @@ void onServiceStart(ServiceInstance service) async {
 
   Timer? timer;
   var sendInFlight = false;
+  var alertCheckInFlight = false;
+
+  Future<void> checkTripAlerts() async {
+    if (alertCheckInFlight) return;
+    alertCheckInFlight = true;
+    try {
+      await _checkTripAlerts();
+    } finally {
+      alertCheckInFlight = false;
+    }
+  }
 
   service.on('stopService').listen((event) {
     timer?.cancel();
     service.stopSelf();
   });
 
-  _log(service, 'Servicio iniciado. Enviando cada ${AppConfig.locationIntervalSeconds}s.');
+  _log(service,
+      'Servicio iniciado. Enviando cada ${AppConfig.locationIntervalSeconds}s.');
 
-  // Primer envio inmediato, sin esperar el primer tick del timer.
-  await _sendCurrentLocation(service);
-
+  // El timer se crea antes del primer GPS. Obtener un fix puede tardar varios
+  // segundos y no debe bloquear el resto del ciclo del servicio.
   timer = Timer.periodic(
     AppConfig.locationInterval,
     (_) {
@@ -209,9 +238,111 @@ void onServiceStart(ServiceInstance service) async {
       // escrituras ni los heartbeats por una mala cobertura.
       if (sendInFlight) return;
       sendInFlight = true;
-      _sendCurrentLocation(service).whenComplete(() => sendInFlight = false);
+      unawaited(_sendCurrentLocation(service).whenComplete(() {
+        sendInFlight = false;
+      }));
+      // FCM es inmediato cuando llega, pero Huawei puede retrasar el
+      // despertar de ese isolate con la pantalla apagada. Este chequeo corre
+      // dentro del foreground service que ya mantiene vivo el GPS y cubre
+      // asignaciones, cancelaciones y cambios de destino aunque no llegue el
+      // push.
+      unawaited(checkTripAlerts());
     },
   );
+
+  // Primer envio inmediato, sin retrasar el arranque del timer.
+  sendInFlight = true;
+  unawaited(_sendCurrentLocation(service).whenComplete(() {
+    sendInFlight = false;
+  }));
+  unawaited(checkTripAlerts());
+}
+
+Future<void> _checkTripAlerts() async {
+  final auth = await AuthService.currentSession();
+  final uid = auth['uid'];
+  final token = auth['idToken'];
+  if (uid is! String || uid.isEmpty || token is! String || token.isEmpty) {
+    return;
+  }
+
+  final driverResponse = await http
+      .get(
+          Uri.parse('${AppConfig.firebaseDbUrl}/drivers/$uid.json?auth=$token'))
+      .timeout(_networkTimeout);
+  if (driverResponse.statusCode != 200) return;
+  final rawDriver = jsonDecode(driverResponse.body);
+  if (rawDriver is! Map) return;
+  final driver = Map<String, dynamic>.from(rawDriver);
+  final currentTripId = driver['currentTripId']?.toString();
+  final prefs = await SharedPreferences.getInstance();
+  final previousTripId = prefs.getString(_alertedTripIdKey);
+
+  // Al cancelar, el backend libera currentTripId. Conservamos el ultimo
+  // viaje para poder leer su estado y avisar aunque el push haya sido
+  // retrasado o perdido con la pantalla apagada.
+  if (currentTripId == null || currentTripId.isEmpty) {
+    if (previousTripId != null && previousTripId.isNotEmpty) {
+      final closedTrip = await _readTrip(previousTripId, token);
+      if (closedTrip?['status']?.toString() == 'cancelled') {
+        await NotificationService.showTripCancelled(
+          tripId: previousTripId,
+          reason: closedTrip?['cancelReason']?.toString(),
+        );
+      }
+    }
+    await prefs.remove(_alertedTripIdKey);
+    await prefs.remove(_alertedDestinationKey);
+    return;
+  }
+
+  final trip = await _readTrip(currentTripId, token);
+  if (trip == null || trip['driverId']?.toString() != uid) return;
+  final status = trip['status']?.toString();
+  if (status == 'cancelled') {
+    await NotificationService.showTripCancelled(
+      tripId: currentTripId,
+      reason: trip['cancelReason']?.toString(),
+    );
+    await prefs.remove(_alertedTripIdKey);
+    await prefs.remove(_alertedDestinationKey);
+    return;
+  }
+
+  const activeStatuses = {'accepted', 'arrived_at_pickup', 'in_progress'};
+  if (!activeStatuses.contains(status)) return;
+
+  final destinationSignature = [
+    trip['destinationLat'],
+    trip['destinationLng'],
+    trip['destinationAddress'],
+  ].map((value) => value?.toString() ?? '').join('|');
+
+  if (previousTripId != currentTripId) {
+    await NotificationService.showTripAssigned(
+      tripId: currentTripId,
+      scheduledPickupLabel: trip['scheduledPickupLabel']?.toString(),
+    );
+  } else if (prefs.getString(_alertedDestinationKey) != null &&
+      prefs.getString(_alertedDestinationKey) != destinationSignature) {
+    await NotificationService.showTripUpdated(
+      tripId: currentTripId,
+      destinationAddress: trip['destinationAddress']?.toString(),
+    );
+  }
+
+  await prefs.setString(_alertedTripIdKey, currentTripId);
+  await prefs.setString(_alertedDestinationKey, destinationSignature);
+}
+
+Future<Map<String, dynamic>?> _readTrip(String tripId, String token) async {
+  final response = await http
+      .get(Uri.parse(
+          '${AppConfig.firebaseDbUrl}/trips/$tripId.json?auth=$token'))
+      .timeout(_networkTimeout);
+  if (response.statusCode != 200) return null;
+  final raw = jsonDecode(response.body);
+  return raw is Map ? Map<String, dynamic>.from(raw) : null;
 }
 
 Future<void> _sendCurrentLocation(ServiceInstance service) async {
@@ -225,7 +356,8 @@ Future<void> _sendCurrentLocation(ServiceInstance service) async {
     final permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied ||
         permission == LocationPermission.deniedForever) {
-      _log(service, 'Permiso de ubicación no otorgado ("$permission"). Abre la app y concede permiso.');
+      _log(service,
+          'Permiso de ubicación no otorgado ("$permission"). Abre la app y concede permiso.');
       return;
     }
 
@@ -235,12 +367,13 @@ Future<void> _sendCurrentLocation(ServiceInstance service) async {
     try {
       position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 20),
+        timeLimit: _gpsFixTimeout,
       );
     } catch (e) {
-      _log(service, 'getCurrentPosition falló ($e), probando última posición conocida...');
+      _log(service,
+          'getCurrentPosition falló ($e), probando última posición conocida...');
       final last = await Geolocator.getLastKnownPosition();
-      if (last == null) {
+      if (last == null || !LocationService._isRecentPosition(last)) {
         _log(service, 'No hay ninguna posición disponible todavía.');
         return;
       }
@@ -253,7 +386,8 @@ Future<void> _sendCurrentLocation(ServiceInstance service) async {
       return;
     }
 
-    _log(service, 'GPS ok: ${position.latitude.toStringAsFixed(5)}, ${position.longitude.toStringAsFixed(5)}');
+    _log(service,
+        'GPS ok: ${position.latitude.toStringAsFixed(5)}, ${position.longitude.toStringAsFixed(5)}');
 
     // El token se obtiene de la misma sesion que usa el turno. La escritura
     // pasa por Cloud Functions, que valida el uid y actualiza solo los campos
@@ -267,14 +401,16 @@ Future<void> _sendCurrentLocation(ServiceInstance service) async {
       'lng': position.longitude,
       'heading': heading,
     });
-    final response = await http.post(
-      Uri.parse('${AppConfig.cloudFunctionsBaseUrl}/updateDriverLocation'),
-      headers: {
-        'Authorization': 'Bearer $token',
-        'Content-Type': 'application/json',
-      },
-      body: payload,
-    ).timeout(const Duration(seconds: 12));
+    final response = await http
+        .post(
+          Uri.parse('${AppConfig.cloudFunctionsBaseUrl}/updateDriverLocation'),
+          headers: {
+            'Authorization': 'Bearer $token',
+            'Content-Type': 'application/json',
+          },
+          body: payload,
+        )
+        .timeout(_networkTimeout);
 
     if (response.statusCode == 200) {
       _log(service, 'Enviado a Firebase correctamente.');

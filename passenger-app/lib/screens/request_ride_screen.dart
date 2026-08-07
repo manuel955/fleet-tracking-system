@@ -244,7 +244,9 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
               size: 16,
               color: selected
                   ? AppColors.paper
-                  : (dimmed ? AppColors.muted.withValues(alpha: .45) : AppColors.ink),
+                  : (dimmed
+                        ? AppColors.muted.withValues(alpha: .45)
+                        : AppColors.ink),
             ),
             const SizedBox(width: 8),
             Text(
@@ -254,7 +256,9 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
                 fontWeight: FontWeight.w600,
                 color: selected
                     ? AppColors.paper
-                    : (dimmed ? AppColors.muted.withValues(alpha: .45) : AppColors.ink),
+                    : (dimmed
+                          ? AppColors.muted.withValues(alpha: .45)
+                          : AppColors.ink),
               ),
             ),
           ],
@@ -403,9 +407,7 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
                             });
                             if (_destination != null) _loadRoute();
                           },
-                          icon: BitmapDescriptor.defaultMarkerWithHue(
-                            BitmapDescriptor.hueAzure,
-                          ),
+                          icon: BitmapDescriptor.personMarker,
                           infoWindow: const InfoWindow(
                             title: 'Punto de recogida',
                           ),
@@ -567,11 +569,7 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
       ),
       child: Row(
         children: [
-          const Icon(
-            Icons.people_alt_outlined,
-            size: 20,
-            color: AppColors.ink,
-          ),
+          const Icon(Icons.people_alt_outlined, size: 20, color: AppColors.ink),
           const SizedBox(width: 10),
           const Expanded(
             child: Text(

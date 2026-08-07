@@ -1,9 +1,13 @@
 // Mismo proyecto Firebase que driver-app y el dashboard.
 class AppConfig {
-  static const String firebaseApiKey = 'AIzaSyABbcM0za__wtLsRm3amZa9P10OciEgkBY';
-  static const String firebaseDbUrl = 'https://rastreoflota-53052-default-rtdb.firebaseio.com';
-  static const String firebaseStorageBucket = 'rastreoflota-53052.firebasestorage.app';
-  static const String cloudFunctionsBaseUrl = 'https://us-central1-rastreoflota-53052.cloudfunctions.net';
+  static const String firebaseApiKey =
+      'AIzaSyBEGrZ6pl88j_GXExrdepJOvNiVA7UjoNQ';
+  static const String firebaseDbUrl =
+      'https://rastreoflota-53052-default-rtdb.firebaseio.com';
+  static const String firebaseStorageBucket =
+      'rastreoflota-53052.firebasestorage.app';
+  static const String cloudFunctionsBaseUrl =
+      'https://us-central1-rastreoflota-53052.cloudfunctions.net';
 
   // Codigo de pais por defecto para el telefono del pasajero (Peru).
   static const String defaultPhoneCountryCode = '+51';
@@ -14,6 +18,15 @@ class AppConfig {
   // guarda en Firebase -- ver services/support_config_service.dart. Mismo
   // numero de respaldo que driver-app/lib/config.dart.
   static const String supportPhone = '+51929125443';
+
+  // Paginas publicas requeridas por Google Play y accesibles desde la app.
+  // Se publican junto con el hosting existente de pasajeros; no se crea ni
+  // se reutiliza ningun dominio de la tienda.
+  static const String privacyPolicyUrl =
+      'https://rastreoflota-53052.web.app/privacy-policy.html';
+  static const String deleteAccountUrl =
+      'https://rastreoflota-53052.web.app/delete-account.html';
+  static const String supportEmail = 'manuel_cortezballardo@outlook.com';
 
   // El pasajero refresca la posicion recibida del conductor cada 5 segundos.
   // Las consultas de ruta usan un intervalo y un umbral independientes.
