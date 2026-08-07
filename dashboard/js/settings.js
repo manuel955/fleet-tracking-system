@@ -49,6 +49,10 @@ let dashboardPlacesCache = { hotels: {}, sportVenues: {} };
 let passengerInvites = null;
 let passengerInviteCreateOpen = false;
 let currentPassengerInvite = null;
+// Se conserva la gestión de apps para una futura etapa, pero no se muestra
+// en el menú operativo mientras las publicaciones se administran por Play
+// Console.
+const SHOW_APP_MANAGEMENT = false;
 
 function applyDashboardName(name) {
   const value = name || 'APL Logistic';
@@ -152,6 +156,7 @@ function renderSettings() {
     </div>
     <div class="settings-shortcuts">
     ${window.dashboardIsAdmin ? `
+    ${SHOW_APP_MANAGEMENT ? `
       <button type="button" id="open-updates" class="settings-section-link">
         <span>
           <b>Actualizaciones</b>
@@ -166,6 +171,7 @@ function renderSettings() {
         </span>
         <span aria-hidden="true">›</span>
       </button>
+    ` : ''}
       <button type="button" id="open-dashboard-users" class="settings-section-link">
         <span>
           <b>Usuarios del dashboard</b>
