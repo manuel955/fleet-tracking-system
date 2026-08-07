@@ -610,11 +610,39 @@ button, input { font-family: inherit; }
 .drivers-admin-toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 20px;
 }
 
 .drivers-admin-toolbar .filter-pill { cursor: pointer; }
+
+.drivers-admin-search {
+  display: grid;
+  gap: 5px;
+  min-width: 240px;
+  margin-left: auto;
+  color: var(--muted-ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.drivers-admin-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+}
+
+.drivers-admin-search input:focus {
+  border-color: #8d96a3;
+  box-shadow: 0 0 0 3px rgba(80,90,105,.1);
+  outline: none;
+}
 
 .drivers-admin-empty {
   font-size: 14px;

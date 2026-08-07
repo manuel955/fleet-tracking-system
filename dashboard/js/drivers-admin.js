@@ -40,6 +40,7 @@ const APPROVAL_LABELS = {
 let adminDriversCache = {};
 let adminSubscribed = false;
 let adminActiveFilter = 'approved';
+let adminDriverSearch = '';
 let openRejectFormId = null;
 let adminPlacesCache = { hotels: {}, sportVenues: {} };
 let adminTripHistory = {};
@@ -258,6 +259,10 @@ function renderDriversAdmin() {
   const entries = Object.entries(adminDriversCache).filter(([, d]) => {
     if (adminActiveFilter === 'all') return true;
     return (d.approvalStatus || 'pending_review') === adminActiveFilter;
+  }).filter(([, d]) => {
+    const query = adminDriverSearch.trim().toLowerCase();
+    if (!query) return true;
+    return [d.name, d.plate].some((value) => String(value || '').toLowerCase().includes(query));
   });
 
   const toolbarHtml = `
@@ -271,6 +276,7 @@ function renderDriversAdmin() {
       `
         )
         .join('')}
+      <label class="drivers-admin-search">Buscar conductor<input type="search" id="admin-driver-search" value="${escapeHtml(adminDriverSearch)}" placeholder="Nombre o placa..." /></label>
     </div>
   `;
 
@@ -307,6 +313,18 @@ function renderDriversAdmin() {
   });
   adminViewEl.querySelectorAll('[data-action="delete-driver"]').forEach((btn) => {
     btn.addEventListener('click', () => deleteDriver(btn.getAttribute('data-id')));
+  });
+
+  const driverSearchInput = document.getElementById('admin-driver-search');
+  if (driverSearchInput) driverSearchInput.addEventListener('input', () => {
+    const cursor = driverSearchInput.selectionStart;
+    adminDriverSearch = driverSearchInput.value;
+    renderDriversAdmin();
+    const nextInput = document.getElementById('admin-driver-search');
+    if (nextInput) {
+      nextInput.focus();
+      nextInput.setSelectionRange(cursor, cursor);
+    }
   });
   adminViewEl.querySelectorAll('[data-reject-form]').forEach((form) => {
     form.addEventListener('submit', async (e) => {
