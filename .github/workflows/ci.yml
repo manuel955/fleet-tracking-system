@@ -1,0 +1,90 @@
+name: Validate application
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-dashboard:
+    name: Backend, rules and dashboard
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: functions/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install backend dependencies
+        working-directory: functions
+        run: npm ci
+
+      - name: Test Cloud Functions
+        working-directory: functions
+        run: npm test
+
+      - name: Measure critical backend coverage
+        working-directory: functions
+        run: npm run test:coverage
+
+      - name: Test dashboard logic
+        run: node --test dashboard/test/*.test.js
+
+      - name: Check dashboard JavaScript syntax
+        run: find dashboard/js -name '*.js' -print0 | xargs -0 -n1 node --check
+
+      - name: Install Firebase CLI
+        run: npm install --global firebase-tools
+
+      - name: Test Realtime Database and Storage rules
+        working-directory: functions
+        run: npm run test:rules
+
+  flutter:
+    name: Flutter (${{ matrix.app }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        app:
+          - driver-app
+          - passenger-app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install Flutter dependencies
+        working-directory: ${{ matrix.app }}
+        run: flutter pub get
+
+      - name: Analyze Flutter code
+        working-directory: ${{ matrix.app }}
+        run: flutter analyze --no-pub
+
+      - name: Test Flutter code
+        working-directory: ${{ matrix.app }}
+        run: flutter test --no-pub

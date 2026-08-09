@@ -7,7 +7,7 @@
   "main": "index.js",
   "scripts": {
     "test": "node --test",
-    "test:coverage": "node --experimental-test-coverage --test test/driver-state-policy.test.js test/trip-lifecycle-policy.test.js test/matching.test.js",
+    "test:coverage": "node --experimental-test-coverage --test-coverage-lines=70 --test-coverage-branches=80 --test-coverage-functions=70 --test test/driver-state-policy.test.js test/trip-lifecycle-policy.test.js test/matching.test.js",
     "test:rules": "firebase emulators:exec --config ../firebase.json --only database,storage \"node --test test/database-rules.emulator.test.js test/storage-rules.emulator.test.js\" --project rastreoflota-53052"
   },
   "dependencies": {

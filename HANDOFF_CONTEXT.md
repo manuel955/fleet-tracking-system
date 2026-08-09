@@ -77,21 +77,28 @@ un viaje, `assignDriverOnTripCreate` no encuentra candidatos y el viaje queda
 "el viaje no llega al conductor" — no era bug de código. Revisar esto antes
 de asumir un bug cuando un pedido no se asigna.
 
-## Pendiente / no confirmado
+## Estado de entrega al 2026-08-09
 
 - Cloud Functions usa Node 22. El 2026-08-09 se desplegaron correctamente
   todas las Functions junto con las reglas defensivas de Realtime Database y
   Storage en `rastreoflota-53052`.
-- El dashboard ya tiene el target Firebase Hosting
-  `rastreoflota-53052-dashboard`; el canal `live` tuvo una publicación
-  confirmada el 2026-08-07. También se conserva el flujo alternativo al VPS.
+- El dashboard está publicado por HTTPS en Firebase Hosting, target
+  `rastreoflota-53052-dashboard`, y fue verificado después del despliegue del
+  2026-08-09 en `https://rastreoflota-53052-dashboard.web.app`. También se
+  conserva el flujo alternativo al VPS.
 - Renzo aún no dio visto bueno visual final del rediseño Uber (revisó las
   apps recién instaladas, sin feedback explícito todavía).
-- La rama `codex/build-driver-aab` contiene cambios todavía no integrados en
-  `master`; fusionar y publicar requiere una decisión explícita del propietario.
+- La rama `codex/build-driver-aab` se fusionó mediante la PR #2 en `master`
+  (`d0af34d`) y la rama remota fue eliminada.
 - La validación previa al despliegue quedó verde: 53 pruebas de Functions,
   15 casos de reglas en emuladores, 8 del dashboard, 4 del conductor y 2 del
   pasajero. Los módulos críticos medidos alcanzaron 71.64% de líneas.
+- `.github/workflows/ci.yml` repite esta validación automáticamente en cada PR
+  y cada push a `master`, sin usar credenciales de producción.
+- Lo único no cerrable desde el repositorio es la aceptación visual final de
+  Renzo y la rotación/restricción de claves del proyecto, que debe hacer el
+  propietario desde Firebase/Google Cloud/Mapbox sin compartir secretos en el
+  código ni en el chat.
 
 ## Bug/patrón a recordar: nunca usar `ref.transaction()` contra RTDB desde Cloud Functions
 
