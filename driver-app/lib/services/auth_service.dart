@@ -62,7 +62,8 @@ class AuthService {
 
   static Future<bool> isLoggedIn() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('uid') != null && prefs.getString('refreshToken') != null;
+    return prefs.getString('uid') != null &&
+        prefs.getString('refreshToken') != null;
   }
 
   /// Sesion actual (cacheada o refrescada). A diferencia de la version
@@ -96,6 +97,23 @@ class AuthService {
     await prefs.remove('idToken');
     await prefs.remove('refreshToken');
     await prefs.remove('expiresAt');
+  }
+
+  static Future<void> deleteCurrentAccount() async {
+    final session = await currentSession();
+    final response = await http.post(
+      Uri.parse('${AppConfig.cloudFunctionsBaseUrl}/deleteMyAccount'),
+      headers: {
+        'Authorization': 'Bearer ${session['idToken']}',
+        'Content-Type': 'application/json',
+      },
+    );
+    if (response.statusCode != 200) {
+      final body = jsonDecode(response.body);
+      final message = body is Map ? body['error'] : null;
+      throw Exception(message?.toString() ?? 'No se pudo eliminar la cuenta.');
+    }
+    await logout();
   }
 
   static Future<Map<String, dynamic>?> _refresh(String refreshToken) async {
@@ -144,10 +162,12 @@ class AuthService {
   /// de la SDK JS (los codigos difieren porque aqui se habla REST directo).
   static String friendlyError(String responseBody) {
     const messages = {
-      'EMAIL_EXISTS': 'Ya existe una cuenta con ese correo. Inicia sesión en vez de registrarte.',
+      'EMAIL_EXISTS':
+          'Ya existe una cuenta con ese correo. Inicia sesión en vez de registrarte.',
       'EMAIL_NOT_FOUND': 'Credenciales inválidas o usuario no existe.',
       'INVALID_PASSWORD': 'Credenciales inválidas o usuario no existe.',
-      'INVALID_LOGIN_CREDENTIALS': 'Credenciales inválidas o usuario no existe.',
+      'INVALID_LOGIN_CREDENTIALS':
+          'Credenciales inválidas o usuario no existe.',
       'INVALID_EMAIL': 'Correo inválido.',
       'WEAK_PASSWORD': 'La contraseña debe tener al menos 6 caracteres.',
     };

@@ -79,18 +79,19 @@ de asumir un bug cuando un pedido no se asigna.
 
 ## Pendiente / no confirmado
 
-- Migrar Cloud Functions de Node 20 a Node 22 antes del **2026-10-30**
-  (deprecación de Node 20 en Cloud Functions 1a gen).
-- Dashboard no está desplegado a Firebase Hosting — sigue como archivo
-  estático local, servido para pruebas con un mini servidor node (ver abajo).
+- Cloud Functions usa Node 22. El 2026-08-09 se desplegaron correctamente
+  todas las Functions junto con las reglas defensivas de Realtime Database y
+  Storage en `rastreoflota-53052`.
+- El dashboard ya tiene el target Firebase Hosting
+  `rastreoflota-53052-dashboard`; el canal `live` tuvo una publicación
+  confirmada el 2026-08-07. También se conserva el flujo alternativo al VPS.
 - Renzo aún no dio visto bueno visual final del rediseño Uber (revisó las
   apps recién instaladas, sin feedback explícito todavía).
-- README raíz puede seguir sin cobertura completa de los cambios de
-  cancelación/dashboard/paleta listados arriba — actualízalo si haces más
-  cambios en esas áreas.
-- Regla de seguridad pendiente señalada en README: cualquier usuario
-  autenticado puede leer `/drivers` — falta restringir con custom claims de
-  admin antes de exponer datos reales.
+- La rama `codex/build-driver-aab` contiene cambios todavía no integrados en
+  `master`; fusionar y publicar requiere una decisión explícita del propietario.
+- La validación previa al despliegue quedó verde: 53 pruebas de Functions,
+  15 casos de reglas en emuladores, 8 del dashboard, 4 del conductor y 2 del
+  pasajero. Los módulos críticos medidos alcanzaron 71.64% de líneas.
 
 ## Bug/patrón a recordar: nunca usar `ref.transaction()` contra RTDB desde Cloud Functions
 
@@ -159,8 +160,4 @@ escrituras condicionales de servidor o cliente, replica este patrón.
 4. El repo ya tiene git inicializado con un commit inicial (ver más abajo) —
    así Codex puede ver diffs y tú puedes revertir cambios que no te gusten
    con `git diff` / `git checkout` normales.
-5. Ten a mano las credenciales que uses tú directamente (no las comparto en
-   texto plano en ningún archivo del repo): login de Firebase, la Maps API
-   key (está en `dashboard/js/google-maps-config.js` y en el
-   `AndroidManifest.xml` de cada app Flutter — ya están en el código, Codex
-   las va a poder leer igual que yo).
+5. Ten a mano las credenciales que uses tu directamente (no las compartas en texto plano en ningun archivo del repo): login de Firebase y tokens publicos de Mapbox. Se inyectan al compilar las apps con `--dart-define=MAPBOX_ACCESS_TOKEN=...` y en el dashboard con `scripts/inject-mapbox-config.mjs`.

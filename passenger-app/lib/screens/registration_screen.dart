@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../config.dart';
 import '../services/passenger_service.dart';
 import '../theme/app_theme.dart';
@@ -42,6 +43,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
   XFile? _photo;
   bool _busy = false;
+  bool _acceptedPrivacy = false;
   String? _error;
 
   @override
@@ -62,6 +64,12 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
+    if (!_acceptedPrivacy) {
+      setState(
+        () => _error = 'Acepta la política de privacidad para continuar.',
+      );
+      return;
+    }
     if (_photo == null) {
       setState(
         () => _error = 'Toma o elige una foto de tu credencial (DNI/carnet).',
@@ -90,6 +98,13 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         _error = 'Error al registrar: $e';
       });
     }
+  }
+
+  Future<void> _openPrivacyPolicy() async {
+    await launchUrl(
+      Uri.parse(AppConfig.privacyPolicyUrl),
+      mode: LaunchMode.externalApplication,
+    );
   }
 
   @override
@@ -202,6 +217,11 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                 style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5),
               ),
               const SizedBox(height: 10),
+              const Text(
+                'La foto se usa únicamente para verificar tu identidad y asociar el servicio a tu solicitud. Se almacena de forma segura y puedes pedir su eliminación desde Cuenta.',
+                style: TextStyle(fontSize: 13, color: Colors.black54),
+              ),
+              const SizedBox(height: 10),
               if (_photo != null)
                 ClipRRect(
                   borderRadius: BorderRadius.circular(12),
@@ -256,6 +276,25 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                     ),
                   ),
                 ],
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _acceptedPrivacy,
+                onChanged: _busy
+                    ? null
+                    : (value) =>
+                          setState(() => _acceptedPrivacy = value ?? false),
+                controlAffinity: ListTileControlAffinity.leading,
+                title: GestureDetector(
+                  onTap: _openPrivacyPolicy,
+                  child: const Text(
+                    'He leído y acepto la política de privacidad',
+                    style: TextStyle(
+                      decoration: TextDecoration.underline,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
               ),
               if (_error != null) ...[
                 const SizedBox(height: 16),

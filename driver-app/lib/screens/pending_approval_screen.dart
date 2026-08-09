@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../config.dart';
 import '../services/auth_service.dart';
 import '../services/driver_profile_service.dart';
 import '../theme/app_theme.dart';
@@ -28,6 +30,7 @@ class PendingApprovalScreen extends StatefulWidget {
 class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
   bool _resubmitting = false;
   bool _busy = false;
+  bool _deleting = false;
   String? _error;
   final Map<String, List<PickedDocument>> _documents = {};
 
@@ -117,6 +120,37 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
     widget.onLoggedOut();
   }
 
+  Future<void> _deleteAccount() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Eliminar cuenta y datos'),
+        content: const Text(
+            'Se eliminarán tu registro, documentos y datos asociados. Esta acción no se puede deshacer.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancelar')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Eliminar todo',
+                  style: TextStyle(color: AppColors.red))),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _deleting = true);
+    try {
+      await AuthService.deleteCurrentAccount();
+      widget.onLoggedOut();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _deleting = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(error.toString().replaceFirst('Exception: ', ''))));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final status =
@@ -168,7 +202,8 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
                 decoration: BoxDecoration(
                   color: AppColors.red.withValues(alpha: .10),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.red.withValues(alpha: .35)),
+                  border:
+                      Border.all(color: AppColors.red.withValues(alpha: .35)),
                 ),
                 child: Text('Motivo: $reason',
                     style: const TextStyle(color: AppColors.red)),
@@ -239,6 +274,21 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
                 ),
               ],
             ],
+            const SizedBox(height: 24),
+            OutlinedButton(
+              onPressed: _deleting ? null : _deleteAccount,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.red,
+                side: const BorderSide(color: AppColors.red),
+                minimumSize: const Size.fromHeight(48),
+              ),
+              child: const Text('Eliminar cuenta y datos'),
+            ),
+            TextButton(
+              onPressed: () => launchUrl(Uri.parse(AppConfig.privacyPolicyUrl),
+                  mode: LaunchMode.externalApplication),
+              child: const Text('Política de privacidad'),
+            ),
           ],
         ),
       ),

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -107,6 +109,8 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
     _lastRouteTarget = target;
     _lastRouteRequestedAt = DateTime.now();
     final destination = LatLng(target.lat, target.lng);
+    // Mantener el mapa sin linea hasta recibir geometria real por carretera.
+    if (mounted) setState(() => _routePoints = []);
 
     try {
       final points = await DirectionsService.getRoute(origin, destination);
@@ -114,7 +118,7 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
       setState(() => _routePoints = points);
     } catch (_) {
       if (token != _routeReqToken || !mounted) return;
-      setState(() => _routePoints = [origin, destination]);
+      setState(() => _routePoints = []);
     } finally {
       _routeRequestInFlight = false;
     }
@@ -153,6 +157,36 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
     if (here == null || target == null) return null;
     return Geolocator.distanceBetween(
         here.latitude, here.longitude, target.lat, target.lng);
+  }
+
+  Widget _passengerAvatar(String initial) {
+    final photoUrl = widget.trip['passengerPhotoUrl']?.toString().trim();
+    final fallback = CircleAvatar(
+      radius: 26,
+      backgroundColor: AppColors.ink,
+      child: Text(
+        initial,
+        style: const TextStyle(
+          color: AppColors.paper,
+          fontSize: 20,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+    if (photoUrl == null || photoUrl.isEmpty) return fallback;
+    return Container(
+      width: 52,
+      height: 52,
+      decoration: const BoxDecoration(shape: BoxShape.circle),
+      clipBehavior: Clip.antiAlias,
+      child: Image.network(
+        photoUrl,
+        fit: BoxFit.cover,
+        cacheWidth: 156,
+        cacheHeight: 156,
+        errorBuilder: (_, __, ___) => fallback,
+      ),
+    );
   }
 
   // Sin un fix GPS actual no se permite confirmar. Esto evita que una app
@@ -292,10 +326,17 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
           ),
         );
       }
-    } catch (e) {
+    } on TripActionRejectedException catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(content: Text(error.message)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        final message = e.toString().replaceFirst('Exception: ', '');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
         );
       }
     } finally {
@@ -316,16 +357,55 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
     final initial =
         passengerName.isNotEmpty ? passengerName[0].toUpperCase() : '?';
     final passengerCount = (trip['passengerCount'] as num?)?.toInt();
+    final currentPosition = widget.currentLatLng;
+    final mapCenter = currentPosition ?? markerPosition;
+    final southwest = LatLng(
+      currentPosition == null ||
+              currentPosition.latitude < markerPosition.latitude
+          ? currentPosition?.latitude ?? markerPosition.latitude
+          : markerPosition.latitude,
+      currentPosition == null ||
+              currentPosition.longitude < markerPosition.longitude
+          ? currentPosition?.longitude ?? markerPosition.longitude
+          : markerPosition.longitude,
+    );
+    final northeast = LatLng(
+      currentPosition == null ||
+              currentPosition.latitude > markerPosition.latitude
+          ? currentPosition?.latitude ?? markerPosition.latitude
+          : markerPosition.latitude,
+      currentPosition == null ||
+              currentPosition.longitude > markerPosition.longitude
+          ? currentPosition?.longitude ?? markerPosition.longitude
+          : markerPosition.longitude,
+    );
 
     return Scaffold(
       body: Stack(
         children: [
           Positioned.fill(
             child: MapboxMapView(
-              initialCameraPosition:
-                  CameraPosition(target: markerPosition, zoom: 15),
-              onMapCreated: (controller) => _mapController = controller,
-              myLocationEnabled: true,
+              initialCameraPosition: CameraPosition(
+                  target: mapCenter, zoom: currentPosition == null ? 15 : 14),
+              onMapCreated: (controller) {
+                _mapController = controller;
+                if (currentPosition != null) {
+                  unawaited(
+                    controller.animateCamera(
+                      CameraUpdate.newLatLngBounds(
+                        LatLngBounds(
+                          southwest: southwest,
+                          northeast: northeast,
+                        ),
+                        72,
+                      ),
+                    ),
+                  );
+                }
+              },
+              // El vehiculo propio se pinta como marcador de dominio para no
+              // duplicarlo con el punto azul nativo de Mapbox.
+              myLocationEnabled: false,
               myLocationButtonEnabled: false,
               zoomControlsEnabled: false,
               padding: const EdgeInsets.only(bottom: 260),
@@ -333,15 +413,23 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
                 Marker(
                   markerId: const MarkerId('target'),
                   position: markerPosition,
-                  icon: BitmapDescriptor.defaultMarkerWithHue(
-                    _headingToPickup
-                        ? BitmapDescriptor.hueAzure
-                        : BitmapDescriptor.hueViolet,
-                  ),
+                  icon: _headingToPickup
+                      ? BitmapDescriptor.personMarker
+                      : BitmapDescriptor.defaultMarkerWithHue(
+                          BitmapDescriptor.hueViolet,
+                        ),
                   infoWindow: InfoWindow(
                       title:
                           _headingToPickup ? 'Punto de recogida' : 'Destino'),
                 ),
+                if (widget.currentLatLng != null)
+                  Marker(
+                    markerId: const MarkerId('driver'),
+                    position: widget.currentLatLng!,
+                    icon: BitmapDescriptor.vehicleMarker,
+                    anchor: const Offset(0.5, 0.5),
+                    infoWindow: const InfoWindow(title: 'Tu vehiculo'),
+                  ),
               },
               polylines: {
                 if (_routePoints.length >= 2)
@@ -430,17 +518,7 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
                   const SizedBox(height: 16),
                   Row(
                     children: [
-                      CircleAvatar(
-                        radius: 26,
-                        backgroundColor: AppColors.ink,
-                        child: Text(
-                          initial,
-                          style: const TextStyle(
-                              color: AppColors.paper,
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold),
-                        ),
-                      ),
+                      _passengerAvatar(initial),
                       const SizedBox(width: 14),
                       Expanded(
                         child: Column(

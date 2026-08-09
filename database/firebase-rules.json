@@ -2,7 +2,7 @@
   "rules": {
     "config": {
       ".read": true,
-      "supportPhone": { ".write": "auth != null && auth.token.dashboardUser === true", ".validate": "newData.isString() && newData.val().length > 0" },
+      "supportPhone": { ".write": "auth != null && auth.token.dashboardAdmin === true", ".validate": "newData.isString() && newData.val().length > 0" },
       "driverAppBuild": { ".write": "auth != null && auth.token.dashboardAdmin === true", ".validate": "newData.isNumber() && newData.val() > 0" },
       "passengerAppBuild": { ".write": "auth != null && auth.token.dashboardAdmin === true", ".validate": "newData.isNumber() && newData.val() > 0" },
       "dashboardName": { ".write": "auth != null && auth.token.dashboardAdmin === true", ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 60" },
@@ -39,10 +39,12 @@
       "$other": { ".validate": false }
     },
     "drivers": {
-      ".read": "auth != null",
+      ".read": "auth != null && auth.token.dashboardUser === true && auth.token.dashboardRole !== 'COORDINATOR'",
       ".indexOn": ["status", "approvalStatus"],
       "$driverId": {
-        ".write": "auth != null && auth.uid === $driverId",
+        ".read": "auth != null && (auth.uid === $driverId || (auth.token.dashboardUser === true && auth.token.dashboardRole !== 'COORDINATOR'))",
+        ".write": "auth != null && auth.uid === $driverId && !data.exists() && newData.child('approvalStatus').val() === 'pending_review'",
+        ".validate": "newData.hasChildren(['email', 'name', 'age', 'phone', 'dni', 'plate', 'vehicleBrand', 'vehicleType', 'vehicleColor', 'vehicleSeats', 'approvalStatus', 'registeredAt', 'documentsSubmittedAt'])",
         "email": { ".validate": "newData.isString() && newData.val().length > 0 && (data.parent().child('approvalStatus').val() != 'rejected' || newData.val() == data.val())" },
         "name": { ".validate": "newData.isString() && newData.val().length > 0 && (data.parent().child('approvalStatus').val() != 'rejected' || newData.val() == data.val())" },
         "age": { ".validate": "newData.isNumber() && newData.val() > 17 && newData.val() < 100 && (data.parent().child('approvalStatus').val() != 'rejected' || newData.val() == data.val())" },
@@ -53,49 +55,55 @@
         "vehicleSeats": { ".validate": "newData.isNumber() && ((newData.parent().child('vehicleType').val() == 'Auto' && newData.val() >= 1 && newData.val() <= 4) || (newData.parent().child('vehicleType').val() == 'SUV' && newData.val() >= 5 && newData.val() <= 7) || (newData.parent().child('vehicleType').val() == 'Mini van' && newData.val() >= 8 && newData.val() <= 17) || (newData.parent().child('vehicleType').val() == 'Van' && newData.val() >= 18 && newData.val() <= 20) || (newData.parent().child('vehicleType').val() == 'Mini bus' && newData.val() >= 21 && newData.val() <= 38) || (newData.parent().child('vehicleType').val() == 'Bus' && newData.val() >= 39 && newData.val() <= 45)) && (data.parent().child('approvalStatus').val() != 'rejected' || newData.val() == data.val())" },
         "phone": { ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || newData.val() == data.val())" },
         "dni": { ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || newData.val() == data.val())" },
-        "profilePhotoUrl": { ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || data.parent().child('rejectionFieldKeys').val() == null || data.parent().child('rejectionFieldKeys').val().contains('profile'))" },
-        "dniDocUrl": { ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || data.parent().child('rejectionFieldKeys').val() == null || data.parent().child('rejectionFieldKeys').val().contains('dni'))" },
-        "dniFrontDocUrl": { ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || data.parent().child('rejectionFieldKeys').val() == null || data.parent().child('rejectionFieldKeys').val().contains('dni'))" },
-        "dniBackDocUrl": { ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || data.parent().child('rejectionFieldKeys').val() == null || data.parent().child('rejectionFieldKeys').val().contains('dni'))" },
-        "licenseDocUrl": { ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || data.parent().child('rejectionFieldKeys').val() == null || data.parent().child('rejectionFieldKeys').val().contains('license'))" },
-        "soatDocUrl": { ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || data.parent().child('rejectionFieldKeys').val() == null || data.parent().child('rejectionFieldKeys').val().contains('soat'))" },
-        "circulationCardDocUrl": { ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || data.parent().child('rejectionFieldKeys').val() == null || data.parent().child('rejectionFieldKeys').val().contains('circulationCard'))" },
-        "technicalReviewDocUrl": { ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || data.parent().child('rejectionFieldKeys').val() == null || data.parent().child('rejectionFieldKeys').val().contains('technicalReview'))" },
-        "criminalRecordDocUrl": { ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || data.parent().child('rejectionFieldKeys').val() == null || data.parent().child('rejectionFieldKeys').val().contains('criminalRecord'))" },
-        "workCertificateDocUrl": { ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || data.parent().child('rejectionFieldKeys').val() == null || data.parent().child('rejectionFieldKeys').val().contains('workCertificate'))" },
+        "profilePhotoUrl": { ".write": "auth != null && auth.uid === $driverId", ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || data.parent().child('rejectionFieldKeys').val() == null || data.parent().child('rejectionFieldKeys').val().contains('profile'))" },
+        "dniDocUrl": { ".write": "auth != null && auth.uid === $driverId", ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || data.parent().child('rejectionFieldKeys').val() == null || data.parent().child('rejectionFieldKeys').val().contains('dni'))" },
+        "dniFrontDocUrl": { ".write": "auth != null && auth.uid === $driverId", ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || data.parent().child('rejectionFieldKeys').val() == null || data.parent().child('rejectionFieldKeys').val().contains('dni'))" },
+        "dniBackDocUrl": { ".write": "auth != null && auth.uid === $driverId", ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || data.parent().child('rejectionFieldKeys').val() == null || data.parent().child('rejectionFieldKeys').val().contains('dni'))" },
+        "licenseDocUrl": { ".write": "auth != null && auth.uid === $driverId", ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || data.parent().child('rejectionFieldKeys').val() == null || data.parent().child('rejectionFieldKeys').val().contains('license'))" },
+        "soatDocUrl": { ".write": "auth != null && auth.uid === $driverId", ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || data.parent().child('rejectionFieldKeys').val() == null || data.parent().child('rejectionFieldKeys').val().contains('soat'))" },
+        "circulationCardDocUrl": { ".write": "auth != null && auth.uid === $driverId", ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || data.parent().child('rejectionFieldKeys').val() == null || data.parent().child('rejectionFieldKeys').val().contains('circulationCard'))" },
+        "technicalReviewDocUrl": { ".write": "auth != null && auth.uid === $driverId", ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || data.parent().child('rejectionFieldKeys').val() == null || data.parent().child('rejectionFieldKeys').val().contains('technicalReview'))" },
+        "criminalRecordDocUrl": { ".write": "auth != null && auth.uid === $driverId", ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || data.parent().child('rejectionFieldKeys').val() == null || data.parent().child('rejectionFieldKeys').val().contains('criminalRecord'))" },
+        "workCertificateDocUrl": { ".write": "auth != null && auth.uid === $driverId", ".validate": "newData.isString() && (data.parent().child('approvalStatus').val() != 'rejected' || data.parent().child('rejectionFieldKeys').val() == null || data.parent().child('rejectionFieldKeys').val().contains('workCertificate'))" },
         "registeredAt": { ".validate": "newData.isNumber() && (!data.exists() || newData.val() == data.val())" },
-        "documentsSubmittedAt": { ".validate": "newData.isNumber()" },
+        "documentsSubmittedAt": { ".write": "auth != null && auth.uid === $driverId", ".validate": "newData.isNumber()" },
         "profileEditUsed": { ".validate": "newData.isBoolean()" },
         "profileEditedAt": { ".validate": "newData.isNumber()" },
         "approvalStatus": {
-          ".write": "auth != null && (auth.uid === $driverId || auth.token.firebase.sign_in_provider === 'password')",
-          ".validate": "newData.isString() && ((auth.uid === $driverId && newData.val() == 'pending_review' && (!data.exists() || data.val() == 'pending_review' || data.val() == 'rejected')) || (auth.token.firebase.sign_in_provider === 'password' && (newData.val() == 'approved' || newData.val() == 'rejected')))"
+          ".write": "auth != null && (auth.uid === $driverId || auth.token.dashboardAdmin === true)",
+          ".validate": "newData.isString() && ((auth.uid === $driverId && newData.val() == 'pending_review' && (!data.exists() || data.val() == 'pending_review' || data.val() == 'rejected')) || (auth.token.dashboardAdmin === true && (newData.val() == 'approved' || newData.val() == 'rejected')))"
         },
         "rejectionReason": {
-          ".write": "auth != null && auth.token.firebase.sign_in_provider === 'password'",
-          ".validate": "auth != null && auth.token.firebase.sign_in_provider === 'password' && newData.isString()"
+          ".write": "auth != null && auth.token.dashboardAdmin === true",
+          ".validate": "auth != null && auth.token.dashboardAdmin === true && newData.isString()"
         },
         "rejectionFieldKeys": {
-          ".write": "auth != null && auth.token.firebase.sign_in_provider === 'password'",
-          ".validate": "auth != null && auth.token.firebase.sign_in_provider === 'password' && newData.isString()"
+          ".write": "auth != null && auth.token.dashboardAdmin === true",
+          ".validate": "auth != null && auth.token.dashboardAdmin === true && newData.isString()"
         },
         "reviewedAt": {
-          ".write": "auth != null && auth.token.firebase.sign_in_provider === 'password'",
-          ".validate": "auth != null && auth.token.firebase.sign_in_provider === 'password' && newData.isNumber()"
+          ".write": "auth != null && auth.token.dashboardAdmin === true",
+          ".validate": "auth != null && auth.token.dashboardAdmin === true && newData.isNumber()"
         },
         "reviewedBy": {
-          ".write": "auth != null && auth.token.firebase.sign_in_provider === 'password'",
-          ".validate": "auth != null && auth.token.firebase.sign_in_provider === 'password' && newData.isString()"
+          ".write": "auth != null && auth.token.dashboardAdmin === true",
+          ".validate": "auth != null && auth.token.dashboardAdmin === true && newData.isString()"
         },
         "lat": { ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90 && root.child('drivers').child($driverId).child('approvalStatus').val() == 'approved'" },
         "lng": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180 && root.child('drivers').child($driverId).child('approvalStatus').val() == 'approved'" },
+        "heading": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 360 && root.child('drivers').child($driverId).child('approvalStatus').val() == 'approved'" },
         "lastUpdate": { ".validate": "newData.isNumber() && root.child('drivers').child($driverId).child('approvalStatus').val() == 'approved'" },
         "status": {
           ".validate": "newData.isString() && (newData.val() == 'busy' || newData.val() == 'online') && root.child('drivers').child($driverId).child('approvalStatus').val() == 'approved'"
         },
         "currentTripId": { ".validate": "newData.isString() && root.child('drivers').child($driverId).child('approvalStatus').val() == 'approved'" },
-        "fcmToken": { ".validate": "newData.isString()" },
-        "activeSessionId": { ".validate": "newData.isString()" },
+        "turno_activo": { ".validate": "newData.isBoolean()" },
+        "estado_conexion": { ".validate": "newData.isString() && (newData.val() == 'ONLINE' || newData.val() == 'OFFLINE')" },
+        "ultima_conexion": { ".validate": "newData.isNumber()" },
+        "ultimo_motivo_desconexion": { ".validate": "newData.isString() && (newData.val() == 'MANUAL' || newData.val() == 'HEARTBEAT' || newData.val() == 'ADMIN')" },
+        "ultimo_alerta_desconexion_at": { ".validate": "newData.isNumber()" },
+        "fcmToken": { ".write": "auth != null && auth.uid === $driverId", ".validate": "newData.isString()" },
+        "activeSessionId": { ".write": "auth != null && auth.uid === $driverId", ".validate": "newData.isString()" },
         "assignedPlace": {
           ".write": "auth != null && auth.token.dashboardAdmin === true",
           "name": { ".validate": "newData.isString()" },
@@ -105,27 +113,53 @@
         "$other": { ".validate": false }
       }
     },
-    "passengers": {
-      ".read": "auth != null",
-      "$passengerId": {
-        ".write": "auth != null && auth.uid === $passengerId",
-        "name": { ".validate": "newData.isString() && newData.val().length > 0" },
-        "phone": { ".validate": "newData.isString()" },
-        "credentialPhotoUrl": { ".validate": "newData.isString()" },
-        "registeredAt": { ".validate": "newData.isNumber()" },
-        "fcmToken": { ".validate": "newData.isString()" },
+    "driverLocations": {
+      ".read": false,
+      ".indexOn": ["lastUpdate"],
+      "$driverId": {
+        ".read": "auth != null && (auth.uid === $driverId || (auth.token.dashboardUser === true && auth.token.dashboardRole !== 'COORDINATOR') || (root.child('drivers').child($driverId).child('currentTripId').isString() && root.child('trips').child(root.child('drivers').child($driverId).child('currentTripId').val()).child('driverId').val() === $driverId && root.child('trips').child(root.child('drivers').child($driverId).child('currentTripId').val()).child('passengerId').val() === auth.uid && root.child('trips').child(root.child('drivers').child($driverId).child('currentTripId').val()).child('status').val().matches(/^(accepted|arrived_at_pickup|in_progress)$/)))",
+        ".write": false,
+        "lat": { ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90" },
+        "lng": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180" },
+        "heading": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 360" },
+        "lastUpdate": { ".validate": "newData.isNumber()" },
         "$other": { ".validate": false }
       }
     },
+    "passengers": {
+      ".read": "auth != null && auth.token.dashboardUser === true && auth.token.dashboardRole !== 'COORDINATOR'",
+      "$passengerId": {
+        ".read": "auth != null && (auth.uid === $passengerId || (auth.token.dashboardUser === true && auth.token.dashboardRole !== 'COORDINATOR'))",
+        ".write": false,
+        "fcmToken": {
+          ".write": "auth != null && auth.uid === $passengerId",
+          ".validate": "newData.isString() && newData.val().length > 0"
+        },
+        "$other": { ".write": false, ".validate": false }
+      }
+    },
+    "passengerAccess": {
+      "$passengerId": {
+        ".read": "auth != null && (auth.uid === $passengerId || auth.token.dashboardAdmin === true)",
+        ".write": false,
+        "$other": { ".validate": false }
+      }
+    },
+    "passengerInvites": {
+      ".read": false,
+      ".write": false
+    },
     "trips": {
-      ".read": "auth != null && auth.token.firebase.sign_in_provider === 'password'",
-      ".indexOn": ["passengerId", "driverId", "requestedAt", "status"],
+      ".read": "auth != null && auth.token.dashboardUser === true && auth.token.dashboardRole !== 'COORDINATOR'",
+      ".indexOn": ["passengerId", "driverId", "dispatcherUid", "requestedAt", "status"],
       "$tripId": {
-        ".read": "auth != null && (data.child('passengerId').val() === auth.uid || data.child('driverId').val() === auth.uid)",
-        ".write": "auth != null && ((!data.exists() && newData.child('passengerId').val() === auth.uid && (newData.child('status').val() === 'searching' || newData.child('status').val() === 'scheduled')) || (data.exists() && data.child('passengerId').val() === auth.uid && !data.child('status').val().matches(/^(completed|cancelled)$/) && (newData.child('status').val() === data.child('status').val() || (newData.child('status').val() === 'cancelled' && !data.child('status').val().matches(/^(in_progress|completed|cancelled)$/)))) || (data.exists() && data.child('driverId').val() === auth.uid && newData.child('status').val() !== 'cancelled') || (data.exists() && auth.token.firebase.sign_in_provider === 'password'))",
+        ".read": "auth != null && (data.child('passengerId').val() === auth.uid || data.child('driverId').val() === auth.uid || (auth.token.dashboardUser === true && auth.token.dashboardRole !== 'COORDINATOR'))",
+        ".write": "auth != null && ((!data.exists() && newData.child('passengerId').val() === auth.uid && auth.token.dashboardRole !== 'COORDINATOR' && ((root.child('passengerAccess').child(auth.uid).child('status').val() === 'authorized' && (root.child('passengerAccess').child(auth.uid).child('legacy').val() === true || root.child('passengerAccess').child(auth.uid).child('expiresAt').val() > now)) || root.child('passengers').child(auth.uid).child('registeredAt').val() < 1786084297175) && (newData.child('status').val() === 'searching' || newData.child('status').val() === 'scheduled')) || (data.exists() && data.child('passengerId').val() === auth.uid && !data.child('status').val().matches(/^(completed|cancelled)$/) && (newData.child('status').val() === data.child('status').val() || (newData.child('status').val() === 'cancelled' && !data.child('status').val().matches(/^(in_progress|completed|cancelled)$/)) || (data.child('status').val() === 'no_drivers_available' && newData.child('status').val() === 'searching'))) || (data.exists() && auth.token.dashboardUser === true && auth.token.dashboardRole !== 'COORDINATOR'))",
+        ".validate": "auth.token.dashboardUser === true || ((!data.exists() && !newData.child('driverId').exists() && !newData.child('driverName').exists() && !newData.child('driverPhone').exists() && !newData.child('driverPlate').exists() && !newData.child('driverPhotoUrl').exists() && !newData.child('vehicleBrand').exists() && !newData.child('vehicleType').exists() && !newData.child('vehicleColor').exists() && !newData.child('vehicleSeats').exists() && !newData.child('assignedAt').exists() && !newData.child('acceptedAt').exists() && !newData.child('arrivedAt').exists() && !newData.child('inProgressAt').exists() && !newData.child('completedAt').exists() && !newData.child('dispatcherUid').exists() && !newData.child('dispatcherSedeId').exists() && !newData.child('dispatcherSedeType').exists() && !newData.child('dispatcherSedeName').exists() && !newData.child('createdByRole').exists()) || (data.exists() && newData.child('driverId').val() == data.child('driverId').val() && newData.child('driverName').val() == data.child('driverName').val() && newData.child('driverPhone').val() == data.child('driverPhone').val() && newData.child('driverPlate').val() == data.child('driverPlate').val() && newData.child('driverPhotoUrl').val() == data.child('driverPhotoUrl').val() && newData.child('vehicleBrand').val() == data.child('vehicleBrand').val() && newData.child('vehicleType').val() == data.child('vehicleType').val() && newData.child('vehicleColor').val() == data.child('vehicleColor').val() && newData.child('vehicleSeats').val() == data.child('vehicleSeats').val() && newData.child('assignedAt').val() == data.child('assignedAt').val() && newData.child('acceptedAt').val() == data.child('acceptedAt').val() && newData.child('arrivedAt').val() == data.child('arrivedAt').val() && newData.child('inProgressAt').val() == data.child('inProgressAt').val() && newData.child('completedAt').val() == data.child('completedAt').val() && newData.child('dispatcherUid').val() == data.child('dispatcherUid').val() && newData.child('dispatcherSedeId').val() == data.child('dispatcherSedeId').val() && newData.child('dispatcherSedeType').val() == data.child('dispatcherSedeType').val() && newData.child('dispatcherSedeName').val() == data.child('dispatcherSedeName').val() && newData.child('createdByRole').val() == data.child('createdByRole').val()))",
         "passengerId": { ".validate": "newData.isString() && (!data.exists() || newData.val() == data.val())" },
         "passengerName": { ".validate": "newData.isString()" },
         "passengerPhone": { ".validate": "newData.isString()" },
+        "passengerPhotoUrl": { ".validate": "newData.isString()" },
         "passengerCount": { ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 45 && (!data.exists() || newData.val() == data.val())" },
         "pickupLat": { ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90 && (!data.exists() || newData.val() == data.val())" },
         "pickupLng": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180 && (!data.exists() || newData.val() == data.val())" },
@@ -138,6 +172,7 @@
         "driverName": { ".validate": "newData.isString()" },
         "driverPhone": { ".validate": "newData.isString()" },
         "driverPlate": { ".validate": "newData.isString()" },
+        "driverPhotoUrl": { ".validate": "newData.isString()" },
         "vehicleBrand": { ".validate": "newData.isString()" },
         "vehicleType": { ".validate": "newData.isString()" },
         "vehicleColor": { ".validate": "newData.isString()" },
@@ -145,7 +180,7 @@
         "rejectedDriverIds": {
           "$rejectedId": { ".validate": "newData.isBoolean()" }
         },
-        "requestedAt": { ".validate": "newData.isNumber() && (!data.exists() || newData.val() == data.val())" },
+        "requestedAt": { ".validate": "newData.isNumber() && (!data.exists() || newData.val() == data.val() || (data.parent().child('status').val() == 'no_drivers_available' && newData.parent().child('status').val() == 'searching'))" },
         "scheduledPickupLabel": { ".validate": "newData.isString()" },
         "scheduledPickupAt": { ".validate": "newData.isNumber() && (!data.exists() || newData.val() == data.val())" },
         "assignedAt": { ".validate": "newData.isNumber()" },
@@ -156,16 +191,47 @@
         "cancelledAt": { ".validate": "newData.isNumber()" },
         "cancelledBy": { ".validate": "newData.isString()" },
         "cancelReason": { ".validate": "newData.isString()" },
+        "dispatcherUid": { ".validate": "newData.isString() && (!data.exists() || newData.val() == data.val())" },
+        "dispatcherSedeId": { ".validate": "newData.isString()" },
+        "dispatcherSedeType": { ".validate": "newData.isString()" },
+        "dispatcherSedeName": { ".validate": "newData.isString()" },
+        "createdByRole": { ".validate": "newData.isString()" },
         "$other": { ".validate": false }
+      }
+    },
+    "coordinatorTrips": {
+      "$coordinatorUid": {
+        ".read": "auth != null && ((auth.uid === $coordinatorUid && auth.token.dashboardRole === 'COORDINATOR') || auth.token.dashboardAdmin === true)",
+        ".write": false,
+        "$tripId": { ".validate": "newData.hasChildren(['dispatcherUid', 'pickupAddress', 'destinationAddress', 'status', 'requestedAt'])" }
       }
     },
     "tripHistory": {
       ".read": "auth != null && auth.token.dashboardAdmin === true",
+      ".indexOn": ["driverId", "completedAt", "cancelledAt", "archivedAt"],
       ".write": false
+    },
+    "driverTripHistory": {
+      "$driverId": {
+        ".read": "auth != null && (auth.uid === $driverId || auth.token.dashboardAdmin === true)",
+        ".write": false,
+        "$tripId": {
+          ".validate": "newData.hasChildren(['driverId', 'pickupAddress', 'destinationAddress', 'status', 'requestedAt'])"
+        }
+      }
     },
     "driverConnectionHistory": {
       ".read": "auth != null && auth.token.dashboardAdmin === true",
       ".write": false
+    },
+    "prematureDisconnectAlerts": {
+      ".read": "auth != null && auth.token.dashboardAdmin === true",
+      ".indexOn": ["createdAt"],
+      ".write": false,
+      "$alertId": {
+        ".validate": "newData.hasChildren(['driverId', 'driverName', 'driverPlate', 'disconnectedAt', 'createdAt', 'reason', 'status'])",
+        "$other": { ".validate": true }
+      }
     }
   }
 }

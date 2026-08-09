@@ -13,6 +13,16 @@ class TripStateConflictException implements Exception {
   String toString() => message;
 }
 
+class TripActionRejectedException implements Exception {
+  final String message;
+  final int? distanceMeters;
+
+  const TripActionRejectedException(this.message, {this.distanceMeters});
+
+  @override
+  String toString() => message;
+}
+
 /// Lee/escribe el nodo `trips/{tripId}` y el `status`/`currentTripId` del
 /// conductor en `drivers/{uid}`. El emparejamiento automatico (elegir al
 /// conductor mas cercano y asignarlo, sin pedir confirmacion) lo hace Cloud
@@ -71,6 +81,13 @@ class TripService {
         currentStatus: data['currentStatus']?.toString(),
       );
     }
+    if (response.statusCode == 422) {
+      throw TripActionRejectedException(
+        data['error']?.toString() ??
+            'No se puede confirmar esta accion todavia.',
+        distanceMeters: (data['distanceMeters'] as num?)?.round(),
+      );
+    }
     if (response.statusCode != 200) {
       throw Exception(data['error']?.toString() ??
           'El servidor rechazo el avance del viaje (${response.statusCode}).');
@@ -81,18 +98,21 @@ class TripService {
   /// conserva la carrera contra una asignacion y registra cada desconexion.
   static Future<void> setAvailability(String uid,
       {required bool online}) async {
-    final auth = await AuthService.currentSession();
+    final auth =
+        await AuthService.currentSession().timeout(const Duration(seconds: 10));
     final uri = Uri.parse(
       '${AppConfig.cloudFunctionsBaseUrl}/setDriverAvailability',
     );
-    final response = await http.post(
-      uri,
-      headers: {
-        'Authorization': 'Bearer ${auth['idToken']}',
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({'uid': uid, 'online': online}),
-    );
+    final response = await http
+        .post(
+          uri,
+          headers: {
+            'Authorization': 'Bearer ${auth['idToken']}',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({'uid': uid, 'online': online}),
+        )
+        .timeout(const Duration(seconds: 15));
     final payload = jsonDecode(response.body);
     final data = payload is Map
         ? Map<String, dynamic>.from(payload)

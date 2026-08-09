@@ -2,7 +2,7 @@
 // (Firebase Console > Configuracion del proyecto > General / Cuentas de servicio).
 class AppConfig {
   static const String firebaseApiKey =
-      'AIzaSyABbcM0za__wtLsRm3amZa9P10OciEgkBY';
+      'AIzaSyBEGrZ6pl88j_GXExrdepJOvNiVA7UjoNQ';
   static const String firebaseDbUrl =
       'https://rastreoflota-53052-default-rtdb.firebaseio.com';
   static const String firebaseStorageBucket =
@@ -28,6 +28,15 @@ class AppConfig {
   // El numero real es editable desde el dashboard (Configuracion) y se
   // guarda en Firebase -- ver services/support_config_service.dart.
   static const String supportPhone = '+51929125443';
+
+  // Paginas publicas requeridas por Google Play y accesibles desde la app.
+  // Se publican junto con el hosting existente de pasajeros; no se crea ni
+  // se reutiliza ningun dominio de la tienda.
+  static const String privacyPolicyUrl =
+      'https://rastreoflota-53052.web.app/privacy-policy.html';
+  static const String deleteAccountUrl =
+      'https://rastreoflota-53052.web.app/delete-account.html';
+  static const String supportEmail = 'manuel_cortezballardo@outlook.com';
 
   // Chequeo de version: config/driverAppBuild en Firebase (numero) contra
   // PackageInfo.buildNumber (el "+N" de este pubspec.yaml) -- si el remoto

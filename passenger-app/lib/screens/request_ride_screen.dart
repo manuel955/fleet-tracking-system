@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../services/directions_service.dart';
+import '../services/map_adapter.dart';
 import '../services/passenger_service.dart';
 import '../services/places_service.dart';
 import '../services/trip_service.dart';
@@ -38,8 +38,9 @@ class RequestRideScreen extends StatefulWidget {
 }
 
 class _RequestRideScreenState extends State<RequestRideScreen> {
-  GoogleMapController? _mapController;
-  LatLng _pickup = const LatLng(19.4326, -99.1332);
+  MapboxMapController? _mapController;
+  // Lima como respaldo hasta que el GPS entregue la ubicacion real.
+  LatLng _pickup = const LatLng(-12.0464, -77.0428);
   String _pickupLabel = 'Mi ubicación actual';
   LatLng? _destination;
   String? _destinationLabel;
@@ -243,7 +244,9 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
               size: 16,
               color: selected
                   ? AppColors.paper
-                  : (dimmed ? AppColors.muted.withValues(alpha: .45) : AppColors.ink),
+                  : (dimmed
+                        ? AppColors.muted.withValues(alpha: .45)
+                        : AppColors.ink),
             ),
             const SizedBox(width: 8),
             Text(
@@ -253,7 +256,9 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
                 fontWeight: FontWeight.w600,
                 color: selected
                     ? AppColors.paper
-                    : (dimmed ? AppColors.muted.withValues(alpha: .45) : AppColors.ink),
+                    : (dimmed
+                          ? AppColors.muted.withValues(alpha: .45)
+                          : AppColors.ink),
               ),
             ),
           ],
@@ -321,7 +326,7 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
           // Se queda con la etiqueta generica si el geocoding falla.
         }
       }
-      final profile = await PassengerService.cachedProfile();
+      final profile = await PassengerService.loadProfile();
       final tripId = await TripService.requestRide(
         pickupLat: _pickup.latitude,
         pickupLng: _pickup.longitude,
@@ -332,6 +337,7 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
         destinationAddress: _destinationLabel,
         passengerName: profile?['name'] ?? 'Pasajero',
         passengerPhone: profile?['phone'] ?? '',
+        passengerPhotoUrl: profile?['photoUrl'],
         scheduledPickupLabel: _scheduledTime != null
             ? _formatTime12h(_scheduledTime!)
             : null,
@@ -362,7 +368,7 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
                   )
                 : Opacity(
                     opacity: _mapReady ? 1 : 0,
-                    child: GoogleMap(
+                    child: MapboxMapView(
                       initialCameraPosition: CameraPosition(
                         target: _pickup,
                         zoom: 15,
@@ -401,9 +407,7 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
                             });
                             if (_destination != null) _loadRoute();
                           },
-                          icon: BitmapDescriptor.defaultMarkerWithHue(
-                            BitmapDescriptor.hueAzure,
-                          ),
+                          icon: BitmapDescriptor.personMarker,
                           infoWindow: const InfoWindow(
                             title: 'Punto de recogida',
                           ),
@@ -565,11 +569,7 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
       ),
       child: Row(
         children: [
-          const Icon(
-            Icons.people_alt_outlined,
-            size: 20,
-            color: AppColors.ink,
-          ),
+          const Icon(Icons.people_alt_outlined, size: 20, color: AppColors.ink),
           const SizedBox(width: 10),
           const Expanded(
             child: Text(

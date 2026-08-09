@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mb;
 
@@ -139,14 +141,78 @@ class InfoWindow {
 
 class BitmapDescriptor {
   final int color;
-  const BitmapDescriptor._(this.color);
+  final String? glyph;
+  const BitmapDescriptor._(this.color, [this.glyph]);
   static const double hueAzure = 210;
   static const double hueBlue = 240;
   static const double hueViolet = 270;
 
+  static const BitmapDescriptor personMarker = BitmapDescriptor._(
+    0xFF1976D2,
+    'person',
+  );
+  static const BitmapDescriptor vehicleMarker = BitmapDescriptor._(
+    0xFF1976D2,
+    'vehicle',
+  );
+
   static BitmapDescriptor defaultMarkerWithHue(double hue) {
     if (hue >= 250) return const BitmapDescriptor._(0xFF7E57C2);
     return const BitmapDescriptor._(0xFF1976D2);
+  }
+}
+
+class _MapMarkerImageCache {
+  static final Map<String, Future<Uint8List>> _cache = {};
+
+  static Future<Uint8List> bytesFor(String kind) =>
+      _cache.putIfAbsent(kind, () => _build(kind));
+
+  static Future<Uint8List> _build(String kind) async {
+    const size = 72.0;
+    final recorder = ui.PictureRecorder();
+    final canvas =
+        ui.Canvas(recorder, const ui.Rect.fromLTWH(0, 0, size, size));
+    final blue = ui.Paint()..color = const Color(0xFF1976D2);
+    final white = ui.Paint()..color = const Color(0xFFFFFFFF);
+    final dark = ui.Paint()..color = const Color(0xFF17202A);
+
+    canvas.drawCircle(const ui.Offset(size / 2, size / 2), 31, white);
+    if (kind == 'person') {
+      canvas.drawCircle(const ui.Offset(36, 23), 10, dark);
+      canvas.drawRRect(
+        ui.RRect.fromRectAndRadius(
+          const ui.Rect.fromLTWH(18, 35, 36, 22),
+          const ui.Radius.circular(11),
+        ),
+        blue,
+      );
+    } else {
+      canvas.drawRRect(
+        ui.RRect.fromRectAndRadius(
+          const ui.Rect.fromLTWH(8, 30, 56, 24),
+          const ui.Radius.circular(8),
+        ),
+        blue,
+      );
+      final roof = ui.Path()
+        ..moveTo(17, 30)
+        ..lineTo(25, 18)
+        ..lineTo(48, 18)
+        ..lineTo(57, 30)
+        ..close();
+      canvas.drawPath(roof, blue);
+      canvas.drawCircle(const ui.Offset(21, 55), 7, dark);
+      canvas.drawCircle(const ui.Offset(51, 55), 7, dark);
+      canvas.drawCircle(const ui.Offset(21, 55), 3, white);
+      canvas.drawCircle(const ui.Offset(51, 55), 3, white);
+    }
+
+    final image =
+        await recorder.endRecording().toImage(size.toInt(), size.toInt());
+    final data = await image.toByteData(format: ui.ImageByteFormat.png);
+    image.dispose();
+    return data!.buffer.asUint8List();
   }
 }
 
@@ -226,10 +292,13 @@ class _MapboxMapViewState extends State<MapboxMapView> {
   final MapboxMapController _controller = MapboxMapController();
   mb.MapboxMap? _map;
   mb.CircleAnnotationManager? _circleManager;
+  mb.PointAnnotationManager? _pointManager;
   mb.PolylineAnnotationManager? _polylineManager;
   final Map<String, mb.CircleAnnotation> _mapMarkers = {};
+  final Map<String, mb.PointAnnotation> _pointMarkers = {};
   mb.PolylineAnnotation? _routeAnnotation;
   mb.Cancelable? _tapSubscription;
+  mb.Cancelable? _pointTapSubscription;
   mb.Cancelable? _dragSubscription;
   final Map<String, LatLng> _renderedMarkerPositions = {};
   final Map<String, int> _markerAnimationTokens = {};
@@ -249,6 +318,7 @@ class _MapboxMapViewState extends State<MapboxMapView> {
   void dispose() {
     _retryTimer?.cancel();
     _tapSubscription?.cancel();
+    _pointTapSubscription?.cancel();
     _dragSubscription?.cancel();
     _markerAnimationTokens.clear();
     _renderedMarkerPositions.clear();
@@ -343,6 +413,13 @@ class _MapboxMapViewState extends State<MapboxMapView> {
       _circleManager ??= await map.annotations.createCircleAnnotationManager(
         id: 'domain-markers',
       );
+      try {
+        _pointManager ??= await map.annotations.createPointAnnotationManager(
+          id: 'domain-glyph-markers',
+        );
+      } catch (error) {
+        debugPrint('[DriverMap] glyph manager unavailable: $error');
+      }
       _polylineManager ??=
           await map.annotations.createPolylineAnnotationManager(
         id: 'domain-routes',
@@ -358,8 +435,59 @@ class _MapboxMapViewState extends State<MapboxMapView> {
           await circles.delete(_mapMarkers.remove(id)!);
         }
       }
+      for (final id in _pointMarkers.keys.toList()) {
+        if (!incoming.containsKey(id)) {
+          final point = _pointMarkers.remove(id);
+          if (point != null) await _pointManager?.delete(point);
+        }
+      }
       for (final entry in incoming.entries) {
         final marker = entry.value;
+        final glyph = marker.icon?.glyph;
+        if (glyph != null && _pointManager != null) {
+          try {
+            final iconBytes = await _MapMarkerImageCache.bytesFor(glyph);
+            final iconSize = glyph == 'vehicle' ? 0.9 : 0.78;
+            if (_mapMarkers.containsKey(entry.key)) {
+              await circles.delete(_mapMarkers.remove(entry.key)!);
+            }
+            final point = _pointMarkers[entry.key];
+            if (point == null) {
+              _pointMarkers[entry.key] = await _pointManager!.create(
+                mb.PointAnnotationOptions(
+                  geometry: _point(marker.position),
+                  image: iconBytes,
+                  iconSize: iconSize,
+                  iconOpacity: marker.opacity,
+                  isDraggable: marker.draggable,
+                  customData: <String, Object>{'id': entry.key},
+                ),
+              );
+            } else {
+              point
+                ..geometry = _point(marker.position)
+                ..image = iconBytes
+                ..iconSize = iconSize
+                ..iconOpacity = marker.opacity
+                ..isDraggable = marker.draggable;
+              await _pointManager!.update(point);
+            }
+            continue;
+          } catch (error) {
+            debugPrint('[DriverMap] glyph marker failed: $error');
+            final point = _pointMarkers.remove(entry.key);
+            if (point != null) await _pointManager?.delete(point);
+          }
+        }
+        if (glyph != null) {
+          if (_mapMarkers.containsKey(entry.key)) {
+            await circles.delete(_mapMarkers.remove(entry.key)!);
+          }
+        }
+        if (_pointMarkers.containsKey(entry.key)) {
+          final point = _pointMarkers.remove(entry.key);
+          if (point != null) await _pointManager?.delete(point);
+        }
         final annotation = _mapMarkers[entry.key];
         if (annotation == null) {
           _mapMarkers[entry.key] = await circles.create(
@@ -379,12 +507,9 @@ class _MapboxMapViewState extends State<MapboxMapView> {
           annotation.circleColor = marker.icon?.color ?? 0xFF276EF1;
           annotation.circleOpacity = marker.opacity;
           annotation.isDraggable = marker.draggable;
-          unawaited(_animateMarker(
-            entry.key,
-            annotation,
-            circles,
-            marker.position,
-          ));
+          annotation.geometry = _point(marker.position);
+          _renderedMarkerPositions[entry.key] = marker.position;
+          await circles.update(annotation);
         }
       }
       final route = widget.polylines.isEmpty ? null : widget.polylines.first;
@@ -422,6 +547,15 @@ class _MapboxMapViewState extends State<MapboxMapView> {
           if (marker.markerId.value == id) marker.onTap?.call();
         }
       });
+      if (_pointManager != null) {
+        _pointTapSubscription ??= _pointManager!.tapEvents(onTap: (annotation) {
+          final id = annotation.customData?['id']?.toString();
+          if (id == null) return;
+          for (final marker in widget.markers) {
+            if (marker.markerId.value == id) marker.onTap?.call();
+          }
+        });
+      }
       _dragSubscription ??= circles.dragEvents(onEnd: (annotation) {
         final id = annotation.customData?['id']?.toString();
         if (id == null) return;
@@ -434,52 +568,9 @@ class _MapboxMapViewState extends State<MapboxMapView> {
           }
         }
       });
-    } catch (_) {}
-  }
-
-  Future<void> _animateMarker(
-    String id,
-    mb.CircleAnnotation annotation,
-    mb.CircleAnnotationManager circles,
-    LatLng target,
-  ) async {
-    final from = _renderedMarkerPositions[id] ?? target;
-    final token = (_markerAnimationTokens[id] ?? 0) + 1;
-    _markerAnimationTokens[id] = token;
-    if (from.latitude == target.latitude &&
-        from.longitude == target.longitude) {
-      annotation.geometry = _point(target);
-      _renderedMarkerPositions[id] = target;
-      try {
-        await circles.update(annotation);
-      } catch (_) {}
-      return;
-    }
-    const duration = Duration(seconds: 5);
-    final startedAt = DateTime.now();
-
-    while (mounted && _markerAnimationTokens[id] == token) {
-      final progress = (DateTime.now().difference(startedAt).inMicroseconds /
-              duration.inMicroseconds)
-          .clamp(0.0, 1.0)
-          .toDouble();
-      final position = LatLng(
-        from.latitude + (target.latitude - from.latitude) * progress,
-        from.longitude + (target.longitude - from.longitude) * progress,
-      );
-      annotation.geometry = _point(position);
-      try {
-        await circles.update(annotation);
-      } catch (_) {
-        return;
-      }
-      _renderedMarkerPositions[id] = position;
-      if (progress >= 1) break;
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-    }
-
-    if (_markerAnimationTokens[id] == token) {
-      _renderedMarkerPositions[id] = target;
+    } catch (error, stackTrace) {
+      debugPrint('[DriverMap] annotation sync failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
     }
   }
 
@@ -510,9 +601,12 @@ class _MapboxMapViewState extends State<MapboxMapView> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(_error!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.black54)),
+              Text(_error!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.black54)),
               const SizedBox(height: 12),
-              OutlinedButton(onPressed: _retryMap, child: const Text('Reintentar mapa')),
+              OutlinedButton(
+                  onPressed: _retryMap, child: const Text('Reintentar mapa')),
             ],
           ),
         ),
@@ -520,6 +614,11 @@ class _MapboxMapViewState extends State<MapboxMapView> {
     }
     return mb.MapWidget(
       key: ValueKey('driver-map-$_mapAttempt'),
+      // Huawei puede dejar la superficie Virtual Display en blanco o
+      // parcialmente renderizada. Hybrid Composition mantiene el mapa nativo
+      // correctamente compuesto con la interfaz Flutter.
+      // ignore: experimental_member_use
+      androidHostingMode: mb.AndroidPlatformViewHostingMode.HC,
       styleUri: AppConfig.mapboxStyleUri,
       // ignore: deprecated_member_use
       cameraOptions: mb.CameraOptions(

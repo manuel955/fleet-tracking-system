@@ -1,7 +1,8 @@
 import 'dart:async';
+import 'package:geolocator/geolocator.dart';
 import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../services/places_service.dart';
+import '../services/map_adapter.dart';
 import '../theme/app_theme.dart';
 import '../services/trip_service.dart';
 
@@ -9,7 +10,11 @@ class DestinationPickerResult {
   final String description;
   final double lat;
   final double lng;
-  DestinationPickerResult({required this.description, required this.lat, required this.lng});
+  DestinationPickerResult({
+    required this.description,
+    required this.lat,
+    required this.lng,
+  });
 }
 
 /// Pantalla de destino: tarjetas blancas flotantes sobre el mapa (que se ve
@@ -28,14 +33,18 @@ class DestinationPickerScreen extends StatefulWidget {
   });
 
   @override
-  State<DestinationPickerScreen> createState() => _DestinationPickerScreenState();
+  State<DestinationPickerScreen> createState() =>
+      _DestinationPickerScreenState();
 }
 
 class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
-  GoogleMapController? _mapController;
+  MapboxMapController? _mapController;
   final _controller = TextEditingController();
   final _sessionToken = PlacesService.newSessionToken();
   Timer? _debounce;
+  Timer? _reverseDebounce;
+  LatLng? _lastReverseRequested;
+  int _reverseRequestToken = 0;
   List<PlaceSuggestion> _suggestions = [];
   bool _loading = false;
   String? _error;
@@ -76,6 +85,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _reverseDebounce?.cancel();
     _controller.dispose();
     super.dispose();
   }
@@ -87,23 +97,45 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
 
   Future<void> _search(String value) async {
     if (value.trim().isEmpty) {
-      setState(() { _suggestions = []; _error = null; });
+      setState(() {
+        _suggestions = [];
+        _error = null;
+      });
       return;
     }
-    setState(() { _loading = true; _error = null; });
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final results = await PlacesService.autocomplete(value, _sessionToken);
-      if (mounted) setState(() { _suggestions = results; _loading = false; });
+      if (mounted) {
+        setState(() {
+          _suggestions = results;
+          _loading = false;
+        });
+      }
     } catch (e) {
-      if (mounted) setState(() { _loading = false; _error = 'Error al buscar: $e'; });
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = 'Error al buscar: $e';
+        });
+      }
     }
   }
 
   Future<void> _selectSuggestion(PlaceSuggestion suggestion) async {
-    setState(() { _loading = true; _suggestions = []; });
+    setState(() {
+      _loading = true;
+      _suggestions = [];
+    });
     _controller.text = suggestion.description;
     try {
-      final latLng = await PlacesService.getPlaceLatLng(suggestion.placeId, _sessionToken);
+      final latLng = await PlacesService.getPlaceLatLng(
+        suggestion.placeId,
+        _sessionToken,
+      );
       final target = LatLng(latLng.lat, latLng.lng);
       setState(() {
         _loading = false;
@@ -113,7 +145,12 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
       _mapController?.animateCamera(CameraUpdate.newLatLngZoom(target, 16));
       _confirm();
     } catch (e) {
-      if (mounted) setState(() { _loading = false; _error = 'Error al obtener el lugar: $e'; });
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = 'Error al obtener el lugar: $e';
+        });
+      }
     }
   }
 
@@ -179,24 +216,52 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
   }
 
   Future<void> _reverseGeocodePin(LatLng latLng) async {
-    try {
-      final address = await PlacesService.reverseGeocode(latLng.latitude, latLng.longitude);
-      if (!mounted || _pin != latLng) return;
-      setState(() {
-        _pinLabel = address;
-        _controller.text = address;
-      });
-    } catch (_) {
-      if (!mounted || _pin != latLng) return;
-      setState(() => _pinLabel = 'Punto marcado en el mapa');
+    _reverseDebounce?.cancel();
+    final last = _lastReverseRequested;
+    if (last != null &&
+        Geolocator.distanceBetween(
+              last.latitude,
+              last.longitude,
+              latLng.latitude,
+              latLng.longitude,
+            ) <
+            60) {
+      return;
     }
+    final requestToken = ++_reverseRequestToken;
+    _reverseDebounce = Timer(const Duration(milliseconds: 500), () async {
+      try {
+        final address = await PlacesService.reverseGeocode(
+          latLng.latitude,
+          latLng.longitude,
+        );
+        if (!mounted || requestToken != _reverseRequestToken || _pin != latLng) {
+          return;
+        }
+        _lastReverseRequested = latLng;
+        setState(() {
+          _pinLabel = address;
+          _controller.text = address;
+        });
+      } catch (_) {
+        if (!mounted || requestToken != _reverseRequestToken || _pin != latLng) {
+          return;
+        }
+        _lastReverseRequested = latLng;
+        setState(() => _pinLabel = 'Punto marcado en el mapa');
+      }
+    });
   }
 
   void _confirm() {
     if (_pin == null) return;
     Navigator.pop(
       context,
-      DestinationPickerResult(description: _pinLabel ?? 'Destino', lat: _pin!.latitude, lng: _pin!.longitude),
+      DestinationPickerResult(
+        description: _pinLabel ?? 'Destino',
+        lat: _pin!.latitude,
+        lng: _pin!.longitude,
+      ),
     );
   }
 
@@ -210,8 +275,11 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
             Positioned.fill(
               child: Opacity(
                 opacity: _mapReady ? 1 : 0,
-                child: GoogleMap(
-                  initialCameraPosition: CameraPosition(target: widget.initialCenter, zoom: 14),
+                child: MapboxMapView(
+                  initialCameraPosition: CameraPosition(
+                    target: widget.initialCenter,
+                    zoom: 14,
+                  ),
                   onMapCreated: (controller) {
                     _mapController = controller;
                     Future.delayed(const Duration(milliseconds: 300), () {
@@ -231,7 +299,9 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                             position: _pin!,
                             draggable: true,
                             onDragEnd: _onPinDragEnd,
-                            icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet),
+                            icon: BitmapDescriptor.defaultMarkerWithHue(
+                              BitmapDescriptor.hueViolet,
+                            ),
                           ),
                         },
                 ),
@@ -241,7 +311,9 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
             const Positioned.fill(
               child: ColoredBox(
                 color: AppColors.paper,
-                child: Center(child: CircularProgressIndicator(color: AppColors.ink)),
+                child: Center(
+                  child: CircularProgressIndicator(color: AppColors.ink),
+                ),
               ),
             ),
           if (_pinningMode)
@@ -249,7 +321,11 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
               child: Center(
                 child: Transform.translate(
                   offset: const Offset(0, -24),
-                  child: const Icon(Icons.location_on, size: 48, color: AppColors.ink),
+                  child: const Icon(
+                    Icons.location_on,
+                    size: 48,
+                    color: AppColors.ink,
+                  ),
                 ),
               ),
             ),
@@ -257,18 +333,16 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
             Positioned(
               top: MediaQuery.of(context).padding.top + 12,
               left: 16,
-              child: _circleButton(icon: Icons.arrow_back, onPressed: _exitPinningMode),
+              child: _circleButton(
+                icon: Icons.arrow_back,
+                onPressed: _exitPinningMode,
+              ),
             ),
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
               child: _pinningMode
-                  ? Column(
-                      children: [
-                        const Spacer(),
-                        _buildPinningPanel(),
-                      ],
-                    )
+                  ? Column(children: [const Spacer(), _buildPinningPanel()])
                   : Column(
                       children: [
                         _buildTopCard(),
@@ -287,14 +361,26 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
     );
   }
 
-  Widget _circleButton({required IconData icon, required VoidCallback onPressed}) {
+  Widget _circleButton({
+    required IconData icon,
+    required VoidCallback onPressed,
+  }) {
     return Container(
       decoration: const BoxDecoration(
         color: AppColors.paper,
         shape: BoxShape.circle,
-        boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 2))],
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black26,
+            blurRadius: 10,
+            offset: Offset(0, 2),
+          ),
+        ],
       ),
-      child: IconButton(icon: Icon(icon, color: AppColors.ink), onPressed: onPressed),
+      child: IconButton(
+        icon: Icon(icon, color: AppColors.ink),
+        onPressed: onPressed,
+      ),
     );
   }
 
@@ -310,13 +396,20 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
               width: 40,
               height: 4,
               margin: const EdgeInsets.only(bottom: 16),
-              decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(2)),
+              decoration: BoxDecoration(
+                color: Colors.black12,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
           ),
           const Text(
             'Fija tu destino',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black),
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.black,
+            ),
           ),
           const SizedBox(height: 4),
           const Text(
@@ -332,13 +425,19 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
             borderRadius: BorderRadius.circular(12),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-              decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(12)),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(12),
+              ),
               child: Row(
                 children: const [
                   Icon(Icons.square_rounded, size: 14, color: Colors.black87),
                   SizedBox(width: 12),
                   Expanded(
-                    child: Text('¿A dónde vas?', style: TextStyle(color: Colors.black45, fontSize: 15)),
+                    child: Text(
+                      '¿A dónde vas?',
+                      style: TextStyle(color: Colors.black45, fontSize: 15),
+                    ),
                   ),
                   Icon(Icons.search, color: Colors.black45),
                 ],
@@ -375,7 +474,13 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
       decoration: BoxDecoration(
         color: AppColors.paper,
         borderRadius: BorderRadius.circular(20),
-        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 16, offset: Offset(0, 4))],
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black26,
+            blurRadius: 16,
+            offset: Offset(0, 4),
+          ),
+        ],
       ),
       child: child,
     );
@@ -397,7 +502,11 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                 child: Text(
                   'Pedir un viaje',
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.black, fontSize: 18, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                    color: Colors.black,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
               const SizedBox(width: 48),
@@ -420,7 +529,10 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                       Container(
                         width: 8,
                         height: 8,
-                        decoration: const BoxDecoration(color: Colors.black87, shape: BoxShape.circle),
+                        decoration: const BoxDecoration(
+                          color: Colors.black87,
+                          shape: BoxShape.circle,
+                        ),
                       ),
                       Container(width: 1, height: 26, color: Colors.black26),
                       Container(width: 8, height: 8, color: Colors.black87),
@@ -439,7 +551,10 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                               widget.pickupLabel,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: Colors.black87, fontSize: 15),
+                              style: const TextStyle(
+                                color: Colors.black87,
+                                fontSize: 15,
+                              ),
                             ),
                           ),
                         ),
@@ -451,7 +566,10 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
                             child: TextField(
                               controller: _controller,
                               autofocus: true,
-                              style: const TextStyle(color: Colors.black, fontSize: 15),
+                              style: const TextStyle(
+                                color: Colors.black,
+                                fontSize: 15,
+                              ),
                               decoration: const InputDecoration(
                                 hintText: '¿A dónde vas?',
                                 hintStyle: TextStyle(color: Colors.black38),
@@ -486,7 +604,10 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
             foregroundColor: AppColors.paper,
             minimumSize: const Size.fromHeight(52),
           ),
-          child: const Text('Confirmar destino', style: TextStyle(fontWeight: FontWeight.w600)),
+          child: const Text(
+            'Confirmar destino',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
         ),
       ),
     );
@@ -516,12 +637,16 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
       return ListView.separated(
         padding: EdgeInsets.zero,
         itemCount: _suggestions.length,
-        separatorBuilder: (_, _) => const Divider(height: 1, color: Colors.black12),
+        separatorBuilder: (_, _) =>
+            const Divider(height: 1, color: Colors.black12),
         itemBuilder: (context, index) {
           final s = _suggestions[index];
           return ListTile(
             leading: const Icon(Icons.place_outlined, color: Colors.black54),
-            title: Text(s.description, style: const TextStyle(color: Colors.black)),
+            title: Text(
+              s.description,
+              style: const TextStyle(color: Colors.black),
+            ),
             onTap: () => _selectSuggestion(s),
           );
         },
@@ -533,15 +658,23 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
     return FutureBuilder<List<({String label, double lat, double lng})>>(
       future: _recentFuture,
       builder: (context, snapshot) {
-        final recent = snapshot.connectionState == ConnectionState.done ? (snapshot.data ?? []) : <({String label, double lat, double lng})>[];
+        final recent = snapshot.connectionState == ConnectionState.done
+            ? (snapshot.data ?? [])
+            : <({String label, double lat, double lng})>[];
         return ListView(
           padding: EdgeInsets.zero,
           children: [
             ListTile(
-              leading: const Icon(Icons.edit_location_alt_outlined, color: Colors.black87),
+              leading: const Icon(
+                Icons.edit_location_alt_outlined,
+                color: Colors.black87,
+              ),
               title: const Text(
                 'Establece la ubicación en el mapa',
-                style: TextStyle(color: Colors.black, fontWeight: FontWeight.w500),
+                style: TextStyle(
+                  color: Colors.black,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
               onTap: _enterPinningMode,
             ),
@@ -549,12 +682,24 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
               const Divider(height: 1, color: Colors.black12),
               const Padding(
                 padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
-                child: Text('Recientes', style: TextStyle(color: Colors.black54, fontSize: 13, fontWeight: FontWeight.w600)),
+                child: Text(
+                  'Recientes',
+                  style: TextStyle(
+                    color: Colors.black54,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
               for (final r in recent)
                 ListTile(
                   leading: const Icon(Icons.history, color: Colors.black54),
-                  title: Text(r.label, style: const TextStyle(color: Colors.black), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  title: Text(
+                    r.label,
+                    style: const TextStyle(color: Colors.black),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                   onTap: () => _selectRecent(r),
                 ),
             ],

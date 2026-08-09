@@ -6,6 +6,9 @@ plugins {
 }
 
 val fleetKeystorePath = System.getenv("FLEET_KEYSTORE_PATH")
+val fleetKeystorePassword = System.getenv("FLEET_KEYSTORE_PASSWORD") ?: "android"
+val fleetKeyAlias = System.getenv("FLEET_KEY_ALIAS") ?: "androiddebugkey"
+val fleetKeyPassword = System.getenv("FLEET_KEY_PASSWORD") ?: fleetKeystorePassword
 
 android {
     namespace = "com.example.fleet_passenger_app"
@@ -19,8 +22,8 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.fleet_passenger_app"
+        // Package exclusivo de la ficha de pasajeros en Google Play.
+        applicationId = "apl.tucomprass.pasajero"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -33,9 +36,9 @@ android {
         if (!fleetKeystorePath.isNullOrBlank()) {
             create("fleetRelease") {
                 storeFile = file(fleetKeystorePath)
-                storePassword = "android"
-                keyAlias = "androiddebugkey"
-                keyPassword = "android"
+                storePassword = fleetKeystorePassword
+                keyAlias = fleetKeyAlias
+                keyPassword = fleetKeyPassword
             }
         }
     }

@@ -50,12 +50,15 @@ del conductor asignado
   `ref.transaction()` — ese metodo demostro no ser confiable dentro de Cloud
   Functions (el callback siempre recibia `null`). Si agregas mas escrituras
   condicionales de servidor, replica el patron ETag.
+- Las políticas de turno/GPS y ciclo de viaje viven en módulos puros usados
+  por los handlers. Ejecuta `npm test`, `npm run test:coverage` y
+  `npm run test:rules` dentro de `functions/`; el último comando valida las
+  reglas reales de Realtime Database y Storage contra los emuladores.
 - Al asignar, envia un push FCM **solo-datos** (prioridad alta) al
   `fcmToken` del conductor: sin bloque `notification`, para que el handler
   de background de la app corra siempre y reproduzca la alerta completa
   (canal con sonido/vibracion + voz TTS) aunque la app este cerrada.
-- Runtime Node.js 20 (1a gen). **Deprecado: migrar a Node 22 antes del
-  2026-10-30** o los deploys dejaran de funcionar.
+- Runtime Node.js 22 (1a gen), configurado en `functions/package.json`.
 
 ### driver-app/
 - Cuenta con correo/contraseña (Firebase Auth, sesion persistente entre
@@ -112,6 +115,9 @@ Storage y Cloud Messaging.
    cd fleet-tracking-system
    firebase deploy --only database,storage,functions
    ```
+   En Windows, si el primer análisis de Functions vence durante un arranque
+   en frío, repite con `$env:FUNCTIONS_DISCOVERY_TIMEOUT='30'`; este ajuste
+   amplía solo el tiempo de descubrimiento del CLI y no cambia el runtime.
 2. **Mapbox**: crea tokens publicos separados para dashboard, conductor y
    pasajero. El uso requiere acceso a Maps SDK, Directions API, Matrix API y
    Geocoding API. Las rutas y ETA usan el perfil `driving`, sin datos de
@@ -131,12 +137,15 @@ Storage y Cloud Messaging.
       flutter pub get
       flutter build apk --release --dart-define=MAPBOX_ACCESS_TOKEN=pk....
       ```
-   - Los builds release firman con la llave debug (ver TODO en
-     `build.gradle.kts`); genera una keystore propia antes de distribuir.
+   - Los workflows de GitHub generan APK/AAB con la keystore fija guardada en
+     secretos. Los builds locales usan la llave debug solo como respaldo para
+     desarrollo cuando no se definen las variables `FLEET_KEYSTORE_*`.
  4. **Dashboard**: configura `dashboard/js/firebase-config.js`; genera el
    runtime de Mapbox desde la raiz con `node scripts/inject-mapbox-config.mjs`
-    usando `MAPBOX_ACCESS_TOKEN` y `MAPBOX_STYLE_URI`, sirve la carpeta como
-    sitio estatico y entra con el usuario admin de Email/Password.
+    usando `MAPBOX_ACCESS_TOKEN` y `MAPBOX_STYLE_URI`. Puede publicarse en el
+    target Firebase Hosting `dashboard` con `scripts/publicar-dashboard-firebase.ps1`
+    o en el VPS mediante el flujo descrito abajo. Entra con un usuario de
+    Email/Password que tenga los custom claims del dashboard.
  5. **Web de pasajeros**: Firebase Hosting sirve `passenger-app/build/web`.
     Debes compilarlo con el token real de Mapbox antes de desplegarlo:
     ```powershell
@@ -153,22 +162,30 @@ Storage y Cloud Messaging.
 
 ### Publicar el dashboard en el VPS
 
-En esta maquina, despues de modificar cualquier archivo dentro de
-`dashboard/`, ejecuta desde la raiz del repositorio:
+El dashboard se publica en el Caddy que ya forma parte del stack del VPS.
+Despues de modificar cualquier archivo dentro de `dashboard/`, ejecuta desde
+la raiz del repositorio:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\publicar-dashboard.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\publicar-dashboard.ps1 `
+  -Dominio apl.tucomprass.com
 ```
 
-El script publica solamente el dashboard en `http://86.48.19.189:8081/`,
-sin reiniciar los contenedores ni modificar los servicios de Sistema POS.
-Tambien puedes hacer doble clic en `scripts/publicar-dashboard.cmd`.
+El script solo reinicia el contenedor Caddy para añadir la ruta del dashboard;
+no reinicia backend, frontend ni base de datos de Sistema POS. Guarda respaldos
+del `Caddyfile` y del override antes de actualizar la ruta.
+
+Antes de ejecutarlo, crea en el proveedor DNS un registro `A` para
+`apl.tucomprass.com` apuntando a `86.48.19.189`. Caddy emitira el certificado
+HTTPS automaticamente cuando el registro ya se haya propagado.
 
 ## Notas de seguridad para produccion
 
-- Cualquier usuario autenticado (incluso anonimo) puede leer `/drivers`;
-  restringe la lectura con custom claims de admin antes de exponer datos
-  reales.
+- `/drivers` y los datos administrativos requieren custom claims del dashboard.
+  La app de pasajeros solo puede leer `driverLocations/{driverId}` mientras
+  ese conductor está asignado a uno de sus viajes activos.
+- Los coordinadores no pueden leer perfiles completos ni documentos de
+  conductores/pasajeros; su acceso se limita al flujo de despacho de su sede.
 - Usa tokens publicos `pk.*` con restricciones de URL/origen para el dashboard
   y tokens separados por app. Nunca pongas un token secreto `sk.*` en cliente.
 - Sirve el dashboard solo detras de HTTPS y acceso controlado (expone

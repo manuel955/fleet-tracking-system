@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'destination_picker_screen.dart';
 import 'preset_places_screen.dart';
 import 'request_ride_screen.dart';
 import '../services/trip_service.dart';
+import '../services/map_adapter.dart';
 import '../widgets/support_button.dart';
 import '../theme/app_theme.dart';
 
@@ -36,8 +36,9 @@ class HomeTabScreen extends StatefulWidget {
 }
 
 class _HomeTabScreenState extends State<HomeTabScreen> {
-  GoogleMapController? _mapController;
-  LatLng _pickup = const LatLng(19.4326, -99.1332);
+  MapboxMapController? _mapController;
+  // Lima como respaldo hasta que el GPS entregue la ubicacion real.
+  LatLng _pickup = const LatLng(-12.0464, -77.0428);
   bool _loadingLocation = true;
   bool _showMap = false;
   bool _mapReady = false;
@@ -45,7 +46,7 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
   @override
   void initState() {
     super.initState();
-    _locateMe();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _locateMe());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) setState(() => _showMap = true);
     });
@@ -53,11 +54,33 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
 
   Future<void> _locateMe() async {
     try {
+      final continueLocation = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Usar tu ubicación'),
+          content: const Text(
+            'APL Logistics usa tu ubicación mientras la app está en uso para proponer el punto de recogida y mostrar el avance de tu viaje. No usamos la ubicación del pasajero en segundo plano.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Ahora no'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Continuar'),
+            ),
+          ],
+        ),
+      );
+      if (continueLocation != true || !mounted) return;
       final permission = await Permission.locationWhenInUse.request();
       if (permission.isGranted) {
         final position = await Geolocator.getCurrentPosition();
         if (mounted) {
-          setState(() => _pickup = LatLng(position.latitude, position.longitude));
+          setState(
+            () => _pickup = LatLng(position.latitude, position.longitude),
+          );
           _mapController?.animateCamera(CameraUpdate.newLatLng(_pickup));
         }
       }
@@ -112,12 +135,20 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Cancelar viaje programado'),
-        content: const Text('¿Seguro que quieres cancelar este viaje programado?'),
+        content: const Text(
+          '¿Seguro que quieres cancelar este viaje programado?',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('No')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('No'),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Sí, cancelar', style: TextStyle(color: Colors.red)),
+            child: const Text(
+              'Sí, cancelar',
+              style: TextStyle(color: Colors.red),
+            ),
           ),
         ],
       ),
@@ -128,7 +159,9 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
       widget.onScheduledTripCancelled?.call();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
       }
     }
   }
@@ -139,11 +172,16 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
       children: [
         Positioned.fill(
           child: (_loadingLocation || !_showMap)
-              ? const Center(child: CircularProgressIndicator(color: AppColors.ink))
+              ? const Center(
+                  child: CircularProgressIndicator(color: AppColors.ink),
+                )
               : Opacity(
                   opacity: _mapReady ? 1 : 0,
-                  child: GoogleMap(
-                    initialCameraPosition: CameraPosition(target: _pickup, zoom: 15),
+                  child: MapboxMapView(
+                    initialCameraPosition: CameraPosition(
+                      target: _pickup,
+                      zoom: 15,
+                    ),
                     onMapCreated: (controller) {
                       _mapController = controller;
                       Future.delayed(const Duration(milliseconds: 300), () {
@@ -154,7 +192,10 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
                     myLocationButtonEnabled: false,
                     zoomControlsEnabled: false,
                     markers: {
-                      Marker(markerId: const MarkerId('pickup'), position: _pickup),
+                      Marker(
+                        markerId: const MarkerId('pickup'),
+                        position: _pickup,
+                      ),
                     },
                   ),
                 ),
@@ -163,7 +204,9 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
           const Positioned.fill(
             child: ColoredBox(
               color: AppColors.paper,
-              child: Center(child: CircularProgressIndicator(color: AppColors.ink)),
+              child: Center(
+                child: CircularProgressIndicator(color: AppColors.ink),
+              ),
             ),
           ),
         Positioned(
@@ -172,19 +215,27 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
           right: 0,
           child: SafeArea(
             child: Padding(
-              padding: const EdgeInsets.all(20),
+              // Reserva la columna derecha para Soporte; asi nunca tapa la
+              // barra de busqueda en telefonos estrechos.
+              padding: const EdgeInsets.fromLTRB(20, 20, 120, 0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: const Text(
                       'Pedir un viaje',
-                      style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -192,11 +243,20 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
                     onTap: _openDestinationSearch,
                     borderRadius: BorderRadius.circular(14),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 16,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(14),
-                        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 12, offset: Offset(0, 2))],
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Colors.black26,
+                            blurRadius: 12,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
                       ),
                       child: Row(
                         children: [
@@ -204,7 +264,10 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
                           const SizedBox(width: 12),
                           Text(
                             '¿A dónde vas?',
-                            style: const TextStyle(fontSize: 16, color: AppColors.muted),
+                            style: const TextStyle(
+                              fontSize: 16,
+                              color: AppColors.muted,
+                            ),
                           ),
                         ],
                       ),
@@ -249,7 +312,8 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
                       maxLines: 1,
                       style: TextStyle(fontSize: 13),
                     ),
-                    onPressed: () => _openPresetPlaces('Sedes deportivas', 'sportVenues'),
+                    onPressed: () =>
+                        _openPresetPlaces('Sedes deportivas', 'sportVenues'),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -284,7 +348,13 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
-        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 12, offset: Offset(0, 2))],
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black26,
+            blurRadius: 12,
+            offset: Offset(0, 2),
+          ),
+        ],
       ),
       child: Row(
         children: [
@@ -292,7 +362,9 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
           const SizedBox(width: 12),
           Expanded(
             child: Text(
-              label != null ? 'Viaje programado para las $label' : 'Tienes un viaje programado',
+              label != null
+                  ? 'Viaje programado para las $label'
+                  : 'Tienes un viaje programado',
               style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
             ),
           ),

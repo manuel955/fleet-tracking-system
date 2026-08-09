@@ -7,6 +7,8 @@ import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart'
     show MapboxOptions;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import 'config.dart';
 import 'screens/active_trip_screen.dart';
 import 'screens/driver_registration_screen.dart';
@@ -16,6 +18,7 @@ import 'services/auth_service.dart';
 import 'services/driver_profile_service.dart';
 import 'services/location_service.dart';
 import 'services/map_adapter.dart';
+import 'services/manufacturer_protection_service.dart';
 import 'services/notification_service.dart';
 import 'services/notification_inbox_service.dart';
 import 'services/push_service.dart';
@@ -147,12 +150,6 @@ class _UpdateGateState extends State<_UpdateGate> {
   }
 }
 
-class LogEntry {
-  final String message;
-  final DateTime time;
-  LogEntry(this.message, this.time);
-}
-
 class DriverHomePage extends StatefulWidget {
   const DriverHomePage({super.key});
 
@@ -160,17 +157,18 @@ class DriverHomePage extends StatefulWidget {
   State<DriverHomePage> createState() => _DriverHomePageState();
 }
 
-class _DriverHomePageState extends State<DriverHomePage> {
+class _DriverHomePageState extends State<DriverHomePage>
+    with WidgetsBindingObserver {
   MapboxMapController? _mapController;
   LatLng? _currentLatLng;
 
   bool _tracking = false;
+  bool _startingShift = false;
   bool _loading = true;
   String? _driverId;
   PermissionStatus? _alwaysStatus;
   PermissionStatus? _notificationStatus;
-
-  final List<LogEntry> _logs = [];
+  PermissionStatus? _batteryStatus;
 
   // Sesion por correo/contraseña (persiste entre aperturas de la app, a
   // diferencia del DNI+rostro anterior que se re-pedia siempre).
@@ -206,20 +204,17 @@ class _DriverHomePageState extends State<DriverHomePage> {
   // sesion solo (ver _checkSessionStillActive).
   Timer? _sessionCheckTimer;
   bool _locationReadInFlight = false;
+  bool _shiftReconcileInFlight = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _bootstrap();
     _loadAppVersion();
 
     if (_supportsMobileServices) {
       try {
-        FlutterBackgroundService().on('debug_log').listen((event) {
-          if (event == null) return;
-          _addLog(event['message'] as String);
-        });
-
         FlutterBackgroundService().on('location_update').listen((event) {
           if (event == null) return;
           final lat = (event['lat'] as num?)?.toDouble();
@@ -234,6 +229,50 @@ class _DriverHomePageState extends State<DriverHomePage> {
       } catch (_) {
         // En previews de escritorio y tests el plugin no tiene plataforma.
       }
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!_supportsMobileServices) return;
+
+    if (state == AppLifecycleState.resumed) {
+      if (_tracking) {
+        unawaited(_setScreenAwake(true));
+        unawaited(_resumeTrackingAfterLifecycle());
+      }
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      // La pantalla solo debe permanecer encendida mientras el conductor
+      // esta usando la app. El servicio foreground continua en segundo plano.
+      unawaited(_setScreenAwake(false));
+    }
+  }
+
+  Future<void> _setScreenAwake(bool enabled) async {
+    if (!_supportsMobileServices) return;
+    try {
+      await WakelockPlus.toggle(enable: enabled);
+    } catch (_) {
+      // El bloqueo de pantalla es una mejora; nunca debe impedir el GPS.
+    }
+  }
+
+  Future<void> _resumeTrackingAfterLifecycle() async {
+    if (!_tracking || _driverId == null) return;
+    try {
+      if (!await LocationService.isRunning()) {
+        await LocationService.start();
+      }
+      final position = await LocationService.sendCurrentLocationNow();
+      if (position != null) {
+        _applyCurrentLocation(
+          LatLng(position.latitude, position.longitude),
+          recenter: false,
+        );
+      }
+    } catch (error) {
+      _addLog('No se pudo reanudar el GPS al volver a la app: $error');
     }
   }
 
@@ -262,6 +301,8 @@ class _DriverHomePageState extends State<DriverHomePage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(_setScreenAwake(false));
     _tripPollTimer?.cancel();
     _sessionCheckTimer?.cancel();
     _nameCtrl.dispose();
@@ -304,18 +345,35 @@ class _DriverHomePageState extends State<DriverHomePage> {
       FirebaseMessaging.onMessage.listen((message) async {
         switch (message.data['type']) {
           case 'trip_assigned':
-            _pollForTrip();
+            await NotificationService.showTripAssigned(
+              tripId: message.data['tripId']?.toString(),
+              scheduledPickupLabel:
+                  message.data['scheduledPickupLabel']?.toString(),
+            );
+            await _pollForTrip(suppressAssignedNotification: true);
             break;
           case 'trip_updated':
+            await NotificationService.showTripUpdated(
+              tripId: message.data['tripId']?.toString(),
+              destinationAddress:
+                  message.data['destinationAddress']?.toString(),
+            );
             await _pollForTrip();
-            if (_tripId == message.data['tripId'] &&
-                const ['accepted', 'arrived_at_pickup', 'in_progress']
-                    .contains(_tripData?['status'])) {
-              NotificationService.showTripUpdated(
-                destinationAddress:
-                    message.data['destinationAddress']?.toString(),
-              );
+            break;
+          case 'trip_cancelled':
+            await NotificationService.showTripCancelled(
+              tripId: message.data['tripId']?.toString(),
+              reason: message.data['reason']?.toString(),
+            );
+            if (_tripId == message.data['tripId']) {
+              if (mounted) {
+                setState(() {
+                  _tripId = null;
+                  _tripData = null;
+                });
+              }
             }
+            await _pollForTrip();
             break;
           case 'place_assigned':
             _refreshAssignedPlace(
@@ -461,8 +519,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
       _sessionCheckTimer = Timer.periodic(
           const Duration(seconds: 20), (_) => _checkSessionStillActive());
 
-      if (profile['approvalStatus'] == 'approved' &&
-          _supportsMobileServices) {
+      if (profile['approvalStatus'] == 'approved' && _supportsMobileServices) {
         // La pantalla obtiene una posicion inicial propia y no depende de
         // que el servicio en segundo plano ya haya emitido su primer evento.
         unawaited(_refreshCurrentLocation());
@@ -497,7 +554,10 @@ class _DriverHomePageState extends State<DriverHomePage> {
   Future<void> _lockUnapprovedDriver(String uid) async {
     _tripPollTimer?.cancel();
     _tripPollTimer = null;
-    if (_supportsMobileServices) LocationService.stop();
+    if (_supportsMobileServices) {
+      LocationService.stop();
+      unawaited(_setScreenAwake(false));
+    }
 
     if (_tracking || _tripId != null || _tripData != null) {
       if (mounted) {
@@ -550,6 +610,12 @@ class _DriverHomePageState extends State<DriverHomePage> {
               .toString();
           await NotificationService.showPlaceAssigned(newPlace, type);
         }
+
+        // El worker de heartbeat puede haber cerrado la conexion del servidor
+        // mientras este telefono seguia mostrando el turno localmente activo.
+        // Si el conductor no pulso "Terminar turno", vuelve a registrar la
+        // disponibilidad y reanuda el servicio GPS sin pedir otra accion.
+        await _reconcileRemoteShift(profile);
       }
       final remoteSessionId = profile?['activeSessionId'] as String?;
       final localSessionId = await SessionService.localSessionId();
@@ -563,6 +629,62 @@ class _DriverHomePageState extends State<DriverHomePage> {
       }
     } catch (_) {
       // Fallo de red puntual: se reintenta en el siguiente tick.
+    }
+  }
+
+  bool _remoteShiftIsActive(Map<String, dynamic> profile) {
+    return profile['turno_activo'] == true ||
+        profile['status'] == 'online' ||
+        profile['status'] == 'busy';
+  }
+
+  bool _remoteConnectionIsActive(Map<String, dynamic> profile) {
+    return profile['status'] == 'online' || profile['status'] == 'busy';
+  }
+
+  Future<void> _reconcileRemoteShift(Map<String, dynamic> profile) async {
+    if (_driverId == null ||
+        !_tracking ||
+        _startingShift ||
+        _shiftReconcileInFlight) {
+      return;
+    }
+
+    final shiftIsActive = _remoteShiftIsActive(profile);
+    final heartbeatClosedShift =
+        profile['ultimo_motivo_desconexion'] == 'HEARTBEAT';
+    final needsReconnect = shiftIsActive &&
+        (!_remoteConnectionIsActive(profile) ||
+            profile['estado_conexion'] != 'ONLINE');
+
+    // Un cierre manual no debe reabrirse silenciosamente. Solo se recuperan
+    // turnos que el conductor dejo abiertos o que cerro el detector automatico
+    // por perdida temporal del heartbeat.
+    if (!needsReconnect && !(heartbeatClosedShift && !shiftIsActive)) {
+      if (!shiftIsActive) {
+        if (_supportsMobileServices) {
+          LocationService.stop();
+          unawaited(_setScreenAwake(false));
+        }
+        if (mounted) setState(() => _tracking = false);
+        _addLog('El servidor cerro el turno; el rastreo se detuvo.');
+      }
+      return;
+    }
+
+    _shiftReconcileInFlight = true;
+    try {
+      await TripService.setAvailability(_driverId!, online: true);
+      if (mounted) setState(() => _tracking = true);
+      _addLog('Conexion GPS recuperada automaticamente.');
+      if (_supportsMobileServices) {
+        await LocationService.start();
+        unawaited(LocationService.sendCurrentLocationNow());
+      }
+    } catch (error) {
+      _addLog('No se pudo recuperar la conexion GPS: $error');
+    } finally {
+      _shiftReconcileInFlight = false;
     }
   }
 
@@ -597,7 +719,7 @@ class _DriverHomePageState extends State<DriverHomePage> {
     return keys.any((key) => current[key] != next[key]);
   }
 
-  Future<void> _pollForTrip() async {
+  Future<void> _pollForTrip({bool suppressAssignedNotification = false}) async {
     if (_driverId == null || _driverProfile?['approvalStatus'] != 'approved') {
       return;
     }
@@ -652,9 +774,11 @@ class _DriverHomePageState extends State<DriverHomePage> {
       // background (push_service.dart) y avisar aqui tambien duplicaria la
       // voz. El estado del viaje se actualiza igual, para que al volver a
       // la app ya este la pantalla del viaje activo.
-      if (_tripId != tripId &&
+      if (!suppressAssignedNotification &&
+          _tripId != tripId &&
           WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
         NotificationService.showTripAssigned(
+          tripId: tripId,
           scheduledPickupLabel: trip['scheduledPickupLabel'] as String?,
         );
       }
@@ -711,9 +835,13 @@ class _DriverHomePageState extends State<DriverHomePage> {
     await Permission.locationWhenInUse.status;
     final always = await Permission.locationAlways.status;
     final notification = await Permission.notification.status;
+    final battery = defaultTargetPlatform == TargetPlatform.android
+        ? await Permission.ignoreBatteryOptimizations.status
+        : null;
     setState(() {
       _alwaysStatus = always;
       _notificationStatus = notification;
+      _batteryStatus = battery;
     });
   }
 
@@ -744,6 +872,42 @@ class _DriverHomePageState extends State<DriverHomePage> {
       return false;
     }
 
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      final battery = await Permission.ignoreBatteryOptimizations.request();
+      if (!battery.isGranted) {
+        _addLog(
+            'Ahorro de baterÃ­a activo: el sistema puede suspender el rastreo al bloquear la pantalla.');
+      }
+    }
+
+    final alwaysStatus = await Permission.locationAlways.status;
+    if (!alwaysStatus.isGranted) {
+      if (!mounted) return false;
+      final understood = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Ubicación durante el turno'),
+          content: const Text(
+            'Para enviar la posición del vehículo al centro de operaciones y al pasajero asignado, APL Logistics necesita tu ubicación precisa durante el turno, incluso cuando minimices la app o bloquees la pantalla. No usamos esta ubicación para publicidad.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Ahora no'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Continuar'),
+            ),
+          ],
+        ),
+      );
+      if (understood != true || !mounted) {
+        await _refreshPermissionStatus();
+        return false;
+      }
+    }
+
     final always = await Permission.locationAlways.request();
     await _refreshPermissionStatus();
 
@@ -760,22 +924,35 @@ class _DriverHomePageState extends State<DriverHomePage> {
   // permiso falta, queda mostrado en la barra de estado y el conductor
   // puede reintentar con el boton "Reintentar inicio de turno".
   Future<void> _startShift({bool resume = false}) async {
-    if (_driverId == null) return;
-
-    final granted = await _requestPermissions();
-    if (!granted) {
-      if (!resume && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text(
-                  'Concede los permisos necesarios para iniciar el turno.')),
-        );
-      }
-      if (mounted) setState(() => _tracking = false);
-      return;
-    }
+    if (_driverId == null || _startingShift || (!resume && _tracking)) return;
+    if (mounted) setState(() => _startingShift = true);
 
     try {
+      final granted = await _requestPermissions();
+      if (!granted) {
+        if (!resume && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+                content: Text(
+                    'Concede los permisos necesarios para iniciar el turno.')),
+          );
+        }
+        if (mounted) {
+          setState(() {
+            _tracking = false;
+            _startingShift = false;
+          });
+        }
+        return;
+      }
+
+      // Huawei/EMUI, MIUI, ColorOS y One UI aplican reglas adicionales que
+      // Android no expone por permisos. Se muestran una vez por fabricante
+      // para que el foreground service sobreviva con la pantalla apagada.
+      if (defaultTargetPlatform == TargetPlatform.android && mounted) {
+        await ManufacturerProtectionService.showIfNeeded(context);
+      }
+
       await TripService.setAvailability(_driverId!, online: true);
     } catch (error) {
       _addLog('No se pudo iniciar la disponibilidad: $error');
@@ -786,32 +963,51 @@ class _DriverHomePageState extends State<DriverHomePage> {
                   'No se pudo iniciar la disponibilidad. Revisa tu conexión e intenta nuevamente.')),
         );
       }
+      if (mounted) {
+        setState(() {
+          _tracking = false;
+          _startingShift = false;
+        });
+      }
       return;
     }
 
+    if (!mounted) return;
+    setState(() {
+      _tracking = true;
+      _startingShift = false;
+    });
+    unawaited(_setScreenAwake(true));
+    _addLog(resume
+        ? 'Turno reanudado: el cierre de la app no lo termino.'
+        : 'Turno iniciado: rastreo GPS cada 5 segundos.');
+
     if (_supportsMobileServices) {
+      // El servicio y el primer heartbeat no deben bloquear la interfaz.
+      unawaited(_startLocationTracking());
+    }
+  }
+
+  Future<void> _startLocationTracking() async {
+    try {
       await LocationService.start();
-      // Publica un heartbeat desde el isolate visible de inmediato. El
-      // servicio en segundo plano toma los siguientes envios cada 5s, pero
-      // el dashboard ya puede mostrar al conductor como conectado sin
-      // esperar a que Android termine de levantarlo.
+      // Publica el primer heartbeat sin retrasar el cambio visual a
+      // "En linea". El servicio en segundo plano continua cada 5 segundos.
       final reportedPosition = await LocationService.sendCurrentLocationNow();
       if (reportedPosition != null) {
         _applyCurrentLocation(
           LatLng(reportedPosition.latitude, reportedPosition.longitude),
         );
       } else {
-        // Aunque Firebase no responda, intenta mostrar la ubicacion local
-        // para que el conductor pueda seguir usando el mapa.
-        await _refreshCurrentLocation();
+        // El envio a Firebase puede completar sin devolver la posicion. La
+        // pantalla igualmente necesita un fix local para pintar el vehiculo
+        // y calcular la ruta del viaje.
+        await _refreshCurrentLocation(recenter: false);
         _addLog('Turno conectado, pero aun no se pudo publicar el GPS.');
       }
+    } catch (error) {
+      _addLog('No se pudo iniciar el rastreo GPS: $error');
     }
-    if (!mounted) return;
-    setState(() => _tracking = true);
-    _addLog(resume
-        ? 'Turno reanudado: el cierre de la app no lo termino.'
-        : 'Turno iniciado: rastreo GPS cada 5 segundos.');
   }
 
   // Unica forma de detener el rastreo: el conductor termina su turno a
@@ -841,7 +1037,10 @@ class _DriverHomePageState extends State<DriverHomePage> {
       }
     }
 
-    if (_supportsMobileServices) LocationService.stop();
+    if (_supportsMobileServices) {
+      LocationService.stop();
+      unawaited(_setScreenAwake(false));
+    }
     _addLog('Turno terminado por el conductor.');
 
     setState(() => _tracking = false);
@@ -896,6 +1095,66 @@ class _DriverHomePageState extends State<DriverHomePage> {
     await _clearSessionAndReturnToLogin();
   }
 
+  Future<void> _deleteAccount() async {
+    final activeStatus = _tripData?['status'] as String?;
+    if (_tripId != null &&
+        (activeStatus == 'accepted' ||
+            activeStatus == 'arrived_at_pickup' ||
+            activeStatus == 'in_progress')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content:
+                Text('Finaliza el viaje activo antes de eliminar la cuenta.')),
+      );
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Eliminar cuenta y datos'),
+        content: const Text(
+          'Se eliminarán tu perfil, documentos, ubicación y registros de viajes identificables. Esta acción no se puede deshacer.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Eliminar todo',
+                style: TextStyle(color: AppColors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      if (_driverId != null) {
+        await TripService.setAvailability(_driverId!, online: false);
+      }
+      if (_supportsMobileServices) {
+        LocationService.stop();
+        unawaited(_setScreenAwake(false));
+      }
+      await NotificationService.cancelAll();
+      await AuthService.deleteCurrentAccount();
+      await SessionService.clear();
+      await _clearSessionAndReturnToLogin();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text(error.toString().replaceFirst('Exception: ', ''))),
+      );
+    }
+  }
+
+  Future<void> _openLegalUrl(String url) async {
+    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  }
+
   // Limpieza compartida por el cierre de sesion voluntario ("Cerrar
   // sesión") y el forzado (otro telefono tomo la cuenta): detiene el
   // rastreo GPS y sus timers, cancela notificaciones, borra la sesion
@@ -907,7 +1166,10 @@ class _DriverHomePageState extends State<DriverHomePage> {
     _sessionCheckTimer?.cancel();
     _sessionCheckTimer = null;
 
-    if (_supportsMobileServices) LocationService.stop();
+    if (_supportsMobileServices) {
+      LocationService.stop();
+      unawaited(_setScreenAwake(false));
+    }
     await NotificationService.cancelAll();
     await AuthService.logout();
     await SessionService.clear();
@@ -932,10 +1194,9 @@ class _DriverHomePageState extends State<DriverHomePage> {
   }
 
   void _addLog(String message) {
-    setState(() {
-      _logs.insert(0, LogEntry(message, DateTime.now()));
-      if (_logs.length > 60) _logs.removeLast();
-    });
+    // El registro ya no se muestra en la interfaz. No reconstruir el mapa
+    // cada vez que llega un evento del servicio GPS.
+    debugPrint('[Driver] $message');
   }
 
   void _applyCurrentLocation(LatLng location, {bool recenter = true}) {
@@ -1048,6 +1309,36 @@ class _DriverHomePageState extends State<DriverHomePage> {
                         child: const Text('Cerrar sesión',
                             style: TextStyle(fontWeight: FontWeight.w600)),
                       ),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton(
+                        onPressed: _deleteAccount,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.red.shade700,
+                          side: BorderSide(color: Colors.red.shade300),
+                          minimumSize: const Size.fromHeight(48),
+                        ),
+                        child: const Text('Eliminar cuenta y datos'),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 16,
+                      children: [
+                        TextButton(
+                          onPressed: () =>
+                              _openLegalUrl(AppConfig.privacyPolicyUrl),
+                          child: const Text('Privacidad'),
+                        ),
+                        TextButton(
+                          onPressed: () =>
+                              _openLegalUrl(AppConfig.deleteAccountUrl),
+                          child: const Text('Ayuda para eliminar cuenta'),
+                        ),
+                      ],
                     ),
                     if (_versionLabel.isNotEmpty) ...[
                       const SizedBox(height: 10),
@@ -1220,6 +1511,10 @@ class _DriverHomePageState extends State<DriverHomePage> {
     if (_alwaysStatus?.isGranted != true) {
       return 'Ubicación no está en "Todo el tiempo": el rastreo puede detenerse al minimizar. Toca para revisar.';
     }
+    if (defaultTargetPlatform == TargetPlatform.android &&
+        _batteryStatus?.isGranted != true) {
+      return 'El ahorro de baterÃ­a puede suspender el rastreo. Permite que APL Logistics funcione sin restricciones.';
+    }
     return null;
   }
 
@@ -1293,6 +1588,26 @@ class _DriverHomePageState extends State<DriverHomePage> {
   }
 
   Widget _buildShiftButton() {
+    if (_startingShift) {
+      return SizedBox(
+        width: double.infinity,
+        child: ElevatedButton.icon(
+          onPressed: null,
+          icon: const SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          label: const Text('Iniciando turno...',
+              style: TextStyle(fontWeight: FontWeight.w600)),
+          style: ElevatedButton.styleFrom(
+            minimumSize: const Size.fromHeight(56),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+        ),
+      );
+    }
     if (_tracking) {
       return SizedBox(
         width: double.infinity,
@@ -1406,8 +1721,10 @@ class _DriverHomePageState extends State<DriverHomePage> {
         final location = _currentLatLng;
         if (location != null) unawaited(_moveMapTo(location));
       },
-      myLocationEnabled: true,
-      myLocationButtonEnabled: true,
+      // El marcador propio usa el icono de vehiculo; el punto azul nativo
+      // duplicaria la posicion del conductor.
+      myLocationEnabled: false,
+      myLocationButtonEnabled: false,
       zoomControlsEnabled: false,
       // Deja libre la franja de arriba (perfil/estado) y la de abajo
       // (boton de turno) para que el control nativo de "mi ubicacion" no
@@ -1419,6 +1736,8 @@ class _DriverHomePageState extends State<DriverHomePage> {
               Marker(
                 markerId: const MarkerId('me'),
                 position: _currentLatLng!,
+                icon: BitmapDescriptor.vehicleMarker,
+                anchor: const Offset(0.5, 0.5),
               ),
             },
     );

@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&family=Instrument+Sans:wght@500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=20260804d" />
+  <link rel="stylesheet" href="css/style.css?v=20260807a" />
 </head>
 <body>
 
@@ -79,6 +79,8 @@
         <button type="button" class="filter-pill" data-filter="available">Disponibles</button>
         <button type="button" class="filter-pill" data-filter="to_pickup">En ruta</button>
         <button type="button" class="filter-pill" data-filter="on_trip">En viaje</button>
+        <button type="button" class="filter-pill" data-filter="connecting">Conectando GPS</button>
+        <button type="button" class="filter-pill" data-filter="suspended">Sin se&ntilde;al</button>
         <button type="button" class="filter-pill" data-filter="offline">Desconectados</button>
         </div>
       </details>
@@ -125,6 +127,8 @@
         <span class="legend-item"><span class="legend-dot state-available"></span>Disponible</span>
         <span class="legend-item"><span class="legend-dot state-to_pickup"></span>En ruta de recogida</span>
         <span class="legend-item"><span class="legend-dot state-on_trip"></span>En viaje</span>
+        <span class="legend-item"><span class="legend-dot state-connecting"></span>Conectando GPS</span>
+        <span class="legend-item"><span class="legend-dot state-suspended"></span>Sin se&ntilde;al</span>
         <span class="legend-item"><span class="legend-dot state-offline"></span>Desconectado</span>
       </footer>
     </main>
@@ -218,6 +222,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
 <script>
   // Render de PDFs subidos como documento (SOAT, licencia, etc.) a imagen,
   // para incrustarlos en el reporte igual que las fotos.
@@ -227,16 +232,17 @@
 <link href="https://api.mapbox.com/mapbox-gl-js/v3.25.0/mapbox-gl.css" rel="stylesheet" />
 <script src="js/firebase-config.js"></script>
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.25.0/mapbox-gl.js"></script>
-<script src="js/mapbox-runtime-config.js"></script>
-<script src="js/mapbox-runtime-config.generated.js"></script>
+<script src="js/mapbox-runtime-config.js?v=20260807a"></script>
+<script src="js/mapbox-runtime-config.generated.js?v=20260807a"></script>
 <script src="js/mapbox-config.js"></script>
 <script src="js/mapbox-adapter.js?v=20260804d"></script>
-<script src="js/app.js?v=20260804e"></script>
+<script src="js/driver-state.js?v=20260807b"></script>
+<script src="js/app.js?v=20260807f"></script>
 <script src="js/attendance-utils.js?v=20260805a"></script>
-<script src="js/drivers-admin.js?v=20260804c"></script>
+<script src="js/drivers-admin.js?v=20260807f"></script>
 <script src="js/operation-alerts.js?v=20260804c"></script>
-<script src="js/settings.js?v=20260804a"></script>
+    <script src="js/settings.js?v=20260807d"></script>
 <script src="js/places-admin.js"></script>
-<script src="js/coordinator-dashboard.js?v=20260804c"></script>
+<script src="js/coordinator-dashboard.js?v=20260805d"></script>
 </body>
 </html>
