@@ -8,6 +8,7 @@ const STALE_LOCATION_MS = 3 * 60 * 1000;
 const SEARCH_RADII_KM = [2, 4];
 
 const DB_URL = 'https://rastreoflota-53052-default-rtdb.firebaseio.com';
+const DB_REQUEST_TIMEOUT_MS = 10000;
 const VEHICLE_CATEGORIES = [
   { type: 'Auto', maxSeats: 4 },
   { type: 'SUV', maxSeats: 7 },
@@ -34,6 +35,53 @@ async function accessToken() {
   return token.access_token;
 }
 
+async function readWithEtag(path, token) {
+  const response = await fetch(`${DB_URL}/${path}.json`, {
+    headers: { Authorization: `Bearer ${token}`, 'X-Firebase-ETag': 'true' },
+    signal: AbortSignal.timeout(DB_REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`No se pudo leer ${path} (${response.status}).`);
+  const etag = response.headers.get('ETag');
+  if (!etag) throw new Error(`Firebase no devolvio ETag para ${path}.`);
+  return { etag, value: await response.json() };
+}
+
+async function putIfUnchanged(path, value, etag, token) {
+  return fetch(`${DB_URL}/${path}.json`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'if-match': etag,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(value),
+    signal: AbortSignal.timeout(DB_REQUEST_TIMEOUT_MS),
+  });
+}
+
+async function updateTripWhileDispatchableWithToken(tripId, buildUpdate, token) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const { etag, value: current } = await readWithEtag(`trips/${tripId}`, token);
+    if (!current || !['searching', 'scheduled'].includes(current.status)) return false;
+    const response = await putIfUnchanged(
+      `trips/${tripId}`,
+      { ...current, ...buildUpdate(current) },
+      etag,
+      token,
+    );
+    if (response.ok) return true;
+    if (response.status !== 412) {
+      throw new Error(`No se pudo actualizar el viaje ${tripId} (${response.status}).`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 80 * (attempt + 1)));
+  }
+  throw new Error(`El viaje ${tripId} cambio varias veces durante la asignacion.`);
+}
+
+async function updateTripWhileDispatchable(tripId, buildUpdate) {
+  return updateTripWhileDispatchableWithToken(tripId, buildUpdate, await accessToken());
+}
+
 // Reclama al conductor de forma atomica usando el mecanismo de concurrencia
 // optimista de la API REST de Firebase (ETag + header "if-match"), en vez
 // de `ref.transaction()` del SDK -- ese metodo resulto no ser confiable
@@ -42,15 +90,8 @@ async function accessToken() {
 // otra asignacion ya modifico al conductor entre el GET y el PUT, Firebase
 // responde 412 y sabemos que perdimos la carrera, sin arriesgar una doble
 // asignacion.
-async function claimDriver(driverId, tripId) {
-  const token = await accessToken();
-  const headers = { Authorization: `Bearer ${token}` };
-
-  const getRes = await fetch(`${DB_URL}/drivers/${driverId}.json`, {
-    headers: { ...headers, 'X-Firebase-ETag': 'true' },
-  });
-  const etag = getRes.headers.get('ETag');
-  const current = await getRes.json();
+async function claimDriverWithToken(driverId, tripId, token, now = Date.now()) {
+  const { etag, value: current } = await readWithEtag(`drivers/${driverId}`, token);
   if (
     !current ||
     current.status !== 'online' ||
@@ -59,13 +100,20 @@ async function claimDriver(driverId, tripId) {
     return false;
   }
 
-  const updated = { ...current, status: 'busy', currentTripId: tripId };
-  const putRes = await fetch(`${DB_URL}/drivers/${driverId}.json`, {
-    method: 'PUT',
-    headers: { ...headers, 'if-match': etag, 'Content-Type': 'application/json' },
-    body: JSON.stringify(updated),
-  });
-  return putRes.status === 200;
+  const updated = {
+    ...current,
+    status: 'busy',
+    currentTripId: tripId,
+    assignmentClaimedAt: now,
+  };
+  const putRes = await putIfUnchanged(`drivers/${driverId}`, updated, etag, token);
+  if (putRes.status === 200) return true;
+  if (putRes.status === 412) return false;
+  throw new Error(`No se pudo reclamar el conductor ${driverId} (${putRes.status}).`);
+}
+
+async function claimDriver(driverId, tripId) {
+  return claimDriverWithToken(driverId, tripId, await accessToken());
 }
 
 function categoryIndexForDriver(driver) {
@@ -148,10 +196,10 @@ async function attemptAssignment(
   const requestedPassengers = Number(passengerCount);
   const stats = { onlineApproved: 0, freshLocation: 0, capacity: 0 };
   if (!Number.isInteger(requestedPassengers) || requestedPassengers < 1 || requestedPassengers > 45) {
-    await db.ref(`trips/${tripId}`).update({
+    await updateTripWhileDispatchable(tripId, () => ({
       status: 'no_drivers_available',
       noDriversReason: buildNoDriversReason(requestedPassengers, stats),
-    });
+    }));
     return;
   }
   const snap = await db
@@ -189,69 +237,70 @@ async function attemptAssignment(
   )) {
     for (const c of rankedCandidates) {
       const claimed = await claimDriver(c.id, tripId);
-    if (claimed) {
-      // Asignacion automatica: no hay paso de aceptar/rechazar por parte
-      // del conductor, el viaje queda "accepted" de una vez.
-      const now = Date.now();
-      await db.ref(`trips/${tripId}`).update({
-        status: 'accepted',
-        driverId: c.id,
-        driverName: c.driver.name || '',
-        driverPhone: c.driver.phone || '',
-        driverPlate: c.driver.plate || '',
-        driverPhotoUrl: c.driver.profilePhotoUrl || '',
-        vehicleBrand: c.driver.vehicleBrand || '',
-        vehicleType: c.driver.vehicleType || '',
-        vehicleColor: c.driver.vehicleColor || '',
-        vehicleSeats: c.driver.vehicleSeats || 0,
-        passengerCount: requestedPassengers,
-        noDriversReason: null,
-        assignedAt: now,
-        acceptedAt: now,
-      });
-      // Aviso push al conductor asignado (best-effort: si falla, la
-      // asignacion ya quedo escrita y el polling de la app la detecta igual).
-      // Si el viaje era programado, se manda la hora para que la app la
-      // diga en la notificacion/voz en vez del generico "nuevo servicio".
-      await sendPush(
-        c.driver.fcmToken,
-        'trip_assigned',
-        scheduledPickupLabel ? { tripId, scheduledPickupLabel } : { tripId }
-      );
-      return;
-    }
+      if (claimed) {
+        // El conductor se reclama primero, pero la asignacion del viaje tambien
+        // es condicional. Si el pasajero cancelo o otro worker gano la carrera,
+        // liberamos este conductor en vez de revivir/sobrescribir el viaje.
+        let assigned = false;
+        try {
+          const now = Date.now();
+          assigned = await updateTripWhileDispatchable(tripId, () => ({
+            status: 'accepted',
+            driverId: c.id,
+            driverName: c.driver.name || '',
+            driverPhone: c.driver.phone || '',
+            driverPlate: c.driver.plate || '',
+            driverPhotoUrl: c.driver.profilePhotoUrl || '',
+            vehicleBrand: c.driver.vehicleBrand || '',
+            vehicleType: c.driver.vehicleType || '',
+            vehicleColor: c.driver.vehicleColor || '',
+            vehicleSeats: c.driver.vehicleSeats || 0,
+            passengerCount: requestedPassengers,
+            noDriversReason: null,
+            assignedAt: now,
+            acceptedAt: now,
+          }));
+        } catch (error) {
+          await releaseDriver(c.id, tripId);
+          throw error;
+        }
+        if (!assigned) {
+          await releaseDriver(c.id, tripId);
+          return;
+        }
+        // Aviso push al conductor asignado (best-effort: si falla, la
+        // asignacion ya quedo escrita y el polling de la app la detecta igual).
+        // Si el viaje era programado, se manda la hora para que la app la
+        // diga en la notificacion/voz en vez del generico "nuevo servicio".
+        await sendPush(
+          c.driver.fcmToken,
+          'trip_assigned',
+          scheduledPickupLabel ? { tripId, scheduledPickupLabel } : { tripId }
+        );
+        return;
+      }
       // Perdi la carrera contra otra asignacion; sigo con el siguiente
       // candidato elegible respetando el orden de prioridad.
     }
   }
 
-  await db.ref(`trips/${tripId}`).update({
+  await updateTripWhileDispatchable(tripId, () => ({
     status: 'no_drivers_available',
     noDriversReason: buildNoDriversReason(requestedPassengers, stats),
-  });
+  }));
 }
 
 // Libera al conductor (vuelve a 'online') solo si sigue ligado a este
 // tripId -- evita pisar a un conductor que ya fue reclamado por otro viaje.
 // Usa el mismo patron de ETag por la misma razon que claimDriver().
-async function releaseDriver(driverId, tripId) {
-  const token = await accessToken();
-  const headers = { Authorization: `Bearer ${token}` };
-
+async function releaseDriverWithToken(driverId, tripId, token) {
   // El GPS y el cambio de estado actualizan el mismo nodo del conductor.
   // Si una de esas escrituras ocurre entre el GET y el PUT, Firebase responde
   // 412 (ETag vencido). Reintentamos con el estado mas reciente para no dejar
   // un currentTripId colgado despues de cancelar o completar un viaje.
   const maxAttempts = 4;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const getRes = await fetch(`${DB_URL}/drivers/${driverId}.json`, {
-      headers: { ...headers, 'X-Firebase-ETag': 'true' },
-    });
-    if (!getRes.ok) {
-      throw new Error(`No se pudo leer el conductor para liberarlo (${getRes.status}).`);
-    }
-    const etag = getRes.headers.get('ETag');
-    const current = await getRes.json();
+    const { etag, value: current } = await readWithEtag(`drivers/${driverId}`, token);
     // Si otro viaje ya tomo el vehiculo, no debemos liberarlo ni pisar esa
     // nueva asignacion.
     if (!current || current.currentTripId !== tripId) return false;
@@ -260,12 +309,9 @@ async function releaseDriver(driverId, tripId) {
       ...current,
       status: current.turno_activo === false ? null : 'online',
       currentTripId: null,
+      assignmentClaimedAt: null,
     };
-    const putRes = await fetch(`${DB_URL}/drivers/${driverId}.json`, {
-      method: 'PUT',
-      headers: { ...headers, 'if-match': etag, 'Content-Type': 'application/json' },
-      body: JSON.stringify(updated),
-    });
+    const putRes = await putIfUnchanged(`drivers/${driverId}`, updated, etag, token);
     if (putRes.status === 200) return true;
     if (putRes.status !== 412) {
       throw new Error(`No se pudo liberar el conductor (${putRes.status}).`);
@@ -276,14 +322,21 @@ async function releaseDriver(driverId, tripId) {
   throw new Error(`La liberacion del conductor ${driverId} perdio varias carreras de escritura.`);
 }
 
+async function releaseDriver(driverId, tripId) {
+  return releaseDriverWithToken(driverId, tripId, await accessToken());
+}
+
 module.exports = {
   SEARCH_RADII_KM,
   haversineKm,
   attemptAssignment,
+  claimDriverWithToken,
   releaseDriver,
+  releaseDriverWithToken,
   categoryIndexForDriver,
   buildNoDriversReason,
   rankCandidates,
   rankedCandidatesByRadius,
   selectCandidate,
+  updateTripWhileDispatchableWithToken,
 };

@@ -22,7 +22,6 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         // Debe coincidir con la ficha existente del conductor en Google Play.
         // El dashboard/Firebase sigue siendo compartido con pasajeros.
         applicationId = "apl.tucompras.com"

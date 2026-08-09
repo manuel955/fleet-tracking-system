@@ -37,8 +37,7 @@ Las claves de Firebase/Mapbox, tokens, contraseñas, teléfonos internos, correo
 ## Pendientes antes de una entrega productiva
 
 1. Rotar y restringir las claves que hoy aparecen en archivos de configuración del repositorio.
-2. Restringir la lectura de `/drivers` a operadores autorizados antes de usar datos reales.
-3. Servir el dashboard detrás de HTTPS y controlar el acceso al servidor.
-4. Reemplazar la firma de Android basada en una llave de desarrollo por una keystore del propietario.
-5. Migrar Cloud Functions de Node.js 20 a Node.js 22 antes del 30 de octubre de 2026, según la nota existente en el proyecto.
-6. Ejecutar la prueba de aceptación del [checklist de entrega](guia-despliegue-y-entrega.md#checklist-de-aceptación) con teléfonos físicos y una flota representativa.
+2. Desplegar y validar las reglas defensivas actuales de Realtime Database y Storage junto con las Cloud Functions.
+3. Mantener el dashboard detrás de HTTPS y revisar periódicamente usuarios y custom claims.
+4. Custodiar y respaldar la keystore fija usada por los workflows; los builds locales sin `FLEET_KEYSTORE_*` siguen usando firma de desarrollo.
+5. Ejecutar la prueba de aceptación del [checklist de entrega](guia-despliegue-y-entrega.md#checklist-de-aceptación) con teléfonos físicos y una flota representativa.

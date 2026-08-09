@@ -192,7 +192,7 @@ class NotificationService {
       901,
       '$type asignado',
       name,
-      NotificationDetails(
+      const NotificationDetails(
         android: AndroidNotificationDetails(
           _generalChannelId,
           'Avisos generales',

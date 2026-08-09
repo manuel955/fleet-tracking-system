@@ -124,8 +124,28 @@ function isPdfUrl(url) {
   return /\.pdf(\?|$)/i.test(url || '');
 }
 
+function safeDriverStorageUrl(rawValue, driverId) {
+  try {
+    const url = new URL(String(rawValue || '').trim());
+    const expectedPrefix = `/v0/b/rastreoflota-53052.firebasestorage.app/o/driver_documents/${driverId}/`;
+    if (
+      url.protocol !== 'https:' ||
+      url.hostname !== 'firebasestorage.googleapis.com' ||
+      !decodeURIComponent(url.pathname).startsWith(expectedPrefix) ||
+      url.searchParams.get('alt') !== 'media' ||
+      !url.searchParams.get('token')
+    ) {
+      return '';
+    }
+    return url.href;
+  } catch (_) {
+    return '';
+  }
+}
+
 function docCellHtml(driverId, field, url) {
-  if (!url) {
+  const safeUrl = safeDriverStorageUrl(url, driverId);
+  if (!safeUrl) {
     return `
       <div class="doc-item">
         <div class="doc-missing" title="No subido">—</div>
@@ -133,9 +153,10 @@ function docCellHtml(driverId, field, url) {
       </div>
     `;
   }
-  const cell = isPdfUrl(url)
-    ? `<a class="doc-pdf-link" href="${url}" target="_blank" rel="noopener" onclick="event.stopPropagation()">📄</a>`
-    : `<img class="doc-thumb" src="${url}" alt="${escapeHtml(field.label)}" onclick="window.open('${url}', '_blank')" />`;
+  const escapedUrl = escapeHtml(safeUrl);
+  const cell = isPdfUrl(safeUrl)
+    ? `<a class="doc-pdf-link" href="${escapedUrl}" target="_blank" rel="noopener">📄</a>`
+    : `<a href="${escapedUrl}" target="_blank" rel="noopener"><img class="doc-thumb" src="${escapedUrl}" alt="${escapeHtml(field.label)}" /></a>`;
   return `
     <div class="doc-item">
       ${cell}
@@ -163,6 +184,8 @@ function driverConnectionHtml(driverId, d) {
 
 function driverAdminCardHtml(driverId, d) {
   const status = d.approvalStatus || 'pending_review';
+  const profilePhotoUrl = safeDriverStorageUrl(d.profilePhotoUrl, driverId);
+  const canManageDriver = window.dashboardRole === 'ADMIN';
   const rejectFormOpen = openRejectFormId === driverId;
   const rejectionLabels = String(d.rejectionFieldKeys || '')
     .split(',')
@@ -178,7 +201,7 @@ function driverAdminCardHtml(driverId, d) {
       : '';
 
   const actionsHtml =
-    status === 'pending_review'
+    canManageDriver && status === 'pending_review'
       ? `
         <div class="driver-admin-actions">
           <button type="button" class="approve-btn" data-action="approve" data-id="${driverId}">Aprobar</button>
@@ -206,7 +229,7 @@ function driverAdminCardHtml(driverId, d) {
   return `
     <div class="driver-admin-card" data-id="${driverId}">
       <div class="driver-admin-card-header">
-        <img class="driver-admin-avatar" src="${d.profilePhotoUrl || ''}" alt="" onerror="this.style.visibility='hidden'" />
+        <img class="driver-admin-avatar" src="${escapeHtml(profilePhotoUrl)}" alt="" onerror="this.style.visibility='hidden'" />
         <div>
           <div class="driver-admin-name">${escapeHtml(d.name || 'Sin nombre')}</div>
           <div class="driver-admin-meta">${escapeHtml(d.email || '-')} &middot; DNI ${escapeHtml(d.dni || '-')}</div>
@@ -222,7 +245,13 @@ function driverAdminCardHtml(driverId, d) {
       ${status !== 'rejected' ? driverConnectionHtml(driverId, d) : ''}
       ${rejectionBlock}
       ${
-        status !== 'rejected'
+        !canManageDriver
+          ? `
+        <div class="driver-admin-actions">
+          <button type="button" class="view-file-btn" data-action="view-file" data-id="${driverId}">Ver archivo completo</button>
+        </div>
+      `
+          : status !== 'rejected'
           ? `
         <div class="driver-admin-actions">
           <button type="button" class="view-file-btn" data-action="view-file" data-id="${driverId}">Ver archivo completo</button>
@@ -1433,14 +1462,18 @@ async function deleteDriver(driverId) {
   } catch (error) { alert(error.message); }
 }
 
-function approveDriver(driverId) {
-  db.ref(`drivers/${driverId}`).update({
-    approvalStatus: 'approved',
-    rejectionReason: null,
-    rejectionFieldKeys: null,
-    reviewedAt: Date.now(),
-    reviewedBy: auth.currentUser ? auth.currentUser.email : null,
-  });
+async function approveDriver(driverId) {
+  try {
+    await db.ref(`drivers/${driverId}`).update({
+      approvalStatus: 'approved',
+      rejectionReason: null,
+      rejectionFieldKeys: null,
+      reviewedAt: Date.now(),
+      reviewedBy: auth.currentUser ? auth.currentUser.email : null,
+    });
+  } catch (error) {
+    alert(error.message || 'No se pudo aprobar al conductor.');
+  }
 }
 
 async function rejectDriver(driverId, reason, rejectionFields) {
@@ -1537,9 +1570,10 @@ async function downloadDriverPdf(button) {
     y += 24;
     doc.setTextColor(0);
 
-    if (d.profilePhotoUrl) {
+    const safeProfilePhotoUrl = safeDriverStorageUrl(d.profilePhotoUrl, driverId);
+    if (safeProfilePhotoUrl) {
       try {
-        const dataUrl = await fetchAsDataUrl(d.profilePhotoUrl);
+        const dataUrl = await fetchAsDataUrl(safeProfilePhotoUrl);
         const props = doc.getImageProperties(dataUrl);
         const w = 90;
         const h = (props.height / props.width) * w;
@@ -1584,9 +1618,9 @@ async function downloadDriverPdf(button) {
     // Un documento por hoja, con su nombre como titulo arriba de la
     // imagen -- mas facil de revisar/imprimir uno por uno que la
     // cuadricula compartiendo pagina de antes.
-    const uploadedDocFields = DOC_FIELDS.filter((field) => d[field.key]);
+    const uploadedDocFields = DOC_FIELDS.filter((field) => safeDriverStorageUrl(d[field.key], driverId));
     for (const field of uploadedDocFields) {
-      const url = d[field.key];
+      const url = safeDriverStorageUrl(d[field.key], driverId);
       doc.addPage();
       y = margin;
 

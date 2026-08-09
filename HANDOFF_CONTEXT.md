@@ -79,18 +79,17 @@ de asumir un bug cuando un pedido no se asigna.
 
 ## Pendiente / no confirmado
 
-- Migrar Cloud Functions de Node 20 a Node 22 antes del **2026-10-30**
-  (deprecación de Node 20 en Cloud Functions 1a gen).
-- Dashboard no está desplegado a Firebase Hosting — sigue como archivo
-  estático local, servido para pruebas con un mini servidor node (ver abajo).
+- Cloud Functions ya usa Node 22 en `functions/package.json`.
+- El dashboard ya tiene el target Firebase Hosting
+  `rastreoflota-53052-dashboard`; el canal `live` tuvo una publicación
+  confirmada el 2026-08-07. También se conserva el flujo alternativo al VPS.
 - Renzo aún no dio visto bueno visual final del rediseño Uber (revisó las
   apps recién instaladas, sin feedback explícito todavía).
-- README raíz puede seguir sin cobertura completa de los cambios de
-  cancelación/dashboard/paleta listados arriba — actualízalo si haces más
-  cambios en esas áreas.
-- Regla de seguridad pendiente señalada en README: cualquier usuario
-  autenticado puede leer `/drivers` — falta restringir con custom claims de
-  admin antes de exponer datos reales.
+- La rama `codex/build-driver-aab` contiene cambios todavía no integrados en
+  `master`; fusionar y publicar requiere una decisión explícita del propietario.
+- Las reglas locales ya restringen `/drivers`. La corrección defensiva que
+  acota `driverLocations/{driverId}` al pasajero de un viaje activo debe
+  desplegarse junto con la función que exige rol admin para builds de branding.
 
 ## Bug/patrón a recordar: nunca usar `ref.transaction()` contra RTDB desde Cloud Functions
 

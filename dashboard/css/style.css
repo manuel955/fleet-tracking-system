@@ -1492,7 +1492,7 @@ body { font-size: 15px; }
 .passenger-invite-result code { display: block; padding: 10px 12px; border-radius: 10px; background: #eef3ef; word-break: break-all; user-select: all; }
 .settings-secondary-btn, .settings-table-action { border: 1px solid var(--line); border-radius: 10px; background: var(--white); color: var(--black); cursor: pointer; padding: 9px 12px; font-weight: 700; }
 .settings-secondary-btn { margin-top: 12px; }
-.settings-table-action { font-size: 12px !important; }
+.settings-card .settings-table-action { font-size: 12px; }
 .attendance-heading p { font-size: 15px; }
 .attendance-table td { font-size: 14px; }
 .attendance-controls input, .attendance-date-toggle, .attendance-clear-btn { font-size: 14px; }

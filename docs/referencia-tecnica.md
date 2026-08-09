@@ -169,7 +169,9 @@ La asignación usa distancia Haversine, categorías de capacidad y una reclamaci
 - Storage valida tamaño y tipo de documentos y separa la regla de `delete`.
 - Los documentos contienen información personal y requieren acceso restringido.
 - La configuración actual expone claves de proveedor en archivos del cliente. Aunque algunas claves de cliente son técnicamente públicas, deben rotarse y restringirse por dominio, paquete y API antes de la venta.
-- La regla actual permite lectura autenticada del nodo `/drivers`; debe reemplazarse por una autorización de operador/admin antes de usar datos reales.
+- `/drivers` requiere claims de dashboard; el conductor solo lee su propio perfil.
+- `driverLocations/{driverId}` solo se entrega al conductor, a operadores autorizados o al pasajero asignado mientras el viaje está activo.
+- Los coordinadores no tienen acceso a documentos de identidad ni credenciales almacenadas.
 - El dashboard no debe publicarse por HTTP en producción; usar HTTPS, control de acceso y una política de respaldo.
 
 ## 10. Puntos de código para mantenimiento

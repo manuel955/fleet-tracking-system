@@ -22,7 +22,6 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         // Package exclusivo de la ficha de pasajeros en Google Play.
         applicationId = "apl.tucomprass.pasajero"
         // You can update the following values to match your application needs.

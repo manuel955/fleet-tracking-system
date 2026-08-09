@@ -50,6 +50,11 @@ firebase use <FIREBASE_PROJECT_ID>
 firebase deploy --only database,storage,functions
 ```
 
+En Windows, un arranque en frío puede superar el límite de descubrimiento de
+10 segundos del Firebase CLI. Si ocurre, define
+`$env:FUNCTIONS_DISCOVERY_TIMEOUT='30'` y repite el comando; no modifica la
+configuración desplegada ni el runtime de las funciones.
+
 Verifica en la consola:
 
 1. Que las reglas se hayan publicado.

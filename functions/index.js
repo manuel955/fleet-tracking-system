@@ -13,8 +13,19 @@ const {
 const {
   effectiveDriverHeartbeat,
   hasHeartbeatExpired,
-  isDriverShiftActive,
 } = require('./heartbeat-policy');
+const {
+  buildDriverAvailabilityUpdate,
+  buildDriverLocationUpdate,
+  buildHeartbeatDisconnectUpdate,
+  normalizeDriverLocation,
+} = require('./driver-state-policy');
+const {
+  EXPECTED_STATUS_BY_NEXT,
+  prepareCoordinatorCancellation,
+  prepareDriverTripTransition,
+  shouldReleaseAssignment,
+} = require('./trip-lifecycle-policy');
 
 const BRANDING_BUCKET = 'rastreoflota-53052.firebasestorage.app';
 const BRANDING_SIGNING_PATH = 'build_signing/android-debug.keystore';
@@ -35,23 +46,10 @@ const VEHICLE_PASSENGER_RANGES = {
 };
 const VEHICLE_COLORS = new Set(['Negro', 'Gris', 'Plata', 'Blanco']);
 const LIMA_TIME_ZONE = 'America/Lima';
-const DRIVER_ARRIVAL_RADIUS_METERS = 100;
-const CLOSED_TRIP_STATUSES = new Set(['completed', 'cancelled']);
 // Es un token publico pk de Mapbox, el mismo proveedor que ya usa el mapa
 // cliente. Puede reemplazarse en Cloud Functions con MAPBOX_ACCESS_TOKEN sin
 // tener que modificar el codigo.
 const MAPBOX_PUBLIC_TOKEN = process.env.MAPBOX_ACCESS_TOKEN || 'pk.eyJ1IjoiYW5mdXJleCIsImEiOiJjbXNlMHFxamgwNGlvMndweXo2aGFtbGlpIn0.bxWU-uN8FFTm0u7HZai9oQ';
-
-function distanceMeters(lat1, lng1, lat2, lng2) {
-  const toRadians = (value) => value * Math.PI / 180;
-  const earthRadius = 6371000;
-  const dLat = toRadians(lat2 - lat1);
-  const dLng = toRadians(lng2 - lng1);
-  const a = Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) *
-    Math.sin(dLng / 2) ** 2;
-  return earthRadius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
 
 function tripPoint(lat, lng) {
   const point = { lat: Number(lat), lng: Number(lng) };
@@ -98,7 +96,7 @@ async function createTripRouteSnapshot(trip) {
   const coordinates = `${pickup.lng},${pickup.lat};${destination.lng},${destination.lat}`;
   const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${coordinates}?overview=full&geometries=geojson&access_token=${encodeURIComponent(MAPBOX_PUBLIC_TOKEN)}`;
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
     if (!response.ok) throw new Error(`Mapbox Directions ${response.status}`);
     const route = (await response.json()).routes?.[0];
     const routePath = sampleRoutePath(route?.geometry?.coordinates);
@@ -297,13 +295,66 @@ function passengerAccessPayload(access, source = 'invite') {
   };
 }
 
+function isOwnedPassengerCredentialUrl(rawValue, uid) {
+  try {
+    const url = new URL(String(rawValue || '').trim());
+    const expectedPrefix = `/v0/b/${BRANDING_BUCKET}/o/passenger_credentials/${uid}/`;
+    return url.protocol === 'https:'
+      && url.hostname === 'firebasestorage.googleapis.com'
+      && decodeURIComponent(url.pathname).startsWith(expectedPrefix)
+      && url.searchParams.get('alt') === 'media'
+      && Boolean(url.searchParams.get('token'));
+  } catch (_) {
+    return false;
+  }
+}
+
 async function functionsAccessToken() {
   const token = await admin.app().options.credential.getAccessToken();
   return token.access_token;
 }
 
+const DATABASE_REQUEST_TIMEOUT_MS = 10000;
+
+async function readDatabaseWithEtag(path, accessToken) {
+  const response = await fetch(`${DATABASE_URL}/${path}.json`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'X-Firebase-ETag': 'true',
+    },
+    signal: AbortSignal.timeout(DATABASE_REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`No se pudo leer ${path} (${response.status}).`);
+  const etag = response.headers.get('ETag');
+  if (!etag) throw new Error(`Firebase no devolvio ETag para ${path}.`);
+  return {
+    etag,
+    value: await response.json(),
+  };
+}
+
+async function putDatabaseIfUnchanged(path, value, etag, accessToken) {
+  return fetch(`${DATABASE_URL}/${path}.json`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'if-match': etag,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(value),
+    signal: AbortSignal.timeout(DATABASE_REQUEST_TIMEOUT_MS),
+  });
+}
+
 function normalizedIdentity(value) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function isValidFirebaseKey(value) {
+  return typeof value === 'string'
+    && value.length > 0
+    && value.length <= 768
+    && !/[.#$\[\]/\u0000-\u001F\u007F]/.test(value);
 }
 
 function identityKey(value) {
@@ -684,72 +735,26 @@ exports.setDriverAvailability = functions.https.onRequest(async (req, res) => {
       return res.status(403).json({ error: 'La sesión no corresponde al conductor.' });
     }
     const online = req.body?.online === true;
-    const driverRef = admin.database().ref(`drivers/${driverId}`);
-    const driverSnap = await driverRef.once('value');
-    const driver = driverSnap.val();
-    if (!driver) return res.status(404).json({ error: 'Conductor no encontrado.' });
-
     const now = Date.now();
+    const accessToken = await functionsAccessToken();
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const { etag, value: current } = await readDatabaseWithEtag(`drivers/${driverId}`, accessToken);
+      const decision = buildDriverAvailabilityUpdate(current, online, now);
+      if (!decision.ok) return res.status(decision.httpStatus).json({ error: decision.error });
 
-    if (!online) {
-      if (driver.currentTripId) {
-        return res.status(409).json({ error: 'No puedes terminar el turno con un viaje activo.' });
+      const response = await putDatabaseIfUnchanged(
+        `drivers/${driverId}`,
+        decision.value,
+        etag,
+        accessToken,
+      );
+      if (response.ok) return res.json({ ok: true, status: decision.publicStatus });
+      if (response.status !== 412) {
+        throw new Error(`No se pudo actualizar el turno (${response.status}).`);
       }
-      await driverRef.update({
-        status: null,
-        turno_activo: false,
-        estado_conexion: 'OFFLINE',
-        ultima_conexion: now,
-        gpsSessionStartedAt: null,
-        gpsReady: false,
-        ultimo_motivo_desconexion: 'MANUAL',
-      });
-      return res.json({ ok: true, status: 'offline' });
+      await new Promise((resolve) => setTimeout(resolve, 80 * (attempt + 1)));
     }
-
-    if (driver.approvalStatus !== 'approved') {
-      return res.status(403).json({ error: 'El conductor todavía no está aprobado.' });
-    }
-
-    // Si la app se reinicio durante un viaje, solo debe reanudar el GPS y no
-    // pisar el estado busy.
-    if (driver.currentTripId) {
-      await driverRef.update({
-        status: 'busy',
-        turno_activo: true,
-        estado_conexion: 'ONLINE',
-        ultima_conexion: now,
-        gpsSessionStartedAt: now,
-        gpsReady: false,
-        ultimo_motivo_desconexion: null,
-      });
-      return res.json({ ok: true, status: 'busy' });
-    }
-
-    const transaction = await driverRef.transaction((current) => {
-      if (!current || current.currentTripId) return current;
-      return {
-        ...current,
-        status: 'online',
-        turno_activo: true,
-        estado_conexion: 'ONLINE',
-        ultima_conexion: now,
-        gpsSessionStartedAt: now,
-        gpsReady: false,
-        ultimo_motivo_desconexion: null,
-      };
-    });
-    const result = transaction.snapshot.val() || {};
-    if (result.currentTripId) {
-      return res.json({ ok: true, status: 'busy' });
-    }
-    if (result.status !== 'online') {
-      return res.status(409).json({ error: 'No se pudo iniciar el turno. Intenta nuevamente.' });
-    }
-    return res.json({
-      ok: true,
-      status: 'online',
-    });
+    return res.status(409).json({ error: 'El turno cambio mientras se actualizaba. Intenta nuevamente.' });
   } catch (error) {
     console.error('setDriverAvailability', error);
     return res.status(403).json({ error: error.message || 'No se pudo actualizar el turno.' });
@@ -770,69 +775,41 @@ exports.updateDriverLocation = functions.https.onRequest(async (req, res) => {
     if (!header.startsWith('Bearer ')) throw new Error('No autorizado');
     const user = await admin.auth().verifyIdToken(header.slice(7));
     const driverId = user.uid;
-    const lat = Number(req.body?.lat);
-    const lng = Number(req.body?.lng);
-    const heading = Number(req.body?.heading ?? 0);
-    if (!Number.isFinite(lat) || lat < -90 || lat > 90 ||
-        !Number.isFinite(lng) || lng < -180 || lng > 180 ||
-        !Number.isFinite(heading) || heading < 0 || heading > 360 ||
-        (lat === 0 && lng === 0)) {
+    const normalizedLocation = normalizeDriverLocation(req.body);
+    if (!normalizedLocation) {
       return res.status(400).json({ error: 'Coordenadas GPS invalidas.' });
-    }
-
-    const driverRef = admin.database().ref(`drivers/${driverId}`);
-    const driver = (await driverRef.once('value')).val();
-    if (!driver) return res.status(404).json({ error: 'Conductor no encontrado.' });
-    if (driver.approvalStatus !== 'approved') {
-      return res.status(403).json({ error: 'El conductor todavía no está aprobado.' });
-    }
-    if (!isDriverShiftActive(driver)) {
-      return res.status(409).json({ error: 'El turno del conductor no está activo.' });
     }
 
     // La hora la fija el servidor para evitar falsos heartbeats por un reloj
     // incorrecto del teléfono.
     const lastUpdate = Date.now();
-    const location = { lat, lng, heading, lastUpdate };
-    // El heartbeat recupera la disponibilidad si el worker la habia pausado,
-    // pero usa una transaccion para no reactivar un turno que el conductor
-    // acaba de terminar mientras un envio viejo seguia en vuelo.
-    const locationFields = {
-      lat,
-      lng,
-      heading,
-      lastUpdate,
-      status: driver.currentTripId ? 'busy' : 'online',
-      turno_activo: true,
-      estado_conexion: 'ONLINE',
-      ultima_conexion: lastUpdate,
-      gpsSessionStartedAt: null,
-      gpsReady: true,
-      ultimo_motivo_desconexion: null,
-    };
-    const transaction = await driverRef.transaction((current) => {
-      if (!current || current.approvalStatus !== 'approved') return;
-      if (!isDriverShiftActive(current)) return;
-      return {
-        ...current,
-        ...locationFields,
-        status: current.currentTripId ? 'busy' : 'online',
-      };
-    });
-    if (!transaction.committed) {
-      // RTDB puede abortar una transaccion si el detector de heartbeat escribio
-      // el mismo nodo casi al mismo tiempo. Relee el estado antes de rechazar
-      // el punto: un turno que sigue abierto puede recuperarse sin obligar al
-      // conductor a apagar y encender la app.
-      const latest = (await driverRef.once('value')).val() || {};
-      if (!isDriverShiftActive(latest)) {
-        return res.status(409).json({ error: 'El turno ya no esta activo.' });
+    const location = { ...normalizedLocation, lastUpdate };
+    // ETag + if-match mantiene atomica la comprobacion del turno y la escritura
+    // del heartbeat. Si el conductor termina el turno en medio, Firebase
+    // responde 412 y reintentamos contra el estado nuevo sin reactivarlo.
+    const accessToken = await functionsAccessToken();
+    let profileUpdated = false;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const { etag, value: current } = await readDatabaseWithEtag(`drivers/${driverId}`, accessToken);
+      const decision = buildDriverLocationUpdate(current, normalizedLocation, lastUpdate);
+      if (!decision.ok) return res.status(decision.httpStatus).json({ error: decision.error });
+
+      const response = await putDatabaseIfUnchanged(
+        `drivers/${driverId}`,
+        decision.value,
+        etag,
+        accessToken,
+      );
+      if (response.ok) {
+        profileUpdated = true;
+        break;
       }
-      await driverRef.update({
-        ...locationFields,
-        status: latest.currentTripId ? 'busy' : 'online',
-      });
+      if (response.status !== 412) {
+        throw new Error(`No se pudo guardar la ubicacion (${response.status}).`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 80 * (attempt + 1)));
     }
+    if (!profileUpdated) throw new Error('La ubicacion cambio varias veces; intenta nuevamente.');
     await admin.database().ref(`driverLocations/${driverId}`).set(location);
     return res.json({ ok: true, lastUpdate });
   } catch (error) {
@@ -844,8 +821,8 @@ exports.updateDriverLocation = functions.https.onRequest(async (req, res) => {
 // Avanza el viaje exclusivamente desde el backend. La app puede perder su
 // proceso y volver a abrirse, pero nunca debe poder finalizar un viaje solo
 // porque aun no recupero el GPS. La validacion de cercania se hace con la
-// ultima posicion GPS recibida en el servidor y la transaccion protege contra
-// dos gestos simultaneos o una pantalla antigua.
+// ultima posicion GPS recibida en el servidor y la escritura condicional
+// protege contra dos gestos simultaneos o una pantalla antigua.
 exports.advanceDriverTrip = functions.https.onRequest(async (req, res) => {
   cors(res);
   if (req.method === 'OPTIONS') return res.status(204).send('');
@@ -857,105 +834,61 @@ exports.advanceDriverTrip = functions.https.onRequest(async (req, res) => {
     const user = await admin.auth().verifyIdToken(header.slice(7));
     const tripId = String(req.body?.tripId || '').trim();
     const newStatus = String(req.body?.newStatus || '').trim();
-    const expectedByNext = {
-      arrived_at_pickup: 'accepted',
-      in_progress: 'arrived_at_pickup',
-      completed: 'in_progress',
-    };
-    const expectedStatus = expectedByNext[newStatus];
-    if (!tripId || !expectedStatus) {
+    const expectedStatus = EXPECTED_STATUS_BY_NEXT[newStatus];
+    if (!isValidFirebaseKey(tripId) || !expectedStatus) {
       return res.status(400).json({ error: 'Transicion de viaje invalida.' });
     }
 
-    const tripRef = admin.database().ref(`trips/${tripId}`);
-    const tripSnapshot = await tripRef.once('value');
-    const trip = tripSnapshot.val();
-    if (!trip || trip.driverId !== user.uid) {
-      return res.status(404).json({ error: 'Viaje no encontrado.' });
-    }
-    // Si la app perdio la respuesta despues de que Firebase confirmo la
-    // escritura, el mismo gesto puede llegar otra vez. La transicion ya
-    // aplicada es segura de repetir: no la volvemos a ejecutar, pero
-    // tampoco mostramos un error falso al conductor.
-    if (trip.status === newStatus) {
-      return res.json({ ok: true, status: newStatus, alreadyApplied: true });
-    }
-    if (trip.status !== expectedStatus) {
-      return res.status(409).json({
-        error: 'El viaje cambio de estado. Actualiza la pantalla.',
-        currentStatus: trip.status || null,
+    const driver = newStatus === 'arrived_at_pickup' || newStatus === 'completed'
+      ? ((await admin.database().ref(`drivers/${user.uid}`).once('value')).val() || {})
+      : null;
+    const accessToken = await functionsAccessToken();
+
+    // La transición usa el mismo patrón ETag/if-match que la asignación de
+    // conductores. Así una cancelación o cambio de destino concurrente no
+    // puede quedar confirmado como un avance falso ni recrear un viaje borrado.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const { etag, value: current } = await readDatabaseWithEtag(`trips/${tripId}`, accessToken);
+      const decision = prepareDriverTripTransition({
+        trip: current,
+        driverId: user.uid,
+        newStatus,
+        driver,
+        now: Date.now(),
       });
-    }
-
-    if (newStatus === 'arrived_at_pickup' || newStatus === 'completed') {
-      const driver = (await admin.database().ref(`drivers/${user.uid}`).once('value')).val() || {};
-      const lat = Number(driver.lat);
-      const lng = Number(driver.lng);
-      const targetLat = Number(newStatus === 'completed' ? trip.destinationLat : trip.pickupLat);
-      const targetLng = Number(newStatus === 'completed' ? trip.destinationLng : trip.pickupLng);
-      if (![lat, lng, targetLat, targetLng].every(Number.isFinite)) {
-        return res.status(422).json({ error: 'Aun no recibimos una posicion GPS valida. Espera unos segundos.' });
-      }
-      const distance = distanceMeters(lat, lng, targetLat, targetLng);
-      if (distance > DRIVER_ARRIVAL_RADIUS_METERS) {
-        return res.status(422).json({
-          error: `Debes estar a menos de ${DRIVER_ARRIVAL_RADIUS_METERS} metros del punto. Distancia actual: ${Math.round(distance)} m.`,
-          distanceMeters: Math.round(distance),
-        });
-      }
-    }
-
-    const timestampField = {
-      arrived_at_pickup: 'arrivedAt',
-      in_progress: 'inProgressAt',
-      completed: 'completedAt',
-    }[newStatus];
-    // Una lectura/poll del viaje puede coincidir con este gesto y hacer que
-    // la primera transaccion se aborte aunque nadie haya avanzado el viaje.
-    // Reintentamos solo si el estado remoto sigue siendo el esperado; si ya
-    // cambio a otro estado, conservamos el conflicto real.
-    let result;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      result = await tripRef.transaction((current) => {
-        // El SDK puede invocar el callback una primera vez con null antes de
-        // hidratar el valor remoto. Usamos la lectura validada de arriba como
-        // base solo para esa primera llamada; devolver undefined cancela la
-        // transaccion y provocaba el falso conflicto al pulsar "he llegado".
-        const candidate = current || trip;
-        if (!candidate || candidate.driverId !== user.uid || candidate.status !== expectedStatus) {
-          return current;
-        }
-        return {
-          ...candidate,
-          status: newStatus,
-          [timestampField]: Date.now(),
-        };
-      });
-      if (result.committed) return res.json({ ok: true, status: newStatus });
-
-      const latest = (await tripRef.once('value')).val() || {};
-      if (latest.driverId === user.uid && latest.status === newStatus) {
+      if (decision.alreadyApplied) {
         return res.json({ ok: true, status: newStatus, alreadyApplied: true });
       }
-      if (latest.driverId !== user.uid || latest.status !== expectedStatus) {
-        console.warn('advanceDriverTrip state conflict', {
-          tripId,
-          newStatus,
-          expectedStatus,
-          currentStatus: latest.status || null,
-          driverId: user.uid,
-        });
-        return res.status(409).json({
-          error: 'El viaje cambio de estado. Actualiza la pantalla.',
-          currentStatus: latest.status || null,
-        });
+      if (!decision.ok) {
+        if (decision.httpStatus === 409) {
+          console.warn('advanceDriverTrip state conflict', {
+            tripId,
+            newStatus,
+            expectedStatus,
+            currentStatus: decision.currentStatus || null,
+            driverId: user.uid,
+          });
+        }
+        const errorBody = { error: decision.error };
+        if (Object.hasOwn(decision, 'currentStatus')) errorBody.currentStatus = decision.currentStatus;
+        if (Object.hasOwn(decision, 'distanceMeters')) errorBody.distanceMeters = decision.distanceMeters;
+        return res.status(decision.httpStatus).json(errorBody);
       }
-      if (attempt < 2) {
-        await new Promise((resolve) => setTimeout(resolve, 120 * (attempt + 1)));
+
+      const response = await putDatabaseIfUnchanged(
+        `trips/${tripId}`,
+        decision.value,
+        etag,
+        accessToken,
+      );
+      if (response.ok) return res.json({ ok: true, status: newStatus });
+      if (response.status !== 412) {
+        throw new Error(`No se pudo guardar el viaje (${response.status}).`);
       }
+      await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
     }
 
-    console.warn('advanceDriverTrip transaction retry exhausted', {
+    console.warn('advanceDriverTrip conditional update retry exhausted', {
       tripId,
       newStatus,
       expectedStatus,
@@ -1070,7 +1003,7 @@ exports.requestAppBrandingBuild = functions
     if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
 
     try {
-      await requireDashboardAdmin(req);
+      await requireDashboardManager(req);
       const app = BRANDING_APPS[req.body?.app];
       const appKey = req.body?.app;
       if (!app) return res.status(400).json({ error: 'App invalida' });
@@ -1211,8 +1144,13 @@ exports.managePassengerInvites = functions.https.onRequest(async (req, res) => {
       const hotelId = String(req.body?.hotelId || '').trim();
       const place = await getDashboardPlace('hotels', hotelId);
       if (!place) return res.status(400).json({ error: 'Selecciona un hotel válido.' });
-      const durationHours = Math.min(720, Math.max(1, Number(req.body?.durationHours || 24)));
-      const maxUses = Math.min(100, Math.max(1, Number(req.body?.maxUses || 1)));
+      const requestedDuration = Number(req.body?.durationHours ?? 24);
+      const requestedMaxUses = Number(req.body?.maxUses ?? 1);
+      if (!Number.isFinite(requestedDuration) || !Number.isFinite(requestedMaxUses)) {
+        return res.status(400).json({ error: 'Duración o cantidad de usos inválida.' });
+      }
+      const durationHours = Math.trunc(Math.min(720, Math.max(1, requestedDuration)));
+      const maxUses = Math.trunc(Math.min(100, Math.max(1, requestedMaxUses)));
       const token = crypto.randomBytes(16).toString('hex');
       const hash = requestTokenHash(token);
       const now = Date.now();
@@ -1345,6 +1283,9 @@ exports.registerPassengerProfile = functions.https.onRequest(async (req, res) =>
     const phone = String(req.body?.phone || '').trim().slice(0, 40);
     const credentialPhotoUrl = String(req.body?.credentialPhotoUrl || '').trim();
     if (!name || !phone || !credentialPhotoUrl) return res.status(400).json({ error: 'Nombre, teléfono y credencial son obligatorios.' });
+    if (!isOwnedPassengerCredentialUrl(credentialPhotoUrl, user.uid)) {
+      return res.status(400).json({ error: 'La credencial debe pertenecer a la cuenta autenticada.' });
+    }
     const passengerRef = admin.database().ref(`passengers/${user.uid}`);
     const current = (await passengerRef.once('value')).val() || {};
     await passengerRef.set({
@@ -1586,21 +1527,30 @@ exports.cancelCoordinatorTrip = functions.https.onRequest(async (req, res) => {
   try {
     const coordinator = await requireDashboardCoordinator(req);
     const tripId = String(req.body?.tripId || '').trim();
-    if (!tripId) return res.status(400).json({ error: 'Viaje requerido' });
-    const tripRef = admin.database().ref(`trips/${tripId}`);
-    const snapshot = await tripRef.once('value');
-    const trip = snapshot.val();
-    if (!trip || trip.dispatcherUid !== coordinator.uid) return res.status(404).json({ error: 'Viaje no encontrado' });
-    if (['in_progress', 'completed', 'cancelled'].includes(trip.status)) {
-      return res.status(409).json({ error: 'Este viaje ya inició o terminó y no puede cancelarse.' });
+    if (!isValidFirebaseKey(tripId)) return res.status(400).json({ error: 'Viaje requerido' });
+
+    // Una lectura seguida de update() permitía que la cancelación pisara una
+    // transición concurrente a in_progress. ETag + if-match vuelve atómica la
+    // comprobación del estado y conserva cualquier asignación recién creada.
+    const accessToken = await functionsAccessToken();
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const { etag, value: trip } = await readDatabaseWithEtag(`trips/${tripId}`, accessToken);
+      const decision = prepareCoordinatorCancellation(trip, coordinator.uid, Date.now());
+      if (!decision.ok) return res.status(decision.httpStatus).json({ error: decision.error });
+
+      const response = await putDatabaseIfUnchanged(
+        `trips/${tripId}`,
+        decision.value,
+        etag,
+        accessToken,
+      );
+      if (response.ok) return res.json({ ok: true, status: 'cancelled' });
+      if (response.status !== 412) {
+        throw new Error(`No se pudo cancelar el viaje (${response.status}).`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 80 * (attempt + 1)));
     }
-    await tripRef.update({
-      status: 'cancelled',
-      cancelledBy: 'coordinator',
-      cancelReason: 'Cancelado por el coordinador de la sede.',
-      cancelledAt: Date.now(),
-    });
-    return res.json({ ok: true, status: 'cancelled' });
+    return res.status(409).json({ error: 'El viaje cambió mientras se cancelaba. Intenta nuevamente.' });
   } catch (error) {
     console.error('cancelCoordinatorTrip', error);
     return res.status(403).json({ error: error.message || 'No autorizado' });
@@ -1686,10 +1636,10 @@ exports.dispatchScheduledTrips = functions.pubsub
     return null;
   });
 
-// Repara asignaciones que quedaron persistidas por una carrera entre la
-// cancelacion/completado y el siguiente ping GPS del conductor. Es seguro:
-// solo libera si el viaje que figura en currentTripId existe, esta cerrado y
-// sigue perteneciendo al mismo conductor.
+// Repara asignaciones que quedaron persistidas por una carrera o por una
+// ejecucion interrumpida entre reclamar al conductor y confirmar el viaje.
+// Solo libera viajes cerrados del mismo conductor o reclamos huerfanos que
+// superaron la ventana de seguridad.
 exports.reconcileClosedTripAssignments = functions.pubsub
   .schedule('every 1 minutes')
   .onRun(async () => {
@@ -1701,15 +1651,12 @@ exports.reconcileClosedTripAssignments = functions.pubsub
     const drivers = driversSnap.val() || {};
     const trips = tripsSnap.val() || {};
     const repairs = [];
+    const now = Date.now();
 
     for (const [driverId, driver] of Object.entries(drivers)) {
       const tripId = driver?.currentTripId;
       const trip = tripId ? trips[tripId] : null;
-      if (
-        tripId &&
-        trip?.driverId === driverId &&
-        CLOSED_TRIP_STATUSES.has(trip.status)
-      ) {
+      if (shouldReleaseAssignment(driverId, driver, trip, now)) {
         repairs.push(releaseDriver(driverId, tripId));
       }
     }
@@ -1837,6 +1784,7 @@ exports.detectPrematureDriverDisconnects = functions.pubsub
   .onRun(async () => {
     const db = admin.database();
     const snapshot = await db.ref('drivers').once('value');
+    const accessToken = await functionsAccessToken();
     const now = Date.now();
     const tasks = [];
 
@@ -1849,25 +1797,25 @@ exports.detectPrematureDriverDisconnects = functions.pubsub
       if (Number(driver.ultimo_alerta_desconexion_at || 0) >= lastHeartbeat) return;
 
       tasks.push((async () => {
-        const currentSnap = await db.ref(`drivers/${driverId}`).once('value');
-        const current = currentSnap.val() || {};
-        const stillConnected = current.status === 'online' || current.status === 'busy';
-        const currentHeartbeat = effectiveDriverHeartbeat(current);
-        if (!stillConnected || currentHeartbeat !== lastHeartbeat || !hasHeartbeatExpired(currentHeartbeat, now)) return;
+        const { etag, value: currentValue } = await readDatabaseWithEtag(`drivers/${driverId}`, accessToken);
+        const current = currentValue || null;
+        const decision = buildHeartbeatDisconnectUpdate(current, lastHeartbeat, now);
+        if (!decision) return;
 
-        const disconnectedAt = now;
-        await createPrematureDisconnectAlert(driverId, current, 'HEARTBEAT', disconnectedAt);
-        await db.ref(`drivers/${driverId}`).update({
-          status: null,
-          // A lost heartbeat is not an explicit end-of-shift action. Keep the
-          // shift open so the app can reconcile and resume after suspension.
-          turno_activo: true,
-          estado_conexion: 'OFFLINE',
-          // Keep ultima_conexion as the last real ping; do not overwrite it
-          // with the time when the server detected the timeout.
-          gpsReady: false,
-          ultimo_motivo_desconexion: 'HEARTBEAT',
-        });
+        const response = await putDatabaseIfUnchanged(
+          `drivers/${driverId}`,
+          decision.value,
+          etag,
+          accessToken,
+        );
+        if (response.status === 412) return;
+        if (!response.ok) throw new Error(`No se pudo cerrar el heartbeat de ${driverId} (${response.status}).`);
+        await createPrematureDisconnectAlert(
+          driverId,
+          current,
+          'HEARTBEAT',
+          decision.disconnectedAt,
+        );
       })());
     });
 

@@ -15,7 +15,8 @@ import 'destination_picker_screen.dart';
 /// Viaje ya aceptado por un conductor, estilo Uber: mapa a pantalla
 /// completa con un panel inferior fijo mostrando el estado y los datos del
 /// conductor (nombre, placa, telefono) y su ubicacion en vivo (reusando el
-/// mismo nodo drivers/{driverId} que ya lee el dashboard).
+/// nodo de ubicación acotado driverLocations/{driverId}; las reglas solo lo
+/// exponen al pasajero mientras este viaje sigue activo.
 class ActiveTripTrackingScreen extends StatefulWidget {
   final String tripId;
   final Map<String, dynamic> trip;
