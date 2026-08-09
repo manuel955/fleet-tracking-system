@@ -79,7 +79,9 @@ de asumir un bug cuando un pedido no se asigna.
 
 ## Pendiente / no confirmado
 
-- Cloud Functions ya usa Node 22 en `functions/package.json`.
+- Cloud Functions usa Node 22. El 2026-08-09 se desplegaron correctamente
+  todas las Functions junto con las reglas defensivas de Realtime Database y
+  Storage en `rastreoflota-53052`.
 - El dashboard ya tiene el target Firebase Hosting
   `rastreoflota-53052-dashboard`; el canal `live` tuvo una publicación
   confirmada el 2026-08-07. También se conserva el flujo alternativo al VPS.
@@ -87,9 +89,9 @@ de asumir un bug cuando un pedido no se asigna.
   apps recién instaladas, sin feedback explícito todavía).
 - La rama `codex/build-driver-aab` contiene cambios todavía no integrados en
   `master`; fusionar y publicar requiere una decisión explícita del propietario.
-- Las reglas locales ya restringen `/drivers`. La corrección defensiva que
-  acota `driverLocations/{driverId}` al pasajero de un viaje activo debe
-  desplegarse junto con la función que exige rol admin para builds de branding.
+- La validación previa al despliegue quedó verde: 53 pruebas de Functions,
+  15 casos de reglas en emuladores, 8 del dashboard, 4 del conductor y 2 del
+  pasajero. Los módulos críticos medidos alcanzaron 71.64% de líneas.
 
 ## Bug/patrón a recordar: nunca usar `ref.transaction()` contra RTDB desde Cloud Functions
 
