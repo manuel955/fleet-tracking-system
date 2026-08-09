@@ -36,7 +36,7 @@ jobs:
       MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
       MAPBOX_STYLE_URI: ${{ secrets.MAPBOX_STYLE_URI }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Read signed build request
         run: |
@@ -107,7 +107,7 @@ jobs:
           channel: stable
 
       - name: Cache Flutter and Android build artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.pub-cache
