@@ -24,7 +24,7 @@ jobs:
       MAPBOX_STYLE_URI: ${{ secrets.MAPBOX_STYLE_URI }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Restore Android signing key
         run: |
@@ -102,7 +102,7 @@ jobs:
           fi
 
       - name: Upload signed AAB
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: apl-conductores-v1.0.1-${{ inputs.build_number }}-signed
           path: driver-app/build/app/outputs/bundle/release/app-release.aab
