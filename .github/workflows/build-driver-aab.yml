@@ -90,7 +90,9 @@ jobs:
       - name: Build signed Android App Bundle
         working-directory: driver-app
         env:
-          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false
+          GRADLE_OPTS: >-
+            -Dorg.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1G
+            -Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false
         run: |
           test -n "$MAPBOX_ACCESS_TOKEN"
           AAB_PATH="$PWD/build/app/outputs/bundle/release/app-release.aab"
