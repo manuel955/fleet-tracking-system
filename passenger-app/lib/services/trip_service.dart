@@ -15,6 +15,19 @@ class TripService {
   static const _createTripTimeout = Duration(seconds: 25);
   static const _tripCachePrefix = 'cached_trip_';
 
+  /// Devuelve null para respuestas HTML o cualquier contenido que no sea JSON.
+  /// Las pasarelas pueden devolver una página de error antes de que la función
+  /// alcance nuestro handler; la app debe mostrar un mensaje útil en ese caso.
+  static dynamic decodeResponseBody(String raw) {
+    final normalized = raw.trim();
+    if (normalized.isEmpty) return <String, dynamic>{};
+    try {
+      return jsonDecode(normalized);
+    } on FormatException {
+      return null;
+    }
+  }
+
   static bool hasFreshDriverLocation(
     Map<String, dynamic> location, {
     DateTime? now,
@@ -82,7 +95,12 @@ class TripService {
           body: jsonEncode({'requestId': requestId, ...requestPayload}),
         )
         .timeout(_createTripTimeout);
-    final data = jsonDecode(response.body);
+    final data = decodeResponseBody(response.body);
+    if (data == null) {
+      throw Exception(
+        'El servicio de viajes no respondió correctamente. Intenta de nuevo en unos minutos.',
+      );
+    }
     String? tripId;
     if (response.statusCode == 200 || response.statusCode == 201) {
       tripId = data is Map ? data['tripId']?.toString() : null;
@@ -125,7 +143,10 @@ class TripService {
         'Firebase rechazo la consulta (${response.statusCode}): ${response.body}',
       );
     }
-    final data = jsonDecode(response.body);
+    final data = decodeResponseBody(response.body);
+    if (data == null && response.body.trim() != 'null') {
+      throw Exception('Firebase devolvió una respuesta inválida.');
+    }
     final prefs = await SharedPreferences.getInstance();
     if (data == null) {
       await prefs.remove('$_tripCachePrefix$tripId');
@@ -161,7 +182,10 @@ class TripService {
         'Firebase rechazo la consulta (${response.statusCode}): ${response.body}',
       );
     }
-    final data = jsonDecode(response.body);
+    final data = decodeResponseBody(response.body);
+    if (data == null && response.body.trim() != 'null') {
+      throw Exception('Firebase devolvió una respuesta inválida.');
+    }
     return data == null ? null : Map<String, dynamic>.from(data);
   }
 
@@ -287,7 +311,12 @@ class TripService {
         'No se pudo obtener el historial (${response.statusCode}): ${response.body}',
       );
     }
-    final data = jsonDecode(response.body);
+    final data = decodeResponseBody(response.body);
+    if (data == null && response.body.trim() != 'null') {
+      throw Exception(
+        'El servicio de historial no respondió correctamente. Intenta de nuevo en unos minutos.',
+      );
+    }
     if (data == null) return [];
     final map = Map<String, dynamic>.from(data);
     final entries = map.entries
@@ -325,7 +354,12 @@ class TripService {
           }),
         )
         .timeout(_networkTimeout);
-    final payload = jsonDecode(response.body.isEmpty ? '{}' : response.body);
+    final payload = decodeResponseBody(response.body);
+    if (payload == null) {
+      throw Exception(
+        'El servicio de comentarios no respondió correctamente. Intenta de nuevo en unos minutos.',
+      );
+    }
     if (response.statusCode != 200) {
       throw Exception(
         payload is Map
