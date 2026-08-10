@@ -35,7 +35,7 @@ class AppConfig {
   static const String privacyPolicyUrl =
       'https://rastreoflota-53052.web.app/privacy-policy.html';
   static const String deleteAccountUrl =
-      'https://rastreoflota-53052.web.app/delete-account.html';
+      'https://rastreoflota-53052.web.app/apl-conductores/eliminacion-de-cuenta.html';
   static const String supportEmail = 'manuel_cortezballardo@outlook.com';
 
   // Chequeo de version: config/driverAppBuild en Firebase (numero) contra

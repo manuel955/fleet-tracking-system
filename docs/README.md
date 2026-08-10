@@ -12,7 +12,7 @@ La documentación fue actualizada contra el código y la configuración revisado
 | [Manual de operación](manual-operacion.md) | Operadores, conductores y pasajeros | Cómo usar cada superficie y qué hacer ante los casos habituales. |
 | [Referencia técnica](referencia-tecnica.md) | Equipo técnico o comprador de la plataforma | Arquitectura, datos, estados, endpoints, permisos e intervalos reales. |
 | [Guía de despliegue y entrega](guia-despliegue-y-entrega.md) | Instalador, equipo TI y comprador | Requisitos, despliegue, publicación de apps, dashboard, pruebas y checklist de transferencia. |
-| [Revisión de políticas de Play](play-policy/passenger-account-deletion.md) | Publicación de APL Pasajero | URL pública y corrección del rechazo de eliminación de cuenta. |
+| [Revisión de políticas de Play](play-policy/passenger-account-deletion.md) | Publicación de APL Pasajero y APL Conductores | URLs públicas y corrección de eliminación de cuenta/datos. |
 
 ## Versiones Word
 
