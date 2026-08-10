@@ -30,11 +30,11 @@ jobs:
       REQUEST_ID: ${{ inputs.request_id }}
       BUILD_TOKEN: ${{ inputs.build_token }}
       ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
-      ANDROID_LEGACY_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
       ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
       ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
       ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
       ANDROID_RELEASE_CERT_SHA256: ${{ secrets.ANDROID_RELEASE_CERT_SHA256 }}
+      ANDROID_DRIVER_UPLOAD_CERT_SHA1: 70:F3:02:09:6D:1F:87:43:A2:15:B2:EB:B8:F4:30:41:EE:55:D5:A7
       FLEET_KEYSTORE_PATH: /home/runner/.android/fleet-signing.keystore
       GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
       PASSENGER_GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.PASSENGER_GOOGLE_SERVICES_JSON_BASE64 }}
@@ -91,35 +91,32 @@ jobs:
 
       - name: Restore the existing Android signing key
         run: |
-          if [ -n "$ANDROID_RELEASE_KEYSTORE_BASE64" ]; then
-            test -n "$ANDROID_RELEASE_KEYSTORE_PASSWORD"
-            test -n "$ANDROID_RELEASE_KEY_ALIAS"
-            test -n "$ANDROID_RELEASE_KEY_PASSWORD"
-            KEYSTORE_BASE64="$ANDROID_RELEASE_KEYSTORE_BASE64"
-            printf 'FLEET_KEYSTORE_PASSWORD=%s\n' "$ANDROID_RELEASE_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
-            printf 'FLEET_KEY_ALIAS=%s\n' "$ANDROID_RELEASE_KEY_ALIAS" >> "$GITHUB_ENV"
-            printf 'FLEET_KEY_PASSWORD=%s\n' "$ANDROID_RELEASE_KEY_PASSWORD" >> "$GITHUB_ENV"
-          else
-            echo "ADVERTENCIA: usando la llave heredada; debe rotarse de forma coordinada con las apps instaladas."
-            test -n "$ANDROID_LEGACY_KEYSTORE_BASE64"
-            KEYSTORE_BASE64="$ANDROID_LEGACY_KEYSTORE_BASE64"
-            echo 'FLEET_KEYSTORE_PASSWORD=android' >> "$GITHUB_ENV"
-            echo 'FLEET_KEY_ALIAS=androiddebugkey' >> "$GITHUB_ENV"
-            echo 'FLEET_KEY_PASSWORD=android' >> "$GITHUB_ENV"
-          fi
+          test -n "$ANDROID_RELEASE_KEYSTORE_BASE64"
+          test -n "$ANDROID_RELEASE_KEYSTORE_PASSWORD"
+          test -n "$ANDROID_RELEASE_KEY_ALIAS"
+          test -n "$ANDROID_RELEASE_KEY_PASSWORD"
+          KEYSTORE_BASE64="$ANDROID_RELEASE_KEYSTORE_BASE64"
+          printf 'FLEET_KEYSTORE_PASSWORD=%s\n' "$ANDROID_RELEASE_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          printf 'FLEET_KEY_ALIAS=%s\n' "$ANDROID_RELEASE_KEY_ALIAS" >> "$GITHUB_ENV"
+          printf 'FLEET_KEY_PASSWORD=%s\n' "$ANDROID_RELEASE_KEY_PASSWORD" >> "$GITHUB_ENV"
           mkdir -p "$(dirname "$FLEET_KEYSTORE_PATH")"
           echo "$KEYSTORE_BASE64" | base64 --decode > "$FLEET_KEYSTORE_PATH"
 
       - name: Verify signing certificate
         run: |
           test -n "$ANDROID_RELEASE_CERT_SHA256"
-          ACTUAL_SHA256=$(keytool -list -v -keystore "$FLEET_KEYSTORE_PATH" \
-            -storepass "$FLEET_KEYSTORE_PASSWORD" -alias "$FLEET_KEY_ALIAS" \
-            | sed -n 's/.*SHA256: //p' | head -n 1 | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+          KEYTOOL_OUTPUT=$(keytool -list -v -keystore "$FLEET_KEYSTORE_PATH" \
+            -storepass "$FLEET_KEYSTORE_PASSWORD" -alias "$FLEET_KEY_ALIAS")
+          ACTUAL_SHA1=$(printf '%s\n' "$KEYTOOL_OUTPUT" | sed -n 's/.*SHA1: //p' | head -n 1 | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+          ACTUAL_SHA256=$(printf '%s\n' "$KEYTOOL_OUTPUT" | sed -n 's/.*SHA256: //p' | head -n 1 | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
           test -n "$ACTUAL_SHA256"
           EXPECTED_SHA256=$(echo "$ANDROID_RELEASE_CERT_SHA256" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+          if [ "$APP_KIND" = "driver" ]; then
+            EXPECTED_SHA1=$(echo "$ANDROID_DRIVER_UPLOAD_CERT_SHA1" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+            test "$ACTUAL_SHA1" = "$EXPECTED_SHA1"
+          fi
           test "$ACTUAL_SHA256" = "$EXPECTED_SHA256"
-          echo "Certificado de firma verificado: $ACTUAL_SHA256"
+          echo "Certificado release verificado (SHA1/SHA256): $ACTUAL_SHA1 / $ACTUAL_SHA256"
 
       - name: Restore Firebase Android configuration
         run: |
