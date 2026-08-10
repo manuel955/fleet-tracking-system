@@ -45,11 +45,19 @@ class PassengerService {
           body: jsonEncode({'code': code}),
         )
         .timeout(_networkTimeout);
-    final body = jsonDecode(response.body.isEmpty ? '{}' : response.body);
+    final body = decodeResponseBody(response.body);
+    if (body == null) {
+      throw Exception(
+        'El servicio de acceso no respondió correctamente. Intenta de nuevo en unos minutos.',
+      );
+    }
     if (response.statusCode != 200) {
       throw Exception(
         body is Map ? body['error'] ?? 'Código no válido' : 'Código no válido',
       );
+    }
+    if (body is! Map || body['access'] is! Map) {
+      throw Exception('Respuesta inválida del servicio de acceso.');
     }
     final access = Map<String, dynamic>.from(body['access'] as Map);
     await _persistAccess(access);
@@ -77,10 +85,23 @@ class PassengerService {
       }
       return false;
     }
-    final body = jsonDecode(response.body);
+    final body = decodeResponseBody(response.body);
+    if (body is! Map || body['access'] is! Map) return false;
     final access = Map<String, dynamic>.from(body['access'] as Map);
     await _persistAccess(access);
     return true;
+  }
+
+  /// Decodifica respuestas JSON del backend sin propagar errores de formato
+  /// cuando una pasarela devuelve HTML u otro contenido no esperado.
+  static dynamic decodeResponseBody(String raw) {
+    final normalized = raw.trim();
+    if (normalized.isEmpty) return <String, dynamic>{};
+    try {
+      return jsonDecode(normalized);
+    } on FormatException {
+      return null;
+    }
   }
 
   static Future<Map<String, String>?> cachedProfile() async {

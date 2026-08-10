@@ -285,6 +285,20 @@ function passengerInviteDate(value) {
   return value ? new Date(Number(value)).toLocaleString('es-PE') : '—';
 }
 
+function renderPassengerInviteQr(element, value) {
+  if (!element || typeof window.QRCode !== 'function' || !value) return false;
+  element.replaceChildren();
+  new window.QRCode(element, {
+    text: value,
+    width: 280,
+    height: 280,
+    colorDark: '#081618',
+    colorLight: '#ffffff',
+    correctLevel: window.QRCode.CorrectLevel.M,
+  });
+  return true;
+}
+
 function renderPassengerAccess() {
   if (passengerInvites === null) {
     settingsViewEl.innerHTML = '<p class="settings-hint">Cargando invitaciones…</p>';
@@ -327,7 +341,7 @@ function renderPassengerAccess() {
       ${hotelsExist ? '' : '<p class="settings-feedback error">Primero registra un hotel en Lugares.</p>'}
       <p id="passenger-invite-feedback" class="settings-feedback"></p>
     </div>
-    ${current ? `<div class="settings-card passenger-invite-result"><h3>QR listo para entregar</h3><p><b>${escapeHtml(current.hotelName)}</b><br>Válido hasta ${escapeHtml(passengerInviteDate(current.expiresAt))}</p><canvas id="passenger-invite-qr" width="280" height="280"></canvas><p class="settings-hint">También puedes compartir este código manualmente:</p><code>${escapeHtml(current.token)}</code><button type="button" id="copy-passenger-invite" class="settings-secondary-btn">Copiar código</button></div>` : ''}
+    ${current ? `<div class="settings-card passenger-invite-result"><h3>QR listo para entregar</h3><p><b>${escapeHtml(current.hotelName)}</b><br>Válido hasta ${escapeHtml(passengerInviteDate(current.expiresAt))}</p><div id="passenger-invite-qr" class="passenger-invite-qr" role="img" aria-label="Código QR de acceso"></div><p class="settings-hint">También puedes compartir este código manualmente:</p><code>${escapeHtml(current.token)}</code><button type="button" id="copy-passenger-invite" class="settings-secondary-btn">Copiar código</button></div>` : ''}
     <div class="dashboard-users-table-wrap"><table class="dashboard-users-table"><thead><tr><th>Hotel</th><th>Creado</th><th>Vence</th><th>Usos</th><th>Estado</th><th>Acción</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="dashboard-empty-row">Todavía no hay invitaciones.</td></tr>'}</tbody></table></div>
   `;
   document.getElementById('back-to-settings').addEventListener('click', () => { settingsSection = 'home'; currentPassengerInvite = null; renderSettings(); });
@@ -348,8 +362,7 @@ function renderPassengerAccess() {
       passengerInviteCreateOpen = false;
       await loadPassengerInvites();
       renderPassengerAccess();
-      const canvas = document.getElementById('passenger-invite-qr');
-      if (canvas && window.QRCode?.toCanvas) window.QRCode.toCanvas(canvas, currentPassengerInvite.qrValue, { width: 280, margin: 2 });
+      renderPassengerInviteQr(document.getElementById('passenger-invite-qr'), currentPassengerInvite.qrValue);
     } catch (error) {
       feedback.textContent = error.message || String(error);
       feedback.className = 'settings-feedback error';
@@ -366,8 +379,7 @@ function renderPassengerAccess() {
     copyButton.textContent = 'Código copiado';
   });
   if (current) {
-    const canvas = document.getElementById('passenger-invite-qr');
-    if (canvas && window.QRCode?.toCanvas) window.QRCode.toCanvas(canvas, current.qrValue, { width: 280, margin: 2 });
+    renderPassengerInviteQr(document.getElementById('passenger-invite-qr'), current.qrValue);
   }
 }
 

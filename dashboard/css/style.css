@@ -1497,7 +1497,8 @@ body { font-size: 15px; }
 .dashboard-users-table td small { font-size: 12px; }
 .passenger-invite-create { max-width: 760px; margin: 18px 0; }
 .passenger-invite-result { max-width: 420px; margin: 18px 0; text-align: center; }
-.passenger-invite-result canvas { display: block; width: 280px; max-width: 100%; height: auto; margin: 14px auto; }
+.passenger-invite-qr { display: flex; align-items: center; justify-content: center; width: 280px; height: 280px; max-width: 100%; margin: 14px auto; overflow: hidden; background: #fff; }
+.passenger-invite-qr canvas, .passenger-invite-qr img, .passenger-invite-qr table { display: block; width: 280px; height: 280px; max-width: 100%; }
 .passenger-invite-result code { display: block; padding: 10px 12px; border-radius: 10px; background: #eef3ef; word-break: break-all; user-select: all; }
 .settings-secondary-btn, .settings-table-action { border: 1px solid var(--line); border-radius: 10px; background: var(--white); color: var(--black); cursor: pointer; padding: 9px 12px; font-weight: 700; }
 .settings-secondary-btn { margin-top: 12px; }

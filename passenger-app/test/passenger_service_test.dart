@@ -5,6 +5,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test('no intenta interpretar una respuesta HTML como JSON', () {
+    expect(
+      PassengerService.decodeResponseBody('<html><head>'),
+      isNull,
+    );
+    expect(
+      PassengerService.decodeResponseBody('{"access":{"status":"authorized"}}'),
+      isA<Map<String, dynamic>>(),
+    );
+  });
+
   test('acepta una autorizacion local vigente', () async {
     SharedPreferences.setMockInitialValues({
       'passenger_access_granted': true,
