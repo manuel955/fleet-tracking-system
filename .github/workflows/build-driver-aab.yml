@@ -6,7 +6,7 @@ on:
       build_number:
         description: Android version code
         required: true
-        default: '44'
+        default: '54'
         type: string
 
 permissions:
@@ -17,7 +17,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+      ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+      ANDROID_LEGACY_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+      ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+      ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+      ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+      ANDROID_RELEASE_CERT_SHA256: ${{ secrets.ANDROID_RELEASE_CERT_SHA256 }}
       FLEET_KEYSTORE_PATH: /home/runner/.android/fleet-signing.keystore
       GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
       MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
@@ -28,9 +33,35 @@ jobs:
 
       - name: Restore Android signing key
         run: |
-          test -n "$ANDROID_DEBUG_KEYSTORE_BASE64"
+          if [ -n "$ANDROID_RELEASE_KEYSTORE_BASE64" ]; then
+            test -n "$ANDROID_RELEASE_KEYSTORE_PASSWORD"
+            test -n "$ANDROID_RELEASE_KEY_ALIAS"
+            test -n "$ANDROID_RELEASE_KEY_PASSWORD"
+            KEYSTORE_BASE64="$ANDROID_RELEASE_KEYSTORE_BASE64"
+            printf 'FLEET_KEYSTORE_PASSWORD=%s\n' "$ANDROID_RELEASE_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            printf 'FLEET_KEY_ALIAS=%s\n' "$ANDROID_RELEASE_KEY_ALIAS" >> "$GITHUB_ENV"
+            printf 'FLEET_KEY_PASSWORD=%s\n' "$ANDROID_RELEASE_KEY_PASSWORD" >> "$GITHUB_ENV"
+          else
+            echo "ADVERTENCIA: usando la llave heredada; debe rotarse de forma coordinada con las apps instaladas."
+            test -n "$ANDROID_LEGACY_KEYSTORE_BASE64"
+            KEYSTORE_BASE64="$ANDROID_LEGACY_KEYSTORE_BASE64"
+            echo 'FLEET_KEYSTORE_PASSWORD=android' >> "$GITHUB_ENV"
+            echo 'FLEET_KEY_ALIAS=androiddebugkey' >> "$GITHUB_ENV"
+            echo 'FLEET_KEY_PASSWORD=android' >> "$GITHUB_ENV"
+          fi
           mkdir -p "$(dirname "$FLEET_KEYSTORE_PATH")"
-          echo "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$FLEET_KEYSTORE_PATH"
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$FLEET_KEYSTORE_PATH"
+
+      - name: Verify signing certificate
+        run: |
+          test -n "$ANDROID_RELEASE_CERT_SHA256"
+          ACTUAL_SHA256=$(keytool -list -v -keystore "$FLEET_KEYSTORE_PATH" \
+            -storepass "$FLEET_KEYSTORE_PASSWORD" -alias "$FLEET_KEY_ALIAS" \
+            | sed -n 's/.*SHA256: //p' | head -n 1 | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+          test -n "$ACTUAL_SHA256"
+          EXPECTED_SHA256=$(echo "$ANDROID_RELEASE_CERT_SHA256" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+          test "$ACTUAL_SHA256" = "$EXPECTED_SHA256"
+          echo "Certificado de firma verificado: $ACTUAL_SHA256"
 
       - name: Restore Firebase Android configuration
         run: |
@@ -41,6 +72,17 @@ jobs:
         with:
           channel: stable
 
+      - name: Cache Gradle and pub dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.pub-cache
+          key: ${{ runner.os }}-driver-release-${{ hashFiles('driver-app/pubspec.lock', 'driver-app/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-driver-release-
+
       - name: Prepare Flutter dependencies
         working-directory: driver-app
         run: flutter pub get
@@ -48,58 +90,29 @@ jobs:
       - name: Build signed Android App Bundle
         working-directory: driver-app
         env:
-          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false
+          GRADLE_OPTS: >-
+            -Dorg.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1G
+            -Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false
         run: |
           test -n "$MAPBOX_ACCESS_TOKEN"
-          heartbeat() {
-            while true; do
-              echo "Compilando AAB de conductores... $(date -u +%H:%M:%S) UTC"
-              sleep 30
-            done
-          }
-          kill_tree() {
-            local pid="$1"
-            [ -z "$pid" ] && return 0
-            for child in $(pgrep -P "$pid" 2>/dev/null || true); do
-              kill_tree "$child"
-            done
-            kill "$pid" 2>/dev/null || true
-          }
-          heartbeat &
-          HEARTBEAT_PID=$!
-          BUILD_PID=""
-          trap 'kill_tree "$BUILD_PID"; kill "$HEARTBEAT_PID" 2>/dev/null || true' EXIT
           AAB_PATH="$PWD/build/app/outputs/bundle/release/app-release.aab"
           BUILD_LOG="$RUNNER_TEMP/driver-aab-build.log"
           rm -f "$AAB_PATH" "$BUILD_LOG"
-          flutter build appbundle --release --no-pub \
+          set +e
+          timeout --foreground --kill-after=30s 30m flutter build appbundle --release --no-pub \
             --build-number "${{ inputs.build_number }}" \
             --dart-define=MAPBOX_ACCESS_TOKEN="$MAPBOX_ACCESS_TOKEN" \
             --dart-define=MAPBOX_STYLE_URI="${MAPBOX_STYLE_URI:-mapbox://styles/mapbox/standard}" \
-            >"$BUILD_LOG" 2>&1 &
-          BUILD_PID=$!
-          AAB_READY=false
-          while kill -0 "$BUILD_PID" 2>/dev/null; do
-            if [ -s "$AAB_PATH" ] && unzip -t "$AAB_PATH" >/dev/null 2>&1; then
-              echo "AAB valido generado; cerrando el watcher de Gradle para continuar."
-              AAB_READY=true
-              break
-            fi
-            sleep 15
-          done
-          if [ "$AAB_READY" = true ]; then
-            kill_tree "$BUILD_PID"
-            BUILD_PID=""
-          else
-            BUILD_STATUS=0
-            wait "$BUILD_PID" || BUILD_STATUS=$?
-            BUILD_PID=""
-            if [ "$BUILD_STATUS" -ne 0 ] || [ ! -s "$AAB_PATH" ]; then
-              echo "La compilacion del AAB fallo. Ultimas lineas del log:"
-              tail -n 200 "$BUILD_LOG"
-              exit 1
-            fi
+            2>&1 | tee "$BUILD_LOG"
+          BUILD_STATUS=${PIPESTATUS[0]}
+          set -e
+          if [ "$BUILD_STATUS" -ne 0 ] || [ ! -s "$AAB_PATH" ]; then
+            echo "La compilacion del AAB fallo. Ultimas lineas del log:"
+            tail -n 200 "$BUILD_LOG"
+            exit 1
           fi
+          unzip -t "$AAB_PATH" >/dev/null
+          echo "AAB valido generado: $AAB_PATH"
 
       - name: Upload signed AAB
         uses: actions/upload-artifact@v7

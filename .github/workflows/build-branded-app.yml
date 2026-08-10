@@ -29,7 +29,12 @@ jobs:
       APP_KIND: ${{ inputs.app }}
       REQUEST_ID: ${{ inputs.request_id }}
       BUILD_TOKEN: ${{ inputs.build_token }}
-      ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+      ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+      ANDROID_LEGACY_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+      ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+      ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+      ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+      ANDROID_RELEASE_CERT_SHA256: ${{ secrets.ANDROID_RELEASE_CERT_SHA256 }}
       FLEET_KEYSTORE_PATH: /home/runner/.android/fleet-signing.keystore
       GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
       PASSENGER_GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.PASSENGER_GOOGLE_SERVICES_JSON_BASE64 }}
@@ -59,7 +64,11 @@ jobs:
           app_dir = {'driver': 'driver-app', 'passenger': 'passenger-app'}[request['app']]
           root = Path(app_dir)
           pubspec = root / 'pubspec.yaml'
-          pubspec.write_text(re.sub(r'^version:.*$', f"version: 1.0.0+{request['build']}", pubspec.read_text(), flags=re.M))
+          version_name = request['versionName']
+          pubspec.write_text(re.sub(r'^version:.*$', f"version: {version_name}+{request['build']}", pubspec.read_text(), flags=re.M))
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as github_env:
+              github_env.write(f"BUILD_NUMBER={request['build']}\n")
+              github_env.write(f"VERSION_NAME={version_name}\n")
 
           values = root / 'android/app/src/main/res/values'
           (values / 'app_name.xml').write_text(
@@ -82,12 +91,35 @@ jobs:
 
       - name: Restore the existing Android signing key
         run: |
-          if [ -z "$ANDROID_DEBUG_KEYSTORE_BASE64" ]; then
-            echo "Falta la llave de firma segura de Android"
-            exit 1
+          if [ -n "$ANDROID_RELEASE_KEYSTORE_BASE64" ]; then
+            test -n "$ANDROID_RELEASE_KEYSTORE_PASSWORD"
+            test -n "$ANDROID_RELEASE_KEY_ALIAS"
+            test -n "$ANDROID_RELEASE_KEY_PASSWORD"
+            KEYSTORE_BASE64="$ANDROID_RELEASE_KEYSTORE_BASE64"
+            printf 'FLEET_KEYSTORE_PASSWORD=%s\n' "$ANDROID_RELEASE_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            printf 'FLEET_KEY_ALIAS=%s\n' "$ANDROID_RELEASE_KEY_ALIAS" >> "$GITHUB_ENV"
+            printf 'FLEET_KEY_PASSWORD=%s\n' "$ANDROID_RELEASE_KEY_PASSWORD" >> "$GITHUB_ENV"
+          else
+            echo "ADVERTENCIA: usando la llave heredada; debe rotarse de forma coordinada con las apps instaladas."
+            test -n "$ANDROID_LEGACY_KEYSTORE_BASE64"
+            KEYSTORE_BASE64="$ANDROID_LEGACY_KEYSTORE_BASE64"
+            echo 'FLEET_KEYSTORE_PASSWORD=android' >> "$GITHUB_ENV"
+            echo 'FLEET_KEY_ALIAS=androiddebugkey' >> "$GITHUB_ENV"
+            echo 'FLEET_KEY_PASSWORD=android' >> "$GITHUB_ENV"
           fi
           mkdir -p "$(dirname "$FLEET_KEYSTORE_PATH")"
-          echo "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$FLEET_KEYSTORE_PATH"
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$FLEET_KEYSTORE_PATH"
+
+      - name: Verify signing certificate
+        run: |
+          test -n "$ANDROID_RELEASE_CERT_SHA256"
+          ACTUAL_SHA256=$(keytool -list -v -keystore "$FLEET_KEYSTORE_PATH" \
+            -storepass "$FLEET_KEYSTORE_PASSWORD" -alias "$FLEET_KEY_ALIAS" \
+            | sed -n 's/.*SHA256: //p' | head -n 1 | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+          test -n "$ACTUAL_SHA256"
+          EXPECTED_SHA256=$(echo "$ANDROID_RELEASE_CERT_SHA256" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+          test "$ACTUAL_SHA256" = "$EXPECTED_SHA256"
+          echo "Certificado de firma verificado: $ACTUAL_SHA256"
 
       - name: Restore Firebase Android configuration
         run: |
@@ -159,6 +191,8 @@ jobs:
           BUILD_LOG="$RUNNER_TEMP/${APP_KIND}-flutter-build.log"
           rm -f "$APK_PATH" "$BUILD_LOG"
           flutter build apk --release --no-pub \
+            --build-name "$VERSION_NAME" \
+            --build-number "$BUILD_NUMBER" \
             --dart-define=MAPBOX_ACCESS_TOKEN="$MAPBOX_ACCESS_TOKEN" \
             --dart-define=MAPBOX_STYLE_URI="${MAPBOX_STYLE_URI:-mapbox://styles/mapbox/standard}" \
             >"$BUILD_LOG" 2>&1 &
@@ -185,6 +219,26 @@ jobs:
               exit 1
             fi
           fi
+
+      - name: Build Android App Bundle
+        working-directory: ${{ inputs.app == 'driver' && 'driver-app' || 'passenger-app' }}
+        env:
+          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false
+        run: |
+          flutter build appbundle --release --no-pub \
+            --build-name "$VERSION_NAME" \
+            --build-number "$BUILD_NUMBER" \
+            --dart-define=MAPBOX_ACCESS_TOKEN="$MAPBOX_ACCESS_TOKEN" \
+            --dart-define=MAPBOX_STYLE_URI="${MAPBOX_STYLE_URI:-mapbox://styles/mapbox/standard}"
+
+      - name: Upload signed release artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: apl-${{ inputs.app }}-${{ env.VERSION_NAME }}-${{ env.BUILD_NUMBER }}-signed
+          path: |
+            ${{ inputs.app }}-app/build/app/outputs/flutter-apk/app-release.apk
+            ${{ inputs.app }}-app/build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
 
       - name: Upload APK through one-time signed URL
         run: |
