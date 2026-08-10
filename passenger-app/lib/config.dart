@@ -25,7 +25,7 @@ class AppConfig {
   static const String privacyPolicyUrl =
       'https://rastreoflota-53052.web.app/privacy-policy.html';
   static const String deleteAccountUrl =
-      'https://rastreoflota-53052.web.app/delete-account.html';
+      'https://rastreoflota-53052.web.app/apl-pasajero/eliminacion-de-cuenta.html';
   static const String supportEmail = 'manuel_cortezballardo@outlook.com';
 
   // El pasajero refresca la posicion recibida del conductor cada 5 segundos.

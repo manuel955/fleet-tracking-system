@@ -1,7 +1,7 @@
 name: fleet_passenger_app
 description: App del pasajero - pide viajes y seguimiento en vivo del conductor asignado
 publish_to: "none"
-version: 1.0.0+43
+version: 1.0.0+45
 
 environment:
   sdk: ^3.12.2
