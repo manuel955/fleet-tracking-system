@@ -86,6 +86,13 @@ const loginError = document.getElementById('login-error');
 const loginSubtitle = document.getElementById('login-subtitle');
 const tabLogin = document.getElementById('tab-login');
 const submitBtn = document.getElementById('login-submit');
+const resetPasswordBtn = document.getElementById('login-reset-password');
+
+function syncDashboardRoleNavigation() {
+  document.querySelectorAll('[data-admin-only-nav]').forEach((element) => {
+    element.classList.toggle('hidden', window.dashboardRole !== 'ADMIN');
+  });
+}
 
 const AUTH_ERROR_MESSAGES = {
   'auth/invalid-email': 'Correo inválido.',
@@ -104,6 +111,7 @@ const AUTH_ERROR_MESSAGES = {
 
 loginForm.addEventListener('submit', async (e) => {
   e.preventDefault();
+  loginError.classList.remove('success');
   loginError.textContent = '';
   const email = document.getElementById('login-email').value;
   const password = document.getElementById('login-password').value;
@@ -116,6 +124,27 @@ loginForm.addEventListener('submit', async (e) => {
   }
 });
 
+resetPasswordBtn.addEventListener('click', async () => {
+  loginError.textContent = '';
+  const email = document.getElementById('login-email').value.trim();
+  if (!email) {
+    loginError.textContent = 'Escribe primero el correo de tu cuenta.';
+    return;
+  }
+  resetPasswordBtn.disabled = true;
+  try {
+    await auth.sendPasswordResetEmail(email);
+    loginError.classList.add('success');
+    loginError.textContent = 'Si el correo está registrado, recibirás un enlace para cambiar la contraseña.';
+  } catch (err) {
+    loginError.classList.remove('success');
+    loginError.textContent = AUTH_ERROR_MESSAGES[err.code]
+      || 'No se pudo enviar el correo de recuperación. Intenta nuevamente.';
+  } finally {
+    resetPasswordBtn.disabled = false;
+  }
+});
+
 document.getElementById('logout-btn').addEventListener('click', () => auth.signOut());
 
 async function initializeDashboardAdmin(user) {
@@ -124,6 +153,7 @@ async function initializeDashboardAdmin(user) {
     const response = await fetch('https://us-central1-rastreoflota-53052.cloudfunctions.net/initializeDashboardAdmin', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(15000),
     });
     const result = await response.json().catch(() => ({}));
     window.dashboardIsAdmin = response.ok && result.isAdmin === true;
@@ -183,6 +213,7 @@ auth.onAuthStateChanged(async (user) => {
     if (claims.dashboardUser === true || claims.dashboardAdmin === true) {
       window.dashboardRole = claims.dashboardAdmin === true ? 'ADMIN' : (claims.dashboardRole || 'SUPERVISOR');
       window.dashboardIsCoordinator = false;
+      syncDashboardRoleNavigation();
       appEl.classList.remove('hidden');
       tryStartDashboard();
       return;
@@ -835,11 +866,24 @@ function updateOverviewStats() {
   const active = approved.filter((d) => driverState(d) !== 'offline');
   const available = approved.filter((d) => driverState(d) === 'available');
   const trips = Object.values(todayTripsCache).filter((trip) => trip.status !== 'cancelled');
+  const completed = Object.values(todayTripsCache).filter((trip) => trip.status === 'completed');
+  const cancelled = Object.values(todayTripsCache).filter((trip) => trip.status === 'cancelled');
+  const busy = approved.filter((d) => driverState(d) === 'to_pickup' || driverState(d) === 'on_trip');
+  const durations = completed
+    .map((trip) => Number(trip.completedAt || 0) - Number(trip.inProgressAt || trip.acceptedAt || 0))
+    .filter((duration) => Number.isFinite(duration) && duration > 0);
+  const averageDurationSeconds = durations.length
+    ? Math.round(durations.reduce((total, duration) => total + duration, 0) / durations.length / 1000)
+    : null;
 
   if (overviewActiveCountEl) overviewActiveCountEl.textContent = String(active.length).padStart(2, '0');
   if (overviewAvailableCountEl) overviewAvailableCountEl.textContent = String(available.length).padStart(2, '0');
   if (overviewTripsCountEl) overviewTripsCountEl.textContent = String(trips.length).padStart(2, '0');
-  if (overviewEtaCountEl) overviewEtaCountEl.textContent = lastRouteEtaSeconds == null ? '--:--' : formatEta(lastRouteEtaSeconds);
+  if (overviewEtaCountEl) overviewEtaCountEl.textContent = averageDurationSeconds == null ? '--:--' : formatEta(averageDurationSeconds);
+  const activeDelta = document.getElementById('overview-active-delta');
+  const tripsDelta = document.getElementById('overview-trips-delta');
+  if (activeDelta) activeDelta.textContent = `${busy.length} en servicio`;
+  if (tripsDelta) tripsDelta.textContent = `${completed.length} completados · ${cancelled.length} cancelados`;
   if (overviewClockEl) {
     overviewClockEl.textContent = new Intl.DateTimeFormat('es-PE', {
       day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
@@ -901,14 +945,24 @@ function mapPlaceOptions(d) {
 // password) tiene permiso de escritura para poner un viaje en 'cancelled'
 // una vez que tiene driverId (ver database/firebase-rules.json) -- ni
 // pasajero ni conductor pueden hacerlo desde ese punto en adelante.
-function cancelTrip(tripId) {
-  if (!confirm('¿Cancelar este viaje? El conductor quedará disponible de nuevo.')) return;
-  db.ref(`trips/${tripId}`).update({
-    status: 'cancelled',
-    cancelledBy: 'admin',
-    cancelledAt: Date.now(),
-    cancelReason: auth.currentUser ? `Cancelado por ${auth.currentUser.email}` : 'Cancelado por admin',
-  });
+async function cancelTrip(tripId) {
+  if (window.dashboardRole !== 'ADMIN') return;
+  const reason = prompt('Motivo de cancelación (quedará registrado):');
+  if (reason == null) return;
+  if (reason.trim().length < 5) return alert('Escribe un motivo de al menos 5 caracteres.');
+  try {
+    const token = await auth.currentUser.getIdToken();
+    const response = await fetch('https://us-central1-rastreoflota-53052.cloudfunctions.net/cancelDashboardTrip', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tripId, reason: reason.trim() }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || 'No se pudo cancelar el viaje.');
+  } catch (error) {
+    alert(error.message || error);
+  }
 }
 
 function driverCardHtml(driverId, d) {
@@ -938,7 +992,7 @@ function driverDetailHtml(driverId, d, state) {
   const eta = formatEta(lastRouteEtaSeconds);
 
   const tripIsActive = trip && !['completed', 'cancelled'].includes(trip.status);
-  const tripCancellable = tripIsActive;
+  const tripCancellable = tripIsActive && window.dashboardRole === 'ADMIN';
   const tripBlock = tripIsActive
     ? `
       <div class="detail-section trip-section">

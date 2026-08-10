@@ -10,7 +10,7 @@ Esta guía permite que un equipo técnico instale la solución en un proyecto de
 
 - Proyecto Firebase en plan Blaze.
 - Realtime Database.
-- Authentication con Anonymous y Email/Password.
+- Authentication con Anonymous y Email/Password. El proveedor Phone/SMS no es necesario.
 - Firebase Storage.
 - Cloud Functions.
 - Firebase Cloud Messaging.
@@ -78,7 +78,7 @@ Antes de compilar:
 - Sustituye los valores de `lib/config.dart` por los del cliente.
 - Instala `google-services.json` en `android/app/` cuando corresponda.
 - Configura el token público de Mapbox mediante `--dart-define` antes de compilar.
-- Reemplaza la firma de desarrollo por una keystore de producción.
+- Define las variables `FLEET_KEYSTORE_*` con una keystore de producción; el build release no permite firma debug.
 - Revisa permisos de ubicación en segundo plano, notificaciones, cámara e internet.
 - Confirma que el `version`/build sea mayor al último publicado.
 
@@ -99,8 +99,8 @@ Antes de compilar:
 2. El dashboard crea una solicitud temporal.
 3. Cloud Functions despacha GitHub Actions.
 4. GitHub Actions restaura la firma y la configuración Firebase desde Secrets.
-5. Compila la APK, la sube a una URL firmada de un solo uso y confirma el build.
-6. La app detecta al abrirse que el build remoto es mayor y ofrece descargarlo.
+5. Compila APK y AAB, sube la APK al destino de publicación y confirma el build con el token temporal de un solo uso.
+6. La app conserva localmente el build mínimo confirmado: si después no hay red, una actualización ya exigida sigue bloqueando una versión antigua.
 
 El flujo automático expira las solicitudes después de 3 horas. La ejecución de GitHub Actions tiene un límite de 45 minutos.
 
@@ -138,6 +138,8 @@ Firebase Hosting. No se debe publicar el directorio anterior sin recompilarlo.
 ### Acceso y servicios
 
 - [ ] El pasajero puede registrarse y subir una credencial.
+- [ ] Un QR vencido o revocado no permite crear nuevos viajes, y revocar el QR invalida sus accesos canjeados.
+- [ ] El pasajero puede vincular correo, cerrar sesión, volver a entrar y recuperar contraseña sin SMS.
 - [ ] El conductor puede registrarse con contraseña.
 - [ ] Un administrador puede aprobar y rechazar documentos.
 - [ ] Un supervisor puede entrar con su usuario individual.
@@ -162,6 +164,8 @@ Firebase Hosting. No se debe publicar el directorio anterior sin recompilarlo.
 - [ ] El pasajero ve conductor, placa, vehículo y posición.
 - [ ] El conductor completa llegada, abordaje y finalización.
 - [ ] Al completar o cancelar, el vehículo queda disponible y el viaje aparece en historial.
+- [ ] El pasajero puede calificar un viaje completado o reportar una incidencia terminal.
+- [ ] El dashboard muestra incidencias abiertas y permite resolverlas o reabrirlas.
 - [ ] Un viaje programado se despacha dentro de la ventana de 10 minutos.
 - [ ] La modificación de destino avisa al conductor.
 
@@ -189,7 +193,8 @@ Firebase Hosting. No se debe publicar el directorio anterior sin recompilarlo.
 Entrega estos elementos en una carpeta o gestor de secretos separado del código:
 
 - Identificador del proyecto Firebase y permisos del propietario.
-- Cuenta de facturación de Google Cloud y límites de Maps.
+- Cuenta de facturación de Firebase/Google Cloud y límites de presupuesto.
+- Cuenta Mapbox, tokens restringidos y límites/alertas de consumo.
 - URLs de producción del dashboard y Functions.
 - Usuarios iniciales y matriz de roles.
 - Keystore, alias y procedimiento de recuperación, bajo custodia del cliente.

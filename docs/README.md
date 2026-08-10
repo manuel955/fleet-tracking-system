@@ -2,7 +2,7 @@
 
 Esta carpeta reúne la documentación preparada para presentar, operar, desplegar y entregar el sistema de transporte corporativo.
 
-La documentación fue elaborada a partir del código y la configuración auditados el 3 de agosto de 2026. Los tiempos marcados como confirmados describen el comportamiento implementado. La experiencia final todavía depende de la cobertura GPS, la conexión de datos, el teléfono y los servicios de Google/Firebase.
+La documentación fue actualizada contra el código y la configuración revisados el 9 de agosto de 2026. Los tiempos marcados como confirmados describen el comportamiento implementado. La experiencia final todavía depende de la cobertura GPS, la conexión de datos, el teléfono, Firebase y Mapbox.
 
 ## Documentos
 
@@ -25,7 +25,7 @@ Las mismas piezas están disponibles en formato `.docx` para enviarlas al client
 
 ## Resumen de la solución
 
-- App de pasajeros para registrar usuarios, elegir origen y destino, pedir viajes inmediatos o programados, ver el vehículo asignado y consultar el historial.
+- App de pasajeros con acceso QR temporal, cuenta recuperable por correo, viajes inmediatos o programados, seguimiento, historial, calificación e incidencias.
 - App de conductores para registrarse, cargar documentos, esperar aprobación, iniciar turno, enviar GPS en segundo plano y ejecutar el viaje por etapas.
 - Dashboard web para monitorear la flota sobre Mapbox, revisar conductores, administrar lugares, consultar historial, asignar sedes, gestionar usuarios y publicar actualizaciones.
 - Backend serverless sobre Firebase Realtime Database, Firebase Authentication, Firebase Storage, Cloud Functions y Firebase Cloud Messaging.
@@ -36,8 +36,8 @@ Las claves de Firebase/Mapbox, tokens, contraseñas, teléfonos internos, correo
 
 ## Pendientes antes de una entrega productiva
 
-1. Rotar y restringir las claves que hoy aparecen en archivos de configuración del repositorio.
-2. Desplegar y validar las reglas defensivas actuales de Realtime Database y Storage junto con las Cloud Functions.
+1. Rotar y restringir las claves de cliente por dominio, aplicación, certificado y API.
+2. Desplegar y validar este grupo de cambios de Realtime Database, Storage, Cloud Functions y dashboard.
 3. Mantener el dashboard detrás de HTTPS y revisar periódicamente usuarios y custom claims.
-4. Custodiar y respaldar la keystore fija usada por los workflows; los builds locales sin `FLEET_KEYSTORE_*` siguen usando firma de desarrollo.
+4. Crear o confirmar la keystore release definitiva, custodiarla y cargarla en GitHub Secrets. Los builds release locales sin `FLEET_KEYSTORE_*` fallan de forma segura.
 5. Ejecutar la prueba de aceptación del [checklist de entrega](guia-despliegue-y-entrega.md#checklist-de-aceptación) con teléfonos físicos y una flota representativa.

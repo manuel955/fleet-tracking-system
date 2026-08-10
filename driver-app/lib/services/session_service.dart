@@ -11,7 +11,8 @@ class SessionService {
   static const _key = 'active_session_id';
 
   static Future<String> startNewSession() async {
-    final id = '${DateTime.now().millisecondsSinceEpoch}-${Random().nextInt(1 << 31)}';
+    final id =
+        '${DateTime.now().millisecondsSinceEpoch}-${Random().nextInt(1 << 31)}';
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_key, id);
     return id;

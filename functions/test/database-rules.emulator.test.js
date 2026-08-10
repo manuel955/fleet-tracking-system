@@ -270,6 +270,36 @@ if (!emulatorHost) {
     await assertFails(get(ref(supervisor.database(), 'prematureDisconnectAlerts')));
   });
 
+  test('trip feedback is private to its passenger and dashboard administrators', async () => {
+    await seed('tripFeedback/trip-1', {
+      tripId: 'trip-1',
+      passengerId: 'passenger-1',
+      tripStatus: 'completed',
+      incidentCategory: 'safety',
+      incidentStatus: 'OPEN',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    const passenger = environment.authenticatedContext('passenger-1');
+    const otherPassenger = environment.authenticatedContext('passenger-2');
+    const admin = environment.authenticatedContext('admin-1', {
+      dashboardUser: true,
+      dashboardAdmin: true,
+      dashboardRole: 'ADMIN',
+    });
+    const supervisor = environment.authenticatedContext('supervisor-1', {
+      dashboardUser: true,
+      dashboardAdmin: false,
+      dashboardRole: 'SUPERVISOR',
+    });
+
+    await assertSucceeds(get(ref(passenger.database(), 'tripFeedback/trip-1')));
+    await assertFails(get(ref(otherPassenger.database(), 'tripFeedback/trip-1')));
+    await assertSucceeds(get(ref(admin.database(), 'tripFeedback')));
+    await assertFails(get(ref(supervisor.database(), 'tripFeedback/trip-1')));
+    await assertFails(get(ref(supervisor.database(), 'tripFeedback')));
+  });
+
   test('coordinators only read their private trip mirror', async () => {
     await seed('coordinatorTrips/coordinator-1/trip-1', {
       dispatcherUid: 'coordinator-1',

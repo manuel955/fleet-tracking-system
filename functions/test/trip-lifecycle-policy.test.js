@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   ORPHANED_ASSIGNMENT_TIMEOUT_MS,
   prepareCoordinatorCancellation,
+  prepareDashboardCancellation,
   prepareDriverTripTransition,
   shouldReleaseAssignment,
 } = require('../trip-lifecycle-policy');
@@ -145,6 +146,32 @@ test('la cancelación coordinadora rechaza dueño ajeno y estados terminales', (
   assert.equal(foreign.httpStatus, 404);
   assert.equal(started.httpStatus, 409);
   assert.equal(completed.httpStatus, 409);
+});
+
+test('el dashboard cancela de forma auditada solo antes de iniciar', () => {
+  const result = prepareDashboardCancellation(
+    baseTrip(),
+    'admin@example.com',
+    'Cambio solicitado por operaciones',
+    NOW,
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.value.cancelledBy, 'dashboard');
+  assert.equal(result.value.cancelledByUser, 'admin@example.com');
+  assert.equal(result.value.cancelledAt, NOW);
+
+  assert.equal(prepareDashboardCancellation(
+    baseTrip({ status: 'in_progress' }),
+    'admin@example.com',
+    'Motivo válido',
+    NOW,
+  ).ok, false);
+  assert.equal(prepareDashboardCancellation(
+    baseTrip({ status: 'searching' }),
+    'admin@example.com',
+    'no',
+    NOW,
+  ).httpStatus, 400);
 });
 
 test('una asignación completada o cancelada queda marcada para liberación', () => {

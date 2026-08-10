@@ -49,8 +49,10 @@ class _SwipeToConfirmState extends State<SwipeToConfirm> {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final maxDrag = (constraints.maxWidth - _handleSize).clamp(0, double.infinity);
-        final progress = maxDrag == 0 ? 0.0 : (_dragX / maxDrag).clamp(0.0, 1.0);
+        final maxDrag =
+            (constraints.maxWidth - _handleSize).clamp(0, double.infinity);
+        final progress =
+            maxDrag == 0 ? 0.0 : (_dragX / maxDrag).clamp(0.0, 1.0);
 
         final locked = widget.busy || !widget.enabled;
 
@@ -68,22 +70,29 @@ class _SwipeToConfirmState extends State<SwipeToConfirm> {
                   opacity: 1 - progress,
                   child: Text(
                     widget.label,
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 15),
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 15),
                   ),
                 ),
               ),
               AnimatedPositioned(
-                duration: _dragging ? Duration.zero : const Duration(milliseconds: 200),
+                duration: _dragging
+                    ? Duration.zero
+                    : const Duration(milliseconds: 200),
                 curve: Curves.easeOut,
                 left: _dragX,
                 top: 0,
                 bottom: 0,
                 child: GestureDetector(
-                  onHorizontalDragStart: locked ? null : (_) => setState(() => _dragging = true),
+                  onHorizontalDragStart:
+                      locked ? null : (_) => setState(() => _dragging = true),
                   onHorizontalDragUpdate: locked
                       ? null
                       : (details) => setState(() {
-                            _dragX = (_dragX + details.delta.dx).clamp(0, maxDrag.toDouble());
+                            _dragX = (_dragX + details.delta.dx)
+                                .clamp(0, maxDrag.toDouble());
                           }),
                   onHorizontalDragEnd: locked
                       ? null
@@ -101,7 +110,8 @@ class _SwipeToConfirmState extends State<SwipeToConfirm> {
                     height: _handleSize,
                     padding: const EdgeInsets.all(3),
                     child: Container(
-                      decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+                      decoration: const BoxDecoration(
+                          color: Colors.white, shape: BoxShape.circle),
                       child: widget.busy
                           ? const Padding(
                               padding: EdgeInsets.all(14),

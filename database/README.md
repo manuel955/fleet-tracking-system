@@ -1,26 +1,34 @@
 # Base de datos
 
-## Recomendacion: Firebase Realtime Database
+## Implementación: Firebase Realtime Database
 
-Para ~100 vehiculos enviando su posicion cada 30 segundos, **Firebase
-Realtime Database** es la opcion mas simple y adecuada:
+La aplicación usa **Firebase Realtime Database** para el estado operativo en
+tiempo real:
 
 - Sincronizacion en tiempo real nativa (`on('value', ...)`) sin tener que
   montar tu propio servidor de WebSockets.
-- SDKs oficiales para Flutter/React Native y Web.
-- Soporte offline en el cliente movil (encola escrituras si no hay red).
+- SDK web para el dashboard y endpoints REST autenticados desde Flutter y
+  Cloud Functions.
+- Recuperación local controlada en las apps móviles cuando no hay red.
 - Reglas de seguridad declarativas por nodo (ver `firebase-rules.json`).
-- Costo y complejidad operativa minimos para este volumen de datos
-  (100 dispositivos escribiendo cada 30s ≈ 200 escrituras/min).
+- Índices y límites declarados en `firebase-rules.json` para las consultas de
+  viajes, accesos, invitaciones, alertas e incidencias.
 
 ## Configuracion
 
-1. Crea un proyecto en https://console.firebase.google.com
-2. Habilita **Realtime Database** (modo bloqueado/locked).
-3. Habilita **Authentication > Anonymous** (lo usa la app del conductor) y
-   **Authentication > Email/Password** (lo usa el panel de administracion:
-   crea ahi manualmente el usuario admin que usara el dashboard).
-4. Copia el contenido de `firebase-rules.json` en Realtime Database > Rules.
+1. Crea o abre el proyecto en <https://console.firebase.google.com>.
+2. Habilita **Realtime Database** en modo bloqueado.
+3. Habilita **Authentication > Anonymous** para la sesión inicial del
+   pasajero y **Email/Password** para conductor, dashboard y recuperación del
+   pasajero. No habilites Phone/SMS: este proyecto no lo utiliza.
+4. Despliega `firebase-rules.json` mediante Firebase CLI; no copies reglas
+   parciales desde la consola.
+5. Despliega también `storage.rules` y las Cloud Functions. Las escrituras
+   sensibles de viajes, accesos, GPS e incidencias se realizan en servidor.
+
+Los nodos principales actuales son `drivers`, `driverLocations`, `trips`,
+`tripHistory`, `passengers`, `passengerInvites`, `passengerAccess`,
+`tripFeedback`, `auditLogs`, `operationAlerts`, `scheduledTrips` y `config`.
 
 ## Alternativa: PostgreSQL
 

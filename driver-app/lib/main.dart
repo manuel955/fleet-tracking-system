@@ -409,6 +409,16 @@ class _DriverHomePageState extends State<DriverHomePage>
               );
             }
             break;
+          case 'driver_suspended':
+            final reason = message.data['reason']?.toString() ?? '';
+            await _afterAuthResolved();
+            NotificationService.showSimple(
+              'Cuenta suspendida',
+              reason.isNotEmpty
+                  ? reason
+                  : 'Comunícate con operaciones para más información.',
+            );
+            break;
         }
       });
     }
@@ -455,13 +465,13 @@ class _DriverHomePageState extends State<DriverHomePage>
       final profile = await DriverProfileService.fetchProfile(uid);
 
       if (profile == null) {
-        // Cuenta creada pero sin nodo de perfil (ej. la app se cerro a
-        // mitad del registro): no hay forma segura de continuar desde
-        // aqui, se cierra la sesion para que el conductor vuelva a
-        // registrarse desde cero.
+        // Cuenta creada pero sin perfil final (por ejemplo, la app se cerró
+        // durante una subida). Vuelve al formulario de registro; al ingresar
+        // las mismas credenciales se recupera el mismo UID y se reanuda.
         await AuthService.logout();
         setState(() {
           _loggedIn = false;
+          _showRegister = true;
           _loading = false;
         });
         return;
@@ -486,13 +496,13 @@ class _DriverHomePageState extends State<DriverHomePage>
         }
       }
 
+      await NotificationInboxService.rememberDriverUid(uid);
       await NotificationInboxService.recordApproval(
         status: profile['approvalStatus']?.toString() ?? '',
         reason: profile['rejectionReason']?.toString() ?? '',
         rejectionFieldKeys: profile['rejectionFieldKeys']?.toString() ?? '',
         reviewedAt: profile['reviewedAt']?.toString() ?? '',
       );
-      await NotificationInboxService.rememberDriverUid(uid);
 
       if (_supportsMobileServices) await PushService.registerToken();
 
@@ -519,13 +529,15 @@ class _DriverHomePageState extends State<DriverHomePage>
       _sessionCheckTimer = Timer.periodic(
           const Duration(seconds: 20), (_) => _checkSessionStillActive());
 
-      if (profile['approvalStatus'] == 'approved' && _supportsMobileServices) {
+      final canOperate = profile['approvalStatus'] == 'approved' &&
+          profile['suspended'] != true;
+      if (canOperate && _supportsMobileServices) {
         // La pantalla obtiene una posicion inicial propia y no depende de
         // que el servicio en segundo plano ya haya emitido su primer evento.
         unawaited(_refreshCurrentLocation());
       }
 
-      if (profile['approvalStatus'] == 'approved') {
+      if (canOperate) {
         _tripPollTimer?.cancel();
         _tripPollTimer =
             Timer.periodic(const Duration(seconds: 5), (_) => _pollForTrip());
@@ -585,7 +597,8 @@ class _DriverHomePageState extends State<DriverHomePage>
   Future<void> _checkSessionStillActive() async {
     if (_driverId == null) return;
     try {
-      final wasApproved = _driverProfile?['approvalStatus'] == 'approved';
+      final wasApproved = _driverProfile?['approvalStatus'] == 'approved' &&
+          _driverProfile?['suspended'] != true;
       final profile = await DriverProfileService.fetchProfile(_driverId!);
       if (profile != null) {
         final oldPlace =
@@ -595,9 +608,11 @@ class _DriverHomePageState extends State<DriverHomePage>
             ((profile['assignedPlace'] as Map?)?['name'] ?? '').toString();
         if (mounted) setState(() => _driverProfile = profile);
 
-        if (wasApproved && profile['approvalStatus'] != 'approved') {
+        final isApproved = profile['approvalStatus'] == 'approved' &&
+            profile['suspended'] != true;
+        if (wasApproved && !isApproved) {
           await _lockUnapprovedDriver(_driverId!);
-        } else if (!wasApproved && profile['approvalStatus'] == 'approved') {
+        } else if (!wasApproved && isApproved) {
           _tripPollTimer?.cancel();
           _tripPollTimer =
               Timer.periodic(const Duration(seconds: 5), (_) => _pollForTrip());
@@ -720,7 +735,9 @@ class _DriverHomePageState extends State<DriverHomePage>
   }
 
   Future<void> _pollForTrip({bool suppressAssignedNotification = false}) async {
-    if (_driverId == null || _driverProfile?['approvalStatus'] != 'approved') {
+    if (_driverId == null ||
+        _driverProfile?['approvalStatus'] != 'approved' ||
+        _driverProfile?['suspended'] == true) {
       return;
     }
     if (_tripPollInFlight) return;
@@ -757,7 +774,8 @@ class _DriverHomePageState extends State<DriverHomePage>
       ];
       if (trip['driverId'] != _driverId ||
           !activeStatuses.contains(trip['status']) ||
-          _driverProfile?['approvalStatus'] != 'approved') {
+          _driverProfile?['approvalStatus'] != 'approved' ||
+          _driverProfile?['suspended'] == true) {
         if (_tripId != null) {
           setState(() {
             _tripId = null;
@@ -876,7 +894,7 @@ class _DriverHomePageState extends State<DriverHomePage>
       final battery = await Permission.ignoreBatteryOptimizations.request();
       if (!battery.isGranted) {
         _addLog(
-            'Ahorro de baterÃ­a activo: el sistema puede suspender el rastreo al bloquear la pantalla.');
+            'Ahorro de batería activo: el sistema puede suspender el rastreo al bloquear la pantalla.');
       }
     }
 
@@ -1271,7 +1289,7 @@ class _DriverHomePageState extends State<DriverHomePage>
     }
 
     final approvalStatus = _driverProfile?['approvalStatus'] as String?;
-    if (approvalStatus != 'approved') {
+    if (approvalStatus != 'approved' || _driverProfile?['suspended'] == true) {
       return PendingApprovalScreen(
         profile: _driverProfile!,
         onLoggedOut: () => _clearSessionAndReturnToLogin(),
@@ -1513,7 +1531,7 @@ class _DriverHomePageState extends State<DriverHomePage>
     }
     if (defaultTargetPlatform == TargetPlatform.android &&
         _batteryStatus?.isGranted != true) {
-      return 'El ahorro de baterÃ­a puede suspender el rastreo. Permite que APL Logistics funcione sin restricciones.';
+      return 'El ahorro de batería puede suspender el rastreo. Permite que APL Logistics funcione sin restricciones.';
     }
     return null;
   }

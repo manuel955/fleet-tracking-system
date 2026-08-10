@@ -11,7 +11,9 @@ import '../config.dart';
 class SupportConfigService {
   static Future<String> fetchSupportPhone() async {
     try {
-      final uri = Uri.parse('${AppConfig.firebaseDbUrl}/config/supportPhone.json');
+      final uri = Uri.parse(
+        '${AppConfig.firebaseDbUrl}/config/supportPhone.json',
+      );
       final response = await http.get(uri).timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);

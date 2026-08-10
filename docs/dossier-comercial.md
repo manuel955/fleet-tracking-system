@@ -36,7 +36,8 @@ La solución completa incluye:
 
 ### App de pasajeros
 
-- Registro de nombre, teléfono y foto de credencial.
+- Activación mediante QR temporal del hotel, con vencimiento, límite de usos y revocación.
+- Registro de nombre, teléfono y foto de credencial; vinculación opcional de correo para recuperar la cuenta sin SMS.
 - Mapa con ubicación de recogida.
 - Búsqueda de destino con Mapbox Geocoding API, lugares recientes o pin fijo en el mapa.
 - Geocodificación inversa para convertir un punto seleccionado en una dirección.
@@ -47,6 +48,7 @@ La solución completa incluye:
 - Seguimiento del conductor antes de recoger al pasajero y ruta hacia el destino una vez iniciado el viaje.
 - Notificaciones de llegada y cambios de destino.
 - Historial de los últimos 7 días en la vista normal, con soporte técnico para consultar todo el historial.
+- Calificación del viaje completado y reporte de incidencias posteriores, con seguimiento abierto/resuelto en el dashboard.
 
 ### App de conductores
 
@@ -120,7 +122,8 @@ Esta es la información que conviene incluir en una propuesta o demostración:
 
 - Código fuente y repositorio transferido.
 - Proyecto Firebase transferido o con propietario administrativo del cliente.
-- Proyecto de Google Cloud/Maps transferido o con facturación del cliente.
+- Proyecto Firebase/Google Cloud transferido con su cuenta de facturación y
+  cuenta Mapbox transferida con límites de consumo definidos por el cliente.
 - Cuenta/organización de GitHub Actions y secretos de build transferidos de forma segura.
 - Keystore de producción y procedimiento de rotación custodiados por el cliente.
 - URLs de producción, credenciales iniciales y matriz de roles entregadas fuera del repositorio.

@@ -157,6 +157,8 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
   String? _scheduledTripId;
   Map<String, dynamic>? _scheduledTrip;
   Timer? _scheduledPollTimer;
+  Timer? _accessValidationTimer;
+  StreamSubscription<RemoteMessage>? _foregroundMessageSubscription;
   int _tabIndex = 0;
 
   @override
@@ -167,12 +169,34 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
       const Duration(seconds: 15),
       (_) => _pollScheduledTrip(),
     );
+    _accessValidationTimer = Timer.periodic(
+      const Duration(minutes: 1),
+      (_) => _validatePassengerAccess(),
+    );
   }
 
   @override
   void dispose() {
     _scheduledPollTimer?.cancel();
+    _accessValidationTimer?.cancel();
+    _foregroundMessageSubscription?.cancel();
     super.dispose();
+  }
+
+  Future<void> _validatePassengerAccess() async {
+    if (!_registered) return;
+    bool accessGranted;
+    try {
+      accessGranted = await PassengerService.ensureAccess();
+    } catch (_) {
+      // Una caida de red no revoca el acceso que aun es valido en la cache.
+      accessGranted = await PassengerService.hasAccess();
+    }
+    if (!mounted) return;
+    final hasOpenService = _activeTripId != null || _scheduledTripId != null;
+    if (accessGranted != _accessGranted && (accessGranted || !hasOpenService)) {
+      setState(() => _accessGranted = accessGranted);
+    }
   }
 
   bool _scheduledTripViewChanged(Map<String, dynamic> next) {
@@ -239,7 +263,7 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
     final registered = await PassengerService.isRegistered();
     // Un pasajero que ya tenía registro antes de activar los QR conserva la
     // entrada aunque el primer intento de sincronización esté sin red.
-    var accessGranted = registered || await PassengerService.hasAccess();
+    var accessGranted = await PassengerService.hasAccess();
     if (registered) {
       // Conserva el acceso de cuentas antiguas. El servidor solo migra
       // perfiles creados antes de activar el control QR.
@@ -253,27 +277,31 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
 
     // Con la app visible, el push llega por aqui en vez de por el handler
     // de background -- mismo patron que driver-app/lib/main.dart.
-    FirebaseMessaging.onMessage.listen((message) {
-      switch (message.data['type']) {
-        case 'driver_arrived':
-          NotificationService.showDriverArrived(
-            message.data['tripId']?.toString(),
-          );
-          break;
-        case 'trip_updated':
-          NotificationService.showSimple(
-            'Viaje actualizado',
-            'El destino de tu viaje cambió.',
-          );
-          break;
-        case 'trip_cancelled':
-          NotificationService.showTripCancelled(
-            message.data['reason']?.toString(),
-          );
-          break;
-      }
-    });
-    if (registered) PushService.registerToken();
+    if (!kIsWeb && _foregroundMessageSubscription == null) {
+      _foregroundMessageSubscription = FirebaseMessaging.onMessage.listen((
+        message,
+      ) {
+        switch (message.data['type']) {
+          case 'driver_arrived':
+            NotificationService.showDriverArrived(
+              message.data['tripId']?.toString(),
+            );
+            break;
+          case 'trip_updated':
+            NotificationService.showSimple(
+              'Viaje actualizado',
+              'El destino de tu viaje cambió.',
+            );
+            break;
+          case 'trip_cancelled':
+            NotificationService.showTripCancelled(
+              message.data['reason']?.toString(),
+            );
+            break;
+        }
+      });
+    }
+    if (registered) unawaited(PushService.registerToken());
 
     var activeTripId = await TripService.getActiveTripId();
 
@@ -289,12 +317,11 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
           activeTripId = null;
         }
       } catch (_) {
-        trip = null;
-        activeTripId = null;
+        trip = await TripService.getCachedTrip(activeTripId!);
       }
     }
 
-    final scheduledTripId = await TripService.getScheduledTripId();
+    var scheduledTripId = await TripService.getScheduledTripId();
     Map<String, dynamic>? scheduledTrip;
     if (scheduledTripId != null) {
       try {
@@ -304,6 +331,7 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
             scheduledTrip['status'] == 'cancelled') {
           await TripService.clearScheduledTrip();
           scheduledTrip = null;
+          scheduledTripId = null;
         } else if (scheduledTrip['status'] != 'scheduled') {
           // Ya se habia despachado (dejo de estar 'scheduled') mientras la
           // app estaba cerrada -- se trata directo como viaje activo, si no
@@ -316,16 +344,38 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
           scheduledTrip = null;
         }
       } catch (_) {
-        scheduledTrip = null;
+        scheduledTrip = await TripService.getCachedTrip(scheduledTripId!);
       }
     }
+
+    // SharedPreferences es solo una caché. Si la app se cerró después de que
+    // el servidor creó el viaje pero antes de guardar el ID local, recupera
+    // los viajes abiertos desde Firebase y reconstruye ambos estados.
+    if (trip == null || scheduledTrip == null) {
+      try {
+        final recovered = await TripService.recoverOpenTrips();
+        if (trip == null && recovered.active != null) {
+          activeTripId = recovered.active!.key;
+          trip = recovered.active!.value;
+        }
+        if (scheduledTrip == null && recovered.scheduled != null) {
+          scheduledTripId = recovered.scheduled!.key;
+          scheduledTrip = recovered.scheduled!.value;
+        }
+      } catch (_) {
+        // Sin red se conservan los IDs locales para reintentar al reiniciar.
+      }
+    }
+
+    accessGranted =
+        accessGranted || activeTripId != null || scheduledTripId != null;
 
     setState(() {
       _registered = registered;
       _accessGranted = accessGranted;
-      _activeTripId = trip != null ? activeTripId : null;
+      _activeTripId = activeTripId;
       _activeTrip = trip;
-      _scheduledTripId = scheduledTrip != null ? scheduledTripId : null;
+      _scheduledTripId = scheduledTripId;
       _scheduledTrip = scheduledTrip;
       _loading = false;
     });
@@ -340,24 +390,12 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
     setState(() => _accessGranted = true);
   }
 
-  Future<void> _onPhoneAuthenticated(Map<String, dynamic> _) async {
-    final accessGranted = await PassengerService.ensureAccess();
-    final profile = await PassengerService.loadProfile();
-    if (!mounted) return;
-    setState(() {
-      _accessGranted = accessGranted || profile != null;
-      _registered = profile != null;
-      _tabIndex = 0;
-    });
-    PushService.registerToken();
-  }
-
   Future<void> _onEmailAuthenticated(Map<String, dynamic> _) async {
     final accessGranted = await PassengerService.ensureAccess();
     final profile = await PassengerService.loadProfile();
     if (!mounted) return;
     setState(() {
-      _accessGranted = accessGranted || profile != null;
+      _accessGranted = accessGranted;
       _registered = profile != null;
       _tabIndex = 0;
     });
@@ -404,18 +442,32 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
   void _onTripStatusChanged(Map<String, dynamic> trip) {
     final status = trip['status'] as String?;
     if (status == 'completed' || status == 'cancelled') {
-      _onTripFinished();
+      _onTripFinished(showActivity: true);
       return;
     }
     setState(() => _activeTrip = trip);
   }
 
-  void _onTripFinished() {
+  void _onTripFinished({bool showActivity = false}) {
     TripService.clearActiveTrip();
     setState(() {
       _activeTripId = null;
       _activeTrip = null;
+      if (showActivity) _tabIndex = 1;
     });
+    unawaited(_validatePassengerAccess());
+    if (showActivity) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'El viaje finalizó. Puedes calificarlo en Actividad.',
+            ),
+          ),
+        );
+      });
+    }
   }
 
   void _onScheduledTripCancelled() {
@@ -423,24 +475,13 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
       _scheduledTripId = null;
       _scheduledTrip = null;
     });
+    unawaited(_validatePassengerAccess());
   }
 
   @override
   Widget build(BuildContext context) {
     if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-
-    if (!_accessGranted) {
-      return PassengerAccessScreen(
-        onAuthorized: _onAccessAuthorized,
-        onPhoneAuthenticated: _onPhoneAuthenticated,
-        onEmailAuthenticated: _onEmailAuthenticated,
-      );
-    }
-
-    if (!_registered) {
-      return RegistrationScreen(onDone: _onRegistered);
     }
 
     if (_activeTripId != null && _activeTrip != null) {
@@ -451,7 +492,7 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
         return ActiveTripTrackingScreen(
           tripId: _activeTripId!,
           trip: _activeTrip!,
-          onFinished: _onTripFinished,
+          onFinished: () => _onTripFinished(showActivity: true),
         );
       }
       return SearchingScreen(
@@ -460,6 +501,25 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
         onStatusChanged: _onTripStatusChanged,
         onCancelled: _onTripFinished,
       );
+    }
+
+    if (_activeTripId != null && _activeTrip == null) {
+      return _buildOfflineRecoveryScreen('viaje en curso');
+    }
+
+    if (_scheduledTripId != null && _scheduledTrip == null) {
+      return _buildOfflineRecoveryScreen('viaje programado');
+    }
+
+    if (!_accessGranted) {
+      return PassengerAccessScreen(
+        onAuthorized: _onAccessAuthorized,
+        onEmailAuthenticated: _onEmailAuthenticated,
+      );
+    }
+
+    if (!_registered) {
+      return RegistrationScreen(onDone: _onRegistered);
     }
 
     final tabs = [
@@ -472,7 +532,7 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
       const ActivityTabScreen(),
       AccountTabScreen(
         onLoggedOut: _onLoggedOut,
-        onPhoneAuthenticated: _onPhoneAuthenticated,
+        onEmailAuthenticated: _onEmailAuthenticated,
       ),
     ];
 
@@ -498,6 +558,41 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
             label: 'Cuenta',
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildOfflineRecoveryScreen(String serviceLabel) {
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.cloud_off_outlined, size: 56),
+                const SizedBox(height: 18),
+                const Text(
+                  'No pudimos conectar',
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  'Tu $serviceLabel sigue guardado. Revisa tu conexion y vuelve a intentar; no crearemos otro viaje.',
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 24),
+                FilledButton.icon(
+                  onPressed: _bootstrap,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Reintentar conexion'),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

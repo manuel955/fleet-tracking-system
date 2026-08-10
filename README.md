@@ -41,6 +41,9 @@ del conductor asignado
 - `getMyTrips` (HTTP) devuelve el historial del pasajero: las reglas de RTDB
   son por-registro y no permiten queries `orderBy/equalTo` del cliente sobre
   `/trips`, asi que ese listado lo hace el Admin SDK verificando el idToken.
+- El historial envía el ID token en el encabezado `Authorization`, nunca en la
+  URL. Los viajes finalizados admiten calificación e incidencias; el dashboard
+  permite marcar cada incidencia como abierta o resuelta.
 
 ## Detalles clave por componente
 
@@ -83,12 +86,19 @@ del conductor asignado
   agudo (los motores TTS no siempre exponen genero de voz).
 
 ### passenger-app/
+- El acceso se activa con una invitación QR temporal del hotel. El código
+  puede limitar usos y vencimiento; revocarlo invalida también los accesos ya
+  canjeados. Las cuentas antiguas se migran una sola vez.
+- La cuenta inicia de forma anónima para canjear el QR y puede vincular correo
+  y contraseña para recuperación. No se usa SMS.
 - Estilo Uber en blanco/negro, 3 pestañas: Inicio (mapa + "¿A donde
   vas?"), Actividad (viajes de los ultimos 7 dias), Cuenta.
 - Destino por busqueda (Mapbox Geocoding), recientes, o pin fijo al centro
   del mapa arrastrable ("Fija tu destino") con geocoding inverso.
 - La ruta usa **Mapbox Directions API** con perfil `driving`; si la
   red o el token fallan, la pantalla dibuja una linea recta de respaldo.
+- Al completar o cancelar, **Actividad** permite calificar o reportar una
+  incidencia. El acceso vencido bloquea nuevos viajes sin ocultar uno abierto.
 - Cerrar sesion borra viajes, perfil y foto credencial en Firebase y todo
   lo local.
 
@@ -131,22 +141,22 @@ Storage y Cloud Messaging.
      Standard de Mapbox.
    - driver-app ademas necesita `android/app/google-services.json` (app
      Android registrada en Firebase, para FCM).
-    - Compila e instala en telefono fisico (GPS/camera reales). Siempre pasa
-      el token; si no, la app muestra el estado seguro de mapa no configurado:
-      ```bash
-      flutter pub get
-      flutter build apk --release --dart-define=MAPBOX_ACCESS_TOKEN=pk....
+   - Compila e instala en telefono fisico (GPS/camara reales). Siempre pasa
+     el token; si no, la app muestra el estado seguro de mapa no configurado:
+     ```bash
+     flutter pub get
+     flutter build apk --release --dart-define=MAPBOX_ACCESS_TOKEN=pk....
       ```
    - Los workflows de GitHub generan APK/AAB con la keystore fija guardada en
-     secretos. Los builds locales usan la llave debug solo como respaldo para
-     desarrollo cuando no se definen las variables `FLEET_KEYSTORE_*`.
- 4. **Dashboard**: configura `dashboard/js/firebase-config.js`; genera el
+     secretos. Un build release local falla si no se definen las variables
+     `FLEET_KEYSTORE_*`; nunca usa una llave debug como respaldo.
+4. **Dashboard**: configura `dashboard/js/firebase-config.js`; genera el
    runtime de Mapbox desde la raiz con `node scripts/inject-mapbox-config.mjs`
-    usando `MAPBOX_ACCESS_TOKEN` y `MAPBOX_STYLE_URI`. Puede publicarse en el
-    target Firebase Hosting `dashboard` con `scripts/publicar-dashboard-firebase.ps1`
-    o en el VPS mediante el flujo descrito abajo. Entra con un usuario de
-    Email/Password que tenga los custom claims del dashboard.
- 5. **Web de pasajeros**: Firebase Hosting sirve `passenger-app/build/web`.
+   usando `MAPBOX_ACCESS_TOKEN` y `MAPBOX_STYLE_URI`. Puede publicarse en el
+   target Firebase Hosting `dashboard` con `scripts/publicar-dashboard-firebase.ps1`
+   o en el VPS mediante el flujo descrito abajo. Entra con un usuario de
+   Email/Password que tenga los custom claims del dashboard.
+5. **Web de pasajeros**: Firebase Hosting sirve `passenger-app/build/web`.
     Debes compilarlo con el token real de Mapbox antes de desplegarlo:
     ```powershell
     cd passenger-app
@@ -190,6 +200,8 @@ HTTPS automaticamente cuando el registro ya se haya propagado.
   y tokens separados por app. Nunca pongas un token secreto `sk.*` en cliente.
 - Sirve el dashboard solo detras de HTTPS y acceso controlado (expone
   telefonos de conductores).
+- Firebase Hosting y el flujo Caddy publican CSP, HSTS, restricción de marcos,
+  política de permisos y SRI para las dependencias JavaScript externas.
 
 ## Documentacion para entrega y venta
 

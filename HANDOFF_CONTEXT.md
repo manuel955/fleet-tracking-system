@@ -100,20 +100,89 @@ de asumir un bug cuando un pedido no se asigna.
   propietario desde Firebase/Google Cloud/Mapbox sin compartir secretos en el
   código ni en el chat.
 
-## Bug/patrón a recordar: nunca usar `ref.transaction()` contra RTDB desde Cloud Functions
+## Fase 7 local pendiente de desplegar (2026-08-09)
 
-Se probó y no es confiable dentro de Cloud Functions (el callback siempre
-recibía `null`). El patrón que sí funciona, usado en `functions/matching.js`
-y ahora también en `driver-app/lib/services/trip_service.dart`, es REST +
-concurrencia optimista: GET con header `X-Firebase-ETag: true`, verificar el
-estado antes de escribir, PUT con header `if-match: <etag>` (un 412 significa
-que otro proceso ganó la carrera, se ignora/reintenta). Si agregas más
-escrituras condicionales de servidor o cliente, replica este patrón.
+El árbol de trabajo contiene un grupo amplio de correcciones aún no confirmado
+ni desplegado como una sola entrega. No hacer `git reset --hard` ni reemplazar
+estos archivos sin revisar el diff. Entre los cambios ya validados localmente:
+
+- Se eliminó el flujo Phone/SMS del pasajero y se añadió recuperación por
+  correo/contraseña, con migración de la cuenta existente y sesión cifrada.
+- Los QR de hotel tienen vigencia y revocación real; revocar una invitación
+  invalida también los accesos ya canjeados. Un acceso vencido no se reactiva
+  por la migración heredada.
+- La creación de viajes del pasajero es idempotente, limita viajes simultáneos,
+  recupera respuestas perdidas y conserva viajes abiertos sin conexión.
+- El registro de conductor exige todos los documentos, sus vigencias y permite
+  reenviar únicamente los grupos rechazados. Suspensión, aprobación y
+  cancelación administrativa pasan por Functions y quedan auditadas.
+- Las sesiones móviles usan almacenamiento seguro; las llamadas de red tienen
+  timeout; la ubicación vieja del conductor no se presenta como actual.
+- El historial ya no coloca tokens en la URL. El pasajero puede calificar o
+  reportar una incidencia y el dashboard puede resolverla o reabrirla.
+- Dashboard con métricas diarias corregidas, navegación según rol, recuperación
+  de contraseña, CSP/HSTS/Permissions-Policy y SRI en dependencias externas.
+- Versiones actuales del código: conductor `1.0.1+54`, pasajero `1.0.0+43`.
+  Los números de build se reservan/publican de forma monotónica.
+- Última validación de este grupo: 103/103 pruebas de Functions y reglas con
+  emuladores RTDB/Storage, 8/8 de dashboard, 9/9 de pasajero y 7/7 de
+  conductor; ambos análisis Flutter quedaron limpios. Los APK debug de ambas
+  apps compilaron. No son artefactos de entrega porque no contienen el token
+  Mapbox ni la firma release.
+
+Pendientes que requieren decisión o acción del propietario:
+
+1. La keystore histórica de las instalaciones existentes ya fue identificada y
+   verificada contra el AAB firmado anterior: certificado SHA-256
+   `F4E1988474EEDE90D6AE1423BE31C9D4A7760F80D991BE94551E14287C52C4B5`.
+   La huella pública ya está guardada en GitHub como
+   `ANDROID_RELEASE_CERT_SHA256`; se conserva `ANDROID_DEBUG_KEYSTORE_BASE64`
+   como nombre heredado para no romper actualizaciones. No se generó una llave
+   nueva ni se expuso la clave privada. El workflow corregido (memoria Gradle
+   limitada, cache y log directo) terminó correctamente en GitHub Actions:
+   run `31348062790`, build `56`, artefacto
+   `apl-conductores-v1.0.1-56-signed`; la huella del AAB coincide con la
+   configurada. El artefacto está disponible en GitHub Actions y no se publicó
+   automáticamente en Play Store.
+2. Restringir y rotar los tokens públicos de Mapbox y las claves de Firebase.
+3. Ejecutar la auditoría visual con capturas cuando el árbol Git esté limpio;
+   la guía usada requiere commits atómicos y no debe aplicarse sobre este diff.
+4. Compilar, instalar y probar APK/AAB release en teléfonos físicos antes de
+   publicar los builds nuevos.
+5. Decidir y ejecutar una migración de documentos privados fuera del nodo
+   operativo `/drivers`: hoy los perfiles heredados guardan URLs firmadas de
+   Storage dentro de ese nodo. Cambiarlo exige separar datos privados y migrar
+   registros existentes; no se hizo silenciosamente porque es un cambio de
+   arquitectura y datos en producción.
+6. Ejecutar el despliegue coordinado de Functions, reglas, dashboard y apps.
+   Ninguno de los cambios locales de fase 7 está publicado todavía.
+
+La compilación con Flutter 3.44.6 también avisa que `flutter_tts`,
+`mapbox_maps_flutter` y `mobile_scanner` aún aplican el Kotlin Gradle Plugin
+tradicional. Compilan actualmente, pero sus próximas versiones deben revisarse
+antes de una futura actualización mayor de Flutter.
+
+La auditoría de dependencias de Functions (`npm audit --omit=dev
+--audit-level=high`) no reporta vulnerabilidades. `flutter pub outdated` sí
+identifica actualizaciones disponibles, incluidas versiones mayores de
+Mapbox, geolocalización, permisos, almacenamiento seguro y notificaciones;
+quedan para una tarea separada porque requieren regresión en Android físico.
+
+## Patrón de concurrencia para estados críticos
+
+Para transiciones críticas de viaje, ubicación, cancelación e incidencias se
+usa REST con concurrencia optimista: GET con header
+`X-Firebase-ETag: true`, verificación del estado y PUT con
+`if-match: <etag>`. Un 412 significa que otro proceso ganó la carrera y debe
+reintentarse o mostrarse como conflicto. El proyecto conserva transacciones
+acotadas en reservas/idempotencia ya cubiertas por pruebas; no introducir una
+nueva escritura condicional sin elegir y probar explícitamente su estrategia
+de concurrencia.
 
 ## Entorno de esta máquina (Windows, para quien siga en esta misma PC)
 
-- Firebase login (consola/CLI): `anfurex.3351@gmail.com`. El CLI de
-  firebase-tools ya tiene sesión guardada localmente.
+- El CLI de firebase-tools ya tiene una sesión local. No documentar el correo
+  de la cuenta propietaria ni copiar sus credenciales al repositorio.
 - gsutil/gcloud NO están instalados — usar la Storage JSON API con el
   access_token de firebase-tools si hace falta tocar CORS del bucket.
 - PATH relevante: Flutter en
@@ -130,10 +199,10 @@ escrituras condicionales de servidor o cliente, replica este patrón.
   `https://us-central1-rastreoflota-53052.cloudfunctions.net`. Logs:
   `firebase functions:log --project rastreoflota-53052 -n N` (timestamps en
   UTC; Perú es UTC-5).
-- Teléfonos de prueba: Samsung = conductor (serial `R5CY72078ZM`), Huawei P30
-  Pro = pasajero (serial `45C7N19420000522`). El Samsung frecuentemente NO
-  aparece en `adb devices` aunque esté conectado (interfaz ADB en estado
-  "Unknown" en el Administrador de dispositivos) — pedirle a Renzo
+- Teléfonos de prueba: un Samsung para conductor y un Huawei P30 Pro para
+  pasajero. No guardar los seriales en documentación versionada. El Samsung
+  frecuentemente no aparece en `adb devices` aunque esté conectado (interfaz
+  ADB en estado "Unknown" en el Administrador de dispositivos):
   desconectar/reconectar el cable o cambiar el modo USB a MTP;
   `adb kill-server && adb start-server` no lo arregla solo.
 - Para probar cambios de Dart en dispositivo:

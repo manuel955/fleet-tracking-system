@@ -79,10 +79,9 @@ class _MapboxWebSurfaceState extends State<MapboxWebSurface> {
         widget.markersJson,
       ]);
     } catch (_) {
-      widget.onEvent(jsonEncode(<String, dynamic>{
-        'id': widget.viewId,
-        'type': 'error',
-      }));
+      widget.onEvent(
+        jsonEncode(<String, dynamic>{'id': widget.viewId, 'type': 'error'}),
+      );
     }
   }
 

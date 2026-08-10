@@ -95,7 +95,8 @@ async function claimDriverWithToken(driverId, tripId, token, now = Date.now()) {
   if (
     !current ||
     current.status !== 'online' ||
-    current.approvalStatus !== 'approved'
+    current.approvalStatus !== 'approved' ||
+    current.suspended === true
   ) {
     return false;
   }
@@ -213,7 +214,7 @@ async function attemptAssignment(
     const id = child.key;
     if (excludeMap && excludeMap[id]) return;
     const d = child.val();
-    if (d.approvalStatus !== 'approved') return;
+    if (d.approvalStatus !== 'approved' || d.suspended === true) return;
     stats.onlineApproved += 1;
     if (typeof d.lat !== 'number' || typeof d.lng !== 'number') return;
     if (!d.lastUpdate || Date.now() - d.lastUpdate > STALE_LOCATION_MS) return;

@@ -4,6 +4,9 @@
 // para no arriesgar la logica del mapa ya existente.
 // ---------------------------------------------------------------------------
 
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
 const DOC_FIELDS = [
   { key: 'dniDocUrl', label: 'DNI (PDF)' },
   { key: 'dniFrontDocUrl', label: 'DNI (frente)' },
@@ -17,13 +20,15 @@ const DOC_FIELDS = [
 ];
 
 const REJECTION_FIELDS = [
+  { key: 'personalData', label: 'Datos personales' },
+  { key: 'vehicleData', label: 'Datos del vehículo' },
   { key: 'profile', label: 'Foto de perfil' },
   { key: 'dni', label: 'DNI' },
   { key: 'license', label: 'Licencia' },
   { key: 'soat', label: 'SOAT' },
-  { key: 'circulationCard', label: 'Tarjeta de circulaciÃ³n' },
-  { key: 'technicalReview', label: 'RevisiÃ³n tÃ©cnica' },
-  { key: 'criminalRecord', label: 'RÃ©cord del conductor' },
+  { key: 'circulationCard', label: 'Tarjeta de circulación' },
+  { key: 'technicalReview', label: 'Revisión técnica' },
+  { key: 'criminalRecord', label: 'Récord del conductor' },
   { key: 'workCertificate', label: 'Certificado laboral' },
 ];
 
@@ -35,15 +40,19 @@ const APPROVAL_LABELS = {
   pending_review: 'Pendiente',
   approved: 'Aprobado',
   rejected: 'Rechazado',
+  suspended: 'Suspendido',
 };
 
 let adminDriversCache = {};
 let adminSubscribed = false;
+let adminSubscribedRole = '';
+let adminListenerBindings = [];
 let adminActiveFilter = 'approved';
 let adminDriverSearch = '';
 let openRejectFormId = null;
 let adminPlacesCache = { hotels: {}, sportVenues: {} };
 let adminTripHistory = {};
+let adminTripFeedback = {};
 let adminConnectionHistory = {};
 let attendanceDateFilter = { from: '', to: '' };
 let attendanceCalendarMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
@@ -66,6 +75,9 @@ const pendingBadgeEl = document.getElementById('pending-badge');
 const navTabs = document.querySelectorAll('.nav-tab');
 
 function openDashboardView(view) {
+  if (window.dashboardRole !== 'ADMIN' && (view === 'places' || view === 'settings')) {
+    view = 'map';
+  }
   navTabs.forEach((tab) => tab.classList.toggle('active', tab.getAttribute('data-view') === view));
   mapViewEl.classList.toggle('hidden', view !== 'map');
   adminViewEl.classList.toggle('hidden', view !== 'drivers-admin');
@@ -86,20 +98,49 @@ function openDashboardView(view) {
 navTabs.forEach((tab) => tab.addEventListener('click', () => openDashboardView(tab.getAttribute('data-view'))));
 document.getElementById('dashboard-home-link').addEventListener('click', () => openDashboardView('map'));
 
+function subscribeAdminValue(path, handler) {
+  const reference = db.ref(path);
+  reference.on('value', handler);
+  adminListenerBindings.push({ reference, handler });
+}
+
+function resetDriversAdminSubscriptions() {
+  adminListenerBindings.forEach(({ reference, handler }) => reference.off('value', handler));
+  adminListenerBindings = [];
+  adminTripHistory = {};
+  adminTripFeedback = {};
+  adminConnectionHistory = {};
+  adminSubscribed = false;
+  adminSubscribedRole = '';
+}
+
+function driverAdminFilters() {
+  if (window.dashboardRole === 'ADMIN') {
+    return ['approved', 'pending_review', 'rejected', 'suspended', 'all', 'trip-history', 'attendance', 'alerts', 'incidents'];
+  }
+  return ['approved', 'suspended', 'all'];
+}
+
 function startDriversAdmin() {
-  if (adminSubscribed) return;
+  const role = window.dashboardRole || '';
+  if (adminSubscribed && adminSubscribedRole === role) return;
+  if (adminSubscribed) resetDriversAdminSubscriptions();
   adminSubscribed = true;
-  db.ref('drivers').on('value', (snapshot) => {
+  adminSubscribedRole = role;
+  subscribeAdminValue('drivers', (snapshot) => {
     adminDriversCache = snapshot.val() || {};
     updatePendingBadge();
     renderDriversAdmin();
   });
-  ['hotels', 'sportVenues'].forEach((key) => db.ref(`config/${key}`).on('value', (snapshot) => {
+  ['hotels', 'sportVenues'].forEach((key) => subscribeAdminValue(`config/${key}`, (snapshot) => {
     adminPlacesCache[key] = snapshot.val() || {};
     renderDriversAdmin();
   }));
-  db.ref('tripHistory').on('value', (snapshot) => { adminTripHistory = snapshot.val() || {}; renderDriversAdmin(); });
-  db.ref('driverConnectionHistory').on('value', (snapshot) => { adminConnectionHistory = snapshot.val() || {}; renderDriversAdmin(); });
+  if (role === 'ADMIN') {
+    subscribeAdminValue('tripHistory', (snapshot) => { adminTripHistory = snapshot.val() || {}; renderDriversAdmin(); });
+    subscribeAdminValue('tripFeedback', (snapshot) => { adminTripFeedback = snapshot.val() || {}; renderDriversAdmin(); });
+    subscribeAdminValue('driverConnectionHistory', (snapshot) => { adminConnectionHistory = snapshot.val() || {}; renderDriversAdmin(); });
+  }
 }
 
 function driverPlaceOptions(d) {
@@ -117,7 +158,7 @@ function updatePendingBadge() {
     (d) => d.approvalStatus === 'pending_review'
   ).length;
   pendingBadgeEl.textContent = String(pendingCount);
-  pendingBadgeEl.classList.toggle('hidden', pendingCount === 0);
+  pendingBadgeEl.classList.toggle('hidden', window.dashboardRole !== 'ADMIN' || pendingCount === 0);
 }
 
 function isPdfUrl(url) {
@@ -125,6 +166,7 @@ function isPdfUrl(url) {
 }
 
 function safeDriverStorageUrl(rawValue, driverId) {
+  if (window.dashboardRole !== 'ADMIN') return '';
   try {
     const url = new URL(String(rawValue || '').trim());
     const expectedPrefix = `/v0/b/rastreoflota-53052.firebasestorage.app/o/driver_documents/${driverId}/`;
@@ -183,7 +225,9 @@ function driverConnectionHtml(driverId, d) {
 }
 
 function driverAdminCardHtml(driverId, d) {
-  const status = d.approvalStatus || 'pending_review';
+  const status = d.suspended === true
+    ? 'suspended'
+    : (d.approvalStatus || 'pending_review');
   const profilePhotoUrl = safeDriverStorageUrl(d.profilePhotoUrl, driverId);
   const canManageDriver = window.dashboardRole === 'ADMIN';
   const rejectFormOpen = openRejectFormId === driverId;
@@ -191,6 +235,13 @@ function driverAdminCardHtml(driverId, d) {
     .split(',')
     .map((key) => REJECTION_FIELD_LABELS[key.trim()])
     .filter(Boolean);
+  const expiryLabel = (value) => {
+    const timestamp = Number(value);
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return 'Sin registrar';
+    const date = new Date(timestamp);
+    const expired = timestamp <= Date.now();
+    return `${date.toLocaleDateString('es-PE')}${expired ? ' · VENCIDO' : ''}`;
+  };
 
   const rejectionBlock =
     status === 'rejected'
@@ -199,6 +250,9 @@ function driverAdminCardHtml(driverId, d) {
           ${rejectionLabels.length ? `<div><b>Debe corregir:</b> ${escapeHtml(rejectionLabels.join(', '))}</div>` : ''}
         </div>`
       : '';
+  const suspensionBlock = d.suspended === true
+    ? `<div class="rejection-note"><div><b>Motivo de suspensión:</b> ${escapeHtml(d.suspensionReason || '-')}</div><div><b>Suspendido por:</b> ${escapeHtml(d.suspendedBy || '-')}</div></div>`
+    : '';
 
   const actionsHtml =
     canManageDriver && status === 'pending_review'
@@ -212,7 +266,7 @@ function driverAdminCardHtml(driverId, d) {
             ? `
           <form class="reject-form" data-reject-form="${driverId}">
             <div class="reject-fields">
-              <strong>Documentos que debe corregir:</strong>
+              <strong>Datos o documentos que debe corregir:</strong>
               <div class="reject-fields-grid">
                 ${REJECTION_FIELDS.map((field) => `<label><input type="checkbox" name="rejectionField" value="${field.key}" /> ${field.label}</label>`).join('')}
               </div>
@@ -225,6 +279,11 @@ function driverAdminCardHtml(driverId, d) {
         }
       `
       : '';
+  const suspensionActions = canManageDriver && d.approvalStatus === 'approved'
+    ? `<div class="driver-admin-actions">${d.suspended === true
+      ? `<button type="button" class="approve-btn" data-action="reinstate" data-id="${driverId}">Reactivar conductor</button>`
+      : `<button type="button" class="reject-btn" data-action="suspend" data-id="${driverId}">Suspender conductor</button>`}</div>`
+    : '';
 
   return `
     <div class="driver-admin-card" data-id="${driverId}">
@@ -241,16 +300,16 @@ function driverAdminCardHtml(driverId, d) {
         <div class="row"><b>Placa:</b> ${escapeHtml(d.plate || '-')}</div>
         <div class="row"><b>Edad:</b> ${escapeHtml(String(d.age ?? '-'))}</div>
         <div class="row"><b>Lugar asignado:</b> ${escapeHtml(d.assignedPlace?.name || '-')}</div>
+        <div class="row"><b>Licencia vigente hasta:</b> ${escapeHtml(expiryLabel(d.licenseExpiresAt))}</div>
+        <div class="row"><b>SOAT vigente hasta:</b> ${escapeHtml(expiryLabel(d.soatExpiresAt))}</div>
+        <div class="row"><b>Revisión técnica vigente hasta:</b> ${escapeHtml(expiryLabel(d.technicalReviewExpiresAt))}</div>
       </div>
       ${status !== 'rejected' ? driverConnectionHtml(driverId, d) : ''}
       ${rejectionBlock}
+      ${suspensionBlock}
       ${
         !canManageDriver
-          ? `
-        <div class="driver-admin-actions">
-          <button type="button" class="view-file-btn" data-action="view-file" data-id="${driverId}">Ver archivo completo</button>
-        </div>
-      `
+          ? ''
           : status !== 'rejected'
           ? `
         <div class="driver-admin-actions">
@@ -268,12 +327,15 @@ function driverAdminCardHtml(driverId, d) {
       `
       }
       ${actionsHtml}
+      ${suspensionActions}
     </div>
   `;
 }
 
 function renderDriversAdmin() {
-  if (adminActiveFilter === 'trip-history' || adminActiveFilter === 'attendance' || adminActiveFilter === 'alerts') {
+  const availableFilters = driverAdminFilters();
+  if (!availableFilters.includes(adminActiveFilter)) adminActiveFilter = 'approved';
+  if (adminActiveFilter === 'trip-history' || adminActiveFilter === 'attendance' || adminActiveFilter === 'alerts' || adminActiveFilter === 'incidents') {
     if (adminActiveFilter === 'attendance') {
       renderDriversAttendance();
       return;
@@ -282,12 +344,19 @@ function renderDriversAdmin() {
       renderPrematureDisconnectHistory();
       return;
     }
+    if (adminActiveFilter === 'incidents') {
+      renderTripIncidents();
+      return;
+    }
     renderDriversHistory();
     return;
   }
   const entries = Object.entries(adminDriversCache).filter(([, d]) => {
     if (adminActiveFilter === 'all') return true;
-    return (d.approvalStatus || 'pending_review') === adminActiveFilter;
+    const status = d.suspended === true
+      ? 'suspended'
+      : (d.approvalStatus || 'pending_review');
+    return status === adminActiveFilter;
   }).filter(([, d]) => {
     const query = adminDriverSearch.trim().toLowerCase();
     if (!query) return true;
@@ -296,11 +365,11 @@ function renderDriversAdmin() {
 
   const toolbarHtml = `
     <div class="drivers-admin-toolbar">
-      ${['approved', 'pending_review', 'rejected', 'all', 'trip-history', 'attendance', 'alerts']
+      ${availableFilters
         .map(
           (f) => `
         <button type="button" class="filter-pill ${adminActiveFilter === f ? 'active' : ''}" data-admin-filter="${f}">
-          ${f === 'all' ? 'Todos' : f === 'trip-history' ? 'Historial de viajes' : f === 'attendance' ? 'Asistencia' : f === 'alerts' ? 'Alertas de desconexión' : APPROVAL_LABELS[f]}
+          ${f === 'all' ? 'Todos' : f === 'trip-history' ? 'Historial de viajes' : f === 'attendance' ? 'Asistencia' : f === 'alerts' ? 'Alertas de desconexión' : f === 'incidents' ? 'Incidencias' : APPROVAL_LABELS[f]}
         </button>
       `
         )
@@ -336,6 +405,12 @@ function renderDriversAdmin() {
       renderDriversAdmin();
     });
   });
+  adminViewEl.querySelectorAll('[data-action="suspend"]').forEach((btn) => {
+    btn.addEventListener('click', () => suspendDriver(btn.getAttribute('data-id')));
+  });
+  adminViewEl.querySelectorAll('[data-action="reinstate"]').forEach((btn) => {
+    btn.addEventListener('click', () => reinstateDriver(btn.getAttribute('data-id')));
+  });
 
   adminViewEl.querySelectorAll('[data-action="assign-place"]').forEach((btn) => {
     btn.addEventListener('click', () => assignDriverPlace(btn.getAttribute('data-id')));
@@ -363,14 +438,69 @@ function renderDriversAdmin() {
       const rejectionFields = [...form.querySelectorAll('input[name="rejectionField"]:checked')]
         .map((input) => input.value);
       if (!reason) return alert('Escribe el motivo del rechazo.');
-      if (!rejectionFields.length) return alert('Selecciona al menos un documento que deba corregirse.');
+      if (!rejectionFields.length) return alert('Selecciona al menos un dato o documento que deba corregirse.');
       await rejectDriver(driverId, reason, rejectionFields);
     });
   });
 }
 
 function historyToolbarHtml() {
-  return `<div class="drivers-admin-toolbar">${['approved', 'pending_review', 'rejected', 'all', 'trip-history', 'attendance', 'alerts'].map((f) => `<button type="button" class="filter-pill ${adminActiveFilter === f ? 'active' : ''}" data-admin-filter="${f}">${f === 'all' ? 'Todos' : f === 'trip-history' ? 'Historial de viajes' : f === 'attendance' ? 'Asistencia' : f === 'alerts' ? 'Alertas de desconexión' : APPROVAL_LABELS[f]}</button>`).join('')}</div>`;
+  return `<div class="drivers-admin-toolbar">${driverAdminFilters().map((f) => `<button type="button" class="filter-pill ${adminActiveFilter === f ? 'active' : ''}" data-admin-filter="${f}">${f === 'all' ? 'Todos' : f === 'trip-history' ? 'Historial de viajes' : f === 'attendance' ? 'Asistencia' : f === 'alerts' ? 'Alertas de desconexión' : f === 'incidents' ? 'Incidencias' : APPROVAL_LABELS[f]}</button>`).join('')}</div>`;
+}
+
+const TRIP_INCIDENT_LABELS = {
+  driver_conduct: 'Conducta del conductor',
+  service_quality: 'Calidad del servicio',
+  safety: 'Seguridad',
+  lost_item: 'Objeto perdido',
+  other: 'Otro',
+};
+
+function renderTripIncidents() {
+  const incidents = Object.entries(adminTripFeedback)
+    .filter(([, feedback]) => feedback?.incidentCategory && feedback.incidentCategory !== 'none')
+    .sort(([, a], [, b]) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+  const openCount = incidents.filter(([, feedback]) => feedback.incidentStatus !== 'RESOLVED').length;
+  const rows = incidents.map(([tripId, feedback]) => {
+    const trip = adminTripHistory[tripId] || {};
+    const resolved = feedback.incidentStatus === 'RESOLVED';
+    const action = resolved ? 'reopen' : 'resolve';
+    return `<tr>
+      <td>${new Date(Number(feedback.updatedAt || 0)).toLocaleString('es-PE')}</td>
+      <td><strong>${escapeHtml(trip.passengerName || feedback.passengerId || 'Pasajero')}</strong><small>Viaje ${escapeHtml(tripId)}</small></td>
+      <td><strong>${escapeHtml(trip.driverName || adminDriversCache[feedback.driverId]?.name || 'Sin conductor')}</strong><small>${escapeHtml(trip.driverPlate || adminDriversCache[feedback.driverId]?.plate || '—')}</small></td>
+      <td><strong>${escapeHtml(TRIP_INCIDENT_LABELS[feedback.incidentCategory] || feedback.incidentCategory)}</strong><small>${escapeHtml(feedback.incidentDetails || 'Sin detalle')}</small></td>
+      <td><span class="trip-history-status ${resolved ? 'completed' : 'cancelled'}">${resolved ? 'Resuelta' : 'Abierta'}</span></td>
+      <td><button type="button" class="settings-table-action" data-incident-action="${action}" data-trip-id="${escapeHtml(tripId)}">${resolved ? 'Reabrir' : 'Marcar resuelta'}</button></td>
+    </tr>`;
+  }).join('');
+
+  adminViewEl.innerHTML = `${historyToolbarHtml()}<div class="attendance-heading"><div><h3>Incidencias de pasajeros</h3><p>Reportes posteriores al viaje que requieren seguimiento operativo.</p></div><span class="attendance-count">${openCount} abierta${openCount === 1 ? '' : 's'}</span></div><div class="dashboard-users-table-wrap"><table class="dashboard-users-table"><thead><tr><th>Fecha</th><th>Pasajero / viaje</th><th>Conductor</th><th>Incidencia</th><th>Estado</th><th>Acción</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="dashboard-empty-row">Todavía no hay incidencias reportadas.</td></tr>'}</tbody></table></div>`;
+  adminViewEl.querySelectorAll('[data-admin-filter]').forEach((btn) => btn.addEventListener('click', () => {
+    adminActiveFilter = btn.getAttribute('data-admin-filter');
+    renderDriversAdmin();
+  }));
+  adminViewEl.querySelectorAll('[data-incident-action]').forEach((button) => button.addEventListener('click', () => {
+    manageTripIncident(button.getAttribute('data-trip-id'), button.getAttribute('data-incident-action'), button);
+  }));
+}
+
+async function manageTripIncident(tripId, action, button) {
+  button.disabled = true;
+  try {
+    const token = await auth.currentUser.getIdToken();
+    const response = await fetch('https://us-central1-rastreoflota-53052.cloudfunctions.net/manageTripFeedback', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tripId, action }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || 'No se pudo actualizar la incidencia.');
+  } catch (error) {
+    button.disabled = false;
+    alert(error.message || error);
+  }
 }
 
 function attendanceSessions() {
@@ -823,7 +953,7 @@ async function tripHistorySnapshot(trip) {
     const coordinates = `${pickup.lng},${pickup.lat};${destination.lng},${destination.lat}`;
     const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${coordinates}?overview=full&geometries=geojson&access_token=${encodeURIComponent(dashboardMapboxToken())}`;
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: AbortSignal.timeout(12000) });
       if (response.ok) {
         const route = (await response.json()).routes?.[0];
         routeDistanceMeters = Number.isFinite(Number(route?.distance)) ? Number(route.distance) : routeDistanceMeters;
@@ -1437,7 +1567,7 @@ function renderPrematureDisconnectHistory() {
 async function manageDriver(payload) {
   const token = await auth.currentUser.getIdToken();
   const response = await fetch('https://us-central1-rastreoflota-53052.cloudfunctions.net/manageDrivers', {
-    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(15000),
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error || 'No se pudo administrar el conductor.');
@@ -1464,15 +1594,29 @@ async function deleteDriver(driverId) {
 
 async function approveDriver(driverId) {
   try {
-    await db.ref(`drivers/${driverId}`).update({
-      approvalStatus: 'approved',
-      rejectionReason: null,
-      rejectionFieldKeys: null,
-      reviewedAt: Date.now(),
-      reviewedBy: auth.currentUser ? auth.currentUser.email : null,
-    });
+    await manageDriver({ action: 'approve', driverId });
   } catch (error) {
     alert(error.message || 'No se pudo aprobar al conductor.');
+  }
+}
+
+async function suspendDriver(driverId) {
+  const reason = prompt('Motivo de suspensión (quedará auditado):');
+  if (reason == null) return;
+  if (reason.trim().length < 5) return alert('Escribe un motivo de al menos 5 caracteres.');
+  try {
+    await manageDriver({ action: 'suspend', driverId, reason: reason.trim() });
+  } catch (error) {
+    alert(error.message || 'No se pudo suspender al conductor.');
+  }
+}
+
+async function reinstateDriver(driverId) {
+  if (!confirm('¿Reactivar a este conductor?')) return;
+  try {
+    await manageDriver({ action: 'reinstate', driverId });
+  } catch (error) {
+    alert(error.message || 'No se pudo reactivar al conductor.');
   }
 }
 
@@ -1500,7 +1644,7 @@ async function rejectDriver(driverId, reason, rejectionFields) {
 async function fetchAsDataUrl(url) {
   // cache: 'no-store' evita que una respuesta cacheada sin CORS (de una
   // carga previa como <img>, sin modo 'cors') bloquee este fetch.
-  const response = await fetch(url, { mode: 'cors', cache: 'no-store' });
+  const response = await fetch(url, { mode: 'cors', cache: 'no-store', signal: AbortSignal.timeout(30000) });
   if (!response.ok) throw new Error(`fetch ${response.status}`);
   const blob = await response.blob();
   return new Promise((resolve, reject) => {
@@ -1515,7 +1659,7 @@ async function fetchAsDataUrl(url) {
 // canvas, devolviendo esa imagen como data URL (mismo formato que
 // fetchAsDataUrl) para poder incrustarla igual que una foto.
 async function renderPdfFirstPageAsDataUrl(url) {
-  const response = await fetch(url, { mode: 'cors', cache: 'no-store' });
+  const response = await fetch(url, { mode: 'cors', cache: 'no-store', signal: AbortSignal.timeout(30000) });
   if (!response.ok) throw new Error(`fetch ${response.status}`);
   const arrayBuffer = await response.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -1556,7 +1700,9 @@ async function downloadDriverPdf(button) {
       }
     }
 
-    const status = d.approvalStatus || 'pending_review';
+    const status = d.suspended === true
+      ? 'suspended'
+      : (d.approvalStatus || 'pending_review');
 
     doc.setFontSize(18);
     doc.setFont(undefined, 'bold');
@@ -1597,6 +1743,9 @@ async function downloadDriverPdf(button) {
       ['Estado operativo', d.status || 'Desconectado'],
       ['Registrado', d.registeredAt ? new Date(d.registeredAt).toLocaleString() : null],
       ['Documentos enviados', d.documentsSubmittedAt ? new Date(d.documentsSubmittedAt).toLocaleString() : null],
+      ['Licencia vence', d.licenseExpiresAt ? new Date(d.licenseExpiresAt).toLocaleDateString('es-PE') : null],
+      ['SOAT vence', d.soatExpiresAt ? new Date(d.soatExpiresAt).toLocaleDateString('es-PE') : null],
+      ['Revisión técnica vence', d.technicalReviewExpiresAt ? new Date(d.technicalReviewExpiresAt).toLocaleDateString('es-PE') : null],
       ['Revisado', d.reviewedAt ? new Date(d.reviewedAt).toLocaleString() : null],
       ['Revisado por', d.reviewedBy || null],
     ];

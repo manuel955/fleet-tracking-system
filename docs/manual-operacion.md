@@ -114,8 +114,9 @@ Revisa en este orden:
 ### Registrar una cuenta
 
 1. Instala la app.
-2. Ingresa nombre, teléfono y foto de DNI/carnet.
-3. Confirma el registro.
+2. Escanea o pega el código QR entregado por el hotel.
+3. Ingresa nombre, teléfono y foto de DNI/carnet.
+4. Confirma el registro y, si deseas recuperar la cuenta en otro equipo, vincula un correo y contraseña.
 
 El registro se conserva localmente para no repetirlo en cada apertura. Al cerrar sesión, la implementación elimina el perfil, la foto y el historial asociado cuando la red lo permite.
 
@@ -132,6 +133,10 @@ Mientras se busca un conductor, la app consulta el estado cada 3 segundos. Si no
 ### Seguir el viaje
 
 Cuando se asigna el conductor, la app muestra nombre, teléfono, placa, tipo, color y capacidad. La posición del vehículo se consulta cada 5 segundos y el estado del viaje cada 4 segundos.
+
+Al finalizar o cancelar, abre **Actividad**, toca el viaje y registra una calificación, comentario o incidencia. Una incidencia requiere una descripción suficiente y aparecerá en **Conductores → Incidencias** para el administrador hasta que la marque como resuelta.
+
+Este sistema gestiona transporte corporativo sin cobro por viaje, por lo que el flujo termina sin pantalla de pago ni captura de tarjeta.
 
 - Antes de abordar, la ruta se calcula hacia el punto de recogida.
 - Después de abordar, la ruta se calcula hacia el destino.
@@ -156,4 +161,4 @@ La app permite modificar el destino mientras el viaje sigue activo y notifica al
 
 ## 5. Operación diaria recomendada
 
-Antes de iniciar servicios, el operador debe confirmar que el dashboard abre, que Mapbox carga, que los conductores aprobados aparecen, que hay al menos un teléfono enviando GPS y que el soporte configurado es correcto. Al cerrar el día, revisar viajes cancelados, viajes en curso, asistencia y conductores que quedaron sin señal.
+Antes de iniciar servicios, el operador debe confirmar que el dashboard abre, que Mapbox carga, que los conductores aprobados aparecen, que hay al menos un teléfono enviando GPS y que el soporte configurado es correcto. Al cerrar el día, revisar viajes cancelados, incidencias abiertas, viajes en curso, asistencia y conductores que quedaron sin señal.

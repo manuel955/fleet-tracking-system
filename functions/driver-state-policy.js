@@ -16,6 +16,9 @@ function buildDriverAvailabilityUpdate(current, online, now) {
   if (online && current.approvalStatus !== 'approved') {
     return policyError(403, 'El conductor todavía no está aprobado.');
   }
+  if (online && current.suspended === true) {
+    return policyError(403, 'La cuenta del conductor está suspendida.');
+  }
 
   const publicStatus = online
     ? (current.currentTripId ? 'busy' : 'online')
@@ -67,6 +70,9 @@ function buildDriverLocationUpdate(current, location, lastUpdate) {
   if (!current) return policyError(404, 'Conductor no encontrado.');
   if (current.approvalStatus !== 'approved') {
     return policyError(403, 'El conductor todavía no está aprobado.');
+  }
+  if (current.suspended === true) {
+    return policyError(403, 'La cuenta del conductor está suspendida.');
   }
   if (!isDriverShiftActive(current)) {
     return policyError(409, 'El turno del conductor no está activo.');

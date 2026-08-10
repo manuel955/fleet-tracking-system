@@ -10,7 +10,11 @@ class PresetPlacesScreen extends StatefulWidget {
   final String title;
   final String configKey;
 
-  const PresetPlacesScreen({super.key, required this.title, required this.configKey});
+  const PresetPlacesScreen({
+    super.key,
+    required this.title,
+    required this.configKey,
+  });
 
   @override
   State<PresetPlacesScreen> createState() => _PresetPlacesScreenState();
@@ -37,9 +41,19 @@ class _PresetPlacesScreenState extends State<PresetPlacesScreen> {
   Future<void> _load() async {
     try {
       final places = await PresetPlacesService.fetch(widget.configKey);
-      if (mounted) setState(() { _places = places; _loading = false; });
+      if (mounted) {
+        setState(() {
+          _places = places;
+          _loading = false;
+        });
+      }
     } catch (e) {
-      if (mounted) setState(() { _error = 'No se pudo cargar la lista: $e'; _loading = false; });
+      if (mounted) {
+        setState(() {
+          _error = 'No se pudo cargar la lista: $e';
+          _loading = false;
+        });
+      }
     }
   }
 
@@ -73,8 +87,16 @@ class _PresetPlacesScreenState extends State<PresetPlacesScreen> {
   }
 
   Widget _buildList() {
-    if (_loading) return const Center(child: CircularProgressIndicator(color: Colors.black));
-    if (_error != null) return Center(child: Text(_error!, style: const TextStyle(color: Colors.red)));
+    if (_loading) {
+      return const Center(
+        child: CircularProgressIndicator(color: Colors.black),
+      );
+    }
+    if (_error != null) {
+      return Center(
+        child: Text(_error!, style: const TextStyle(color: Colors.red)),
+      );
+    }
 
     final filtered = _filtered;
     if (filtered.isEmpty) {
@@ -88,11 +110,18 @@ class _PresetPlacesScreenState extends State<PresetPlacesScreen> {
         final place = filtered[index];
         return ListTile(
           leading: const Icon(Icons.place_outlined),
-          title: Text(place.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+          title: Text(
+            place.name,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
           subtitle: Text(place.address),
           onTap: () => Navigator.pop(
             context,
-            DestinationPickerResult(description: place.name, lat: place.lat, lng: place.lng),
+            DestinationPickerResult(
+              description: place.name,
+              lat: place.lat,
+              lng: place.lng,
+            ),
           ),
         );
       },

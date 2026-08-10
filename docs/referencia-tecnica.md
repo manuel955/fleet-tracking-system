@@ -40,7 +40,7 @@ Esta referencia describe la implementación auditada. No sustituye un contrato d
 
 - Flutter para las dos apps móviles.
 - Firebase Realtime Database para datos operativos y estados.
-- Firebase Authentication: correo/contraseña para conductores y dashboard; autenticación anónima para pasajeros.
+- Firebase Authentication: correo/contraseña para conductores y dashboard; sesión anónima inicial para pasajeros con vinculación opcional a correo/contraseña. No se usa autenticación por SMS.
 - Firebase Storage para documentos, credenciales, branding y APK.
 - Firebase Cloud Functions 1.ª generación con Node.js 22.
 - Firebase Cloud Messaging para avisos.
@@ -90,10 +90,13 @@ Los 5 segundos describen la generación y envío del dato desde el teléfono. No
 | `/drivers/{driverId}` | Perfil, vehículo, documentos, aprobación, posición, `lastUpdate`, disponibilidad, viaje activo y token FCM. |
 | `/driverLocations/{driverId}` | Latitud, longitud y `lastUpdate` mínimos para la ubicación pública del viaje. |
 | `/passengers/{passengerId}` | Nombre, teléfono, credencial, fecha de registro y token FCM. |
+| `/passengerAccess/{passengerId}` | Autorización QR, hotel de origen, vigencia, fuente y estado de revocación. |
+| `/passengerInvites/{inviteHash}` | Invitaciones QR con vencimiento, cantidad de usos y usuarios que las canjearon. |
 | `/trips/{tripId}` | Origen, destino, cantidad, estado, conductor asignado, timestamps y motivos. |
 | `/tripHistory/{tripId}` | Copia archivada al completar o cancelar un viaje. |
+| `/tripFeedback/{tripId}` | Calificación, comentario e incidencia posterior al viaje, con estado abierto/resuelto. |
 | `/driverConnectionHistory/{driverId}` | Eventos de conexión y desconexión para asistencia. |
-| `/driverUnique` | Reservas para evitar duplicar correo, teléfono, placa, DNI o nombre de conductor. |
+| `/driverUnique` | Reservas para evitar duplicar correo, teléfono, placa o DNI del conductor. Los nombres sí pueden repetirse. |
 | `/appBuildRequests/{requestId}` | Solicitudes temporales y de un solo uso para compilar branding. |
 
 ### Storage
@@ -142,6 +145,11 @@ Los 5 segundos describen la generación y envío del dato desde el teléfono. No
 | `initializeDashboardAdmin` | Inicializar/verificar claim del administrador. | Usuario de dashboard. |
 | `manageDashboardUsers` | Listar, crear, actualizar roles o eliminar usuarios. | Claim `dashboardAdmin`. |
 | `getMyTrips` | Obtener historial del pasajero autenticado. | ID token validado por backend. |
+| `redeemPassengerInvite` | Canjear una invitación QR vigente. | ID token del pasajero y transacción de usos. |
+| `ensurePassengerAccess` | Migrar una cuenta creada antes del corte. | Solo si nunca tuvo otra autorización. |
+| `createPassengerTrip` | Crear o recuperar una solicitud idempotente. | ID token, acceso vigente y bloqueo por pasajero. |
+| `submitTripFeedback` | Guardar calificación o incidencia posterior. | Pasajero propietario de un viaje terminal. |
+| `manageTripFeedback` | Resolver o reabrir una incidencia. | Claim de administrador. |
 | `requestAppBrandingBuild` | Solicitar build de app con nombre/icono. | Usuario de dashboard. |
 | `getAppBrandingBuild` | Entregar datos de una solicitud temporal. | Token de un solo uso. |
 | `completeAppBrandingBuild` | Publicar un build después de subir la APK. | Token de un solo uso. |
@@ -173,6 +181,8 @@ La asignación usa distancia Haversine, categorías de capacidad y una reclamaci
 - `driverLocations/{driverId}` solo se entrega al conductor, a operadores autorizados o al pasajero asignado mientras el viaje está activo.
 - Los coordinadores no tienen acceso a documentos de identidad ni credenciales almacenadas.
 - El dashboard no debe publicarse por HTTP en producción; usar HTTPS, control de acceso y una política de respaldo.
+- El dashboard publicado incluye Content Security Policy, HSTS, bloqueo de iframes, política de permisos y hashes SRI para scripts externos versionados.
+- Los tokens de sesión del historial se envían por `Authorization`; no se incluyen en query strings.
 
 ## 10. Puntos de código para mantenimiento
 

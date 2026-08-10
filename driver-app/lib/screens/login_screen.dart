@@ -48,6 +48,36 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<void> _resetPassword() async {
+    final email = _emailCtrl.text.trim();
+    if (email.isEmpty || !email.contains('@')) {
+      setState(() => _error = 'Escribe primero el correo de tu cuenta.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await AuthService.sendPasswordResetEmail(email);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Si el correo esta registrado, recibiras un enlace para cambiar la contrasena.',
+          ),
+        ),
+      );
+      setState(() => _busy = false);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = e.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -137,6 +167,10 @@ class _LoginScreenState extends State<LoginScreen> {
                         : const Text('Entrar',
                             style: TextStyle(
                                 fontWeight: FontWeight.w700, fontSize: 15)),
+                  ),
+                  TextButton(
+                    onPressed: _busy ? null : _resetPassword,
+                    child: const Text('Olvide mi contrasena'),
                   ),
                   const SizedBox(height: 8),
                   TextButton(
