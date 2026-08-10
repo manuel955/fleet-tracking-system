@@ -277,6 +277,15 @@ button, input { font-family: inherit; }
 .login-card .auth-tab.active:hover { background: var(--white); }
 
 .login-error { color: var(--red); font-size: 13px; min-height: 16px; font-weight: 500; }
+.login-error.success { color: var(--green); }
+.login-card .login-reset-password {
+  padding: 4px;
+  background: transparent;
+  color: var(--gray-600);
+  font-size: 13px;
+  font-weight: 600;
+}
+.login-card .login-reset-password:hover { background: transparent; color: var(--black); }
 
 /* ---------- App shell ---------- */
 .app { height: 100vh; display: flex; flex-direction: column; }

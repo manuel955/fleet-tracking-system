@@ -29,12 +29,14 @@ class TripActionRejectedException implements Exception {
 /// Functions en el servidor; esta clase solo consulta el estado del viaje
 /// y avanza su ciclo de vida (el conductor no puede rechazar ni cancelar).
 class TripService {
+  static const _networkTimeout = Duration(seconds: 15);
+
   static Future<Map<String, dynamic>?> getMyDriverNode(String uid) async {
     final auth = await AuthService.currentSession();
     final uri = Uri.parse(
       '${AppConfig.firebaseDbUrl}/drivers/$uid.json?auth=${auth['idToken']}',
     );
-    final response = await http.get(uri);
+    final response = await http.get(uri).timeout(_networkTimeout);
     if (response.statusCode != 200) {
       throw Exception(
           'Firebase rechazo la consulta (${response.statusCode}): ${response.body}');
@@ -48,7 +50,7 @@ class TripService {
     final uri = Uri.parse(
       '${AppConfig.firebaseDbUrl}/trips/$tripId.json?auth=${auth['idToken']}',
     );
-    final response = await http.get(uri);
+    final response = await http.get(uri).timeout(_networkTimeout);
     if (response.statusCode != 200) {
       throw Exception(
           'Firebase rechazo la consulta (${response.statusCode}): ${response.body}');
@@ -62,14 +64,16 @@ class TripService {
     final uri = Uri.parse(
       '${AppConfig.cloudFunctionsBaseUrl}/advanceDriverTrip',
     );
-    final response = await http.post(
-      uri,
-      headers: {
-        'Authorization': 'Bearer ${auth['idToken']}',
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({'tripId': tripId, 'newStatus': newStatus}),
-    );
+    final response = await http
+        .post(
+          uri,
+          headers: {
+            'Authorization': 'Bearer ${auth['idToken']}',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({'tripId': tripId, 'newStatus': newStatus}),
+        )
+        .timeout(_networkTimeout);
     final payload = jsonDecode(response.body);
     final data = payload is Map
         ? Map<String, dynamic>.from(payload)

@@ -17,6 +17,7 @@ class _EmailAuthScreenState extends State<EmailAuthScreen> {
   final _passwordController = TextEditingController();
   bool _busy = false;
   String? _error;
+  String? _notice;
 
   @override
   void dispose() {
@@ -55,6 +56,7 @@ class _EmailAuthScreenState extends State<EmailAuthScreen> {
     setState(() {
       _busy = true;
       _error = null;
+      _notice = null;
     });
     try {
       final session = await AuthService.signInWithEmailPassword(
@@ -63,6 +65,36 @@ class _EmailAuthScreenState extends State<EmailAuthScreen> {
       );
       await widget.onAuthenticated(session);
       if (mounted) Navigator.of(context).pop();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = _friendlyError(error);
+      });
+    }
+  }
+
+  Future<void> _resetPassword() async {
+    final email = _emailController.text.trim();
+    if (email.isEmpty) {
+      setState(() {
+        _error = 'Escribe primero tu correo.';
+        _notice = null;
+      });
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+      _notice = null;
+    });
+    try {
+      await AuthService.sendPasswordResetEmail(email);
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _notice = 'Revisa tu correo para crear una contraseña nueva.';
+      });
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -89,7 +121,7 @@ class _EmailAuthScreenState extends State<EmailAuthScreen> {
             ),
             const SizedBox(height: 10),
             const Text(
-              'Usa el correo y la contraseña entregados por la administración.',
+              'Usa el correo y la contraseña que vinculaste a tu cuenta.',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.black54, height: 1.35),
             ),
@@ -121,12 +153,24 @@ class _EmailAuthScreenState extends State<EmailAuthScreen> {
               onPressed: _busy ? null : _submit,
               child: Text(_busy ? 'Verificando...' : 'Entrar'),
             ),
+            TextButton(
+              onPressed: _busy ? null : _resetPassword,
+              child: const Text('Olvidé mi contraseña'),
+            ),
             if (_error != null) ...[
               const SizedBox(height: 18),
               Text(
                 _error!,
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.red.shade700),
+              ),
+            ],
+            if (_notice != null) ...[
+              const SizedBox(height: 18),
+              Text(
+                _notice!,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.green.shade700),
               ),
             ],
           ],

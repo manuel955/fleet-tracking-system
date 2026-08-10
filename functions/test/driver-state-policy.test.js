@@ -59,6 +59,21 @@ test('un conductor no aprobado no puede iniciar turno', () => {
   });
 });
 
+test('un conductor suspendido no inicia turno ni envía ubicación', () => {
+  const driver = approvedDriver({ suspended: true, turno_activo: true });
+  const availability = buildDriverAvailabilityUpdate(driver, true, NOW);
+  const location = buildDriverLocationUpdate(
+    driver,
+    { lat: -12.0464, lng: -77.0428, heading: 0 },
+    NOW,
+  );
+
+  assert.equal(availability.ok, false);
+  assert.equal(availability.httpStatus, 403);
+  assert.equal(location.ok, false);
+  assert.equal(location.httpStatus, 403);
+});
+
 test('el turno no puede cerrarse mientras existe un viaje activo', () => {
   const result = buildDriverAvailabilityUpdate(
     approvedDriver({ status: 'busy', currentTripId: 'trip-1' }),

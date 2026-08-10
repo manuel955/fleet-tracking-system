@@ -11,9 +11,12 @@ import 'auth_service.dart';
 /// registro se hace una sola vez; no se vuelve a pedir en aperturas
 /// posteriores de la app (el flag "registered" si se persiste en disco).
 class PassengerService {
+  static const _networkTimeout = Duration(seconds: 15);
+  static const _uploadTimeout = Duration(seconds: 60);
   static const _accessGrantedKey = 'passenger_access_granted';
   static const _accessHotelNameKey = 'passenger_access_hotel_name';
   static const _accessExpiresAtKey = 'passenger_access_expires_at';
+  static const _accessLegacyKey = 'passenger_access_legacy';
 
   static Future<bool> isRegistered() async {
     final prefs = await SharedPreferences.getInstance();
@@ -22,19 +25,26 @@ class PassengerService {
 
   static Future<bool> hasAccess() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_accessGrantedKey) ?? false;
+    if (prefs.getBool(_accessGrantedKey) != true) return false;
+    if (prefs.getBool(_accessLegacyKey) == true) return true;
+    final expiresAt = prefs.getInt(_accessExpiresAtKey) ?? 0;
+    if (expiresAt > DateTime.now().millisecondsSinceEpoch) return true;
+    await clearCachedAccess();
+    return false;
   }
 
   static Future<Map<String, dynamic>> redeemInvite(String code) async {
     final auth = await AuthService.signInAnonymously();
-    final response = await http.post(
-      Uri.parse('${AppConfig.cloudFunctionsBaseUrl}/redeemPassengerInvite'),
-      headers: {
-        'Authorization': 'Bearer ${auth['idToken']}',
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({'code': code}),
-    );
+    final response = await http
+        .post(
+          Uri.parse('${AppConfig.cloudFunctionsBaseUrl}/redeemPassengerInvite'),
+          headers: {
+            'Authorization': 'Bearer ${auth['idToken']}',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({'code': code}),
+        )
+        .timeout(_networkTimeout);
     final body = jsonDecode(response.body.isEmpty ? '{}' : response.body);
     if (response.statusCode != 200) {
       throw Exception(
@@ -51,15 +61,22 @@ class PassengerService {
   /// antes del corte de la migración.
   static Future<bool> ensureAccess() async {
     final auth = await AuthService.signInAnonymously();
-    final response = await http.post(
-      Uri.parse('${AppConfig.cloudFunctionsBaseUrl}/ensurePassengerAccess'),
-      headers: {
-        'Authorization': 'Bearer ${auth['idToken']}',
-        'Content-Type': 'application/json',
-      },
-      body: '{}',
-    );
-    if (response.statusCode != 200) return false;
+    final response = await http
+        .post(
+          Uri.parse('${AppConfig.cloudFunctionsBaseUrl}/ensurePassengerAccess'),
+          headers: {
+            'Authorization': 'Bearer ${auth['idToken']}',
+            'Content-Type': 'application/json',
+          },
+          body: '{}',
+        )
+        .timeout(_networkTimeout);
+    if (response.statusCode != 200) {
+      if (response.statusCode == 401 || response.statusCode == 403) {
+        await clearCachedAccess();
+      }
+      return false;
+    }
     final body = jsonDecode(response.body);
     final access = Map<String, dynamic>.from(body['access'] as Map);
     await _persistAccess(access);
@@ -85,11 +102,13 @@ class PassengerService {
     final cached = await cachedProfile();
     try {
       final auth = await AuthService.signInAnonymously();
-      final response = await http.get(
-        Uri.parse(
-          '${AppConfig.firebaseDbUrl}/passengers/${auth['uid']}.json?auth=${auth['idToken']}',
-        ),
-      );
+      final response = await http
+          .get(
+            Uri.parse(
+              '${AppConfig.firebaseDbUrl}/passengers/${auth['uid']}.json?auth=${auth['idToken']}',
+            ),
+          )
+          .timeout(_networkTimeout);
       if (response.statusCode == 200 && response.body != 'null') {
         final data = Map<String, dynamic>.from(jsonDecode(response.body));
         final remoteName = data['name']?.toString().trim();
@@ -129,18 +148,22 @@ class PassengerService {
 
     final photoUrl = await _uploadCredentialPhoto(uid, idToken, photoBytes);
 
-    final response = await http.post(
-      Uri.parse('${AppConfig.cloudFunctionsBaseUrl}/registerPassengerProfile'),
-      headers: {
-        'Authorization': 'Bearer $idToken',
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({
-        'name': name,
-        'phone': phone,
-        'credentialPhotoUrl': photoUrl,
-      }),
-    );
+    final response = await http
+        .post(
+          Uri.parse(
+            '${AppConfig.cloudFunctionsBaseUrl}/registerPassengerProfile',
+          ),
+          headers: {
+            'Authorization': 'Bearer $idToken',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            'name': name,
+            'phone': phone,
+            'credentialPhotoUrl': photoUrl,
+          }),
+        )
+        .timeout(_networkTimeout);
 
     if (response.statusCode != 200) {
       final body = jsonDecode(response.body.isEmpty ? '{}' : response.body);
@@ -166,13 +189,31 @@ class PassengerService {
 
   static Future<void> _persistAccess(Map<String, dynamic> access) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_accessGrantedKey, access['status'] == 'authorized');
+    final authorized = access['status'] == 'authorized';
+    if (!authorized) {
+      await clearCachedAccess();
+      return;
+    }
+    await prefs.setBool(_accessGrantedKey, true);
+    await prefs.setBool(_accessLegacyKey, access['legacy'] == true);
     final hotelName = access['hotelName']?.toString();
     if (hotelName != null && hotelName.isNotEmpty) {
       await prefs.setString(_accessHotelNameKey, hotelName);
     }
     final expiresAt = int.tryParse(access['expiresAt']?.toString() ?? '');
-    if (expiresAt != null) await prefs.setInt(_accessExpiresAtKey, expiresAt);
+    if (expiresAt != null) {
+      await prefs.setInt(_accessExpiresAtKey, expiresAt);
+    } else {
+      await prefs.remove(_accessExpiresAtKey);
+    }
+  }
+
+  static Future<void> clearCachedAccess() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_accessGrantedKey);
+    await prefs.remove(_accessHotelNameKey);
+    await prefs.remove(_accessExpiresAtKey);
+    await prefs.remove(_accessLegacyKey);
   }
 
   static Future<String> _uploadCredentialPhoto(
@@ -187,14 +228,16 @@ class PassengerService {
       '?uploadType=media&name=$encodedPath',
     );
 
-    final response = await http.post(
-      uploadUri,
-      headers: {
-        'Authorization': 'Firebase $idToken',
-        'Content-Type': 'image/jpeg',
-      },
-      body: photoBytes,
-    );
+    final response = await http
+        .post(
+          uploadUri,
+          headers: {
+            'Authorization': 'Firebase $idToken',
+            'Content-Type': 'image/jpeg',
+          },
+          body: photoBytes,
+        )
+        .timeout(_uploadTimeout);
 
     if (response.statusCode != 200) {
       throw Exception(

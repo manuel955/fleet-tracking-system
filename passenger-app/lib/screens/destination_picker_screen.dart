@@ -235,7 +235,9 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
           latLng.latitude,
           latLng.longitude,
         );
-        if (!mounted || requestToken != _reverseRequestToken || _pin != latLng) {
+        if (!mounted ||
+            requestToken != _reverseRequestToken ||
+            _pin != latLng) {
           return;
         }
         _lastReverseRequested = latLng;
@@ -244,7 +246,9 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
           _controller.text = address;
         });
       } catch (_) {
-        if (!mounted || requestToken != _reverseRequestToken || _pin != latLng) {
+        if (!mounted ||
+            requestToken != _reverseRequestToken ||
+            _pin != latLng) {
           return;
         }
         _lastReverseRequested = latLng;

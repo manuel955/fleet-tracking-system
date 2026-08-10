@@ -34,7 +34,9 @@ class LabeledIconButton extends StatelessWidget {
             children: [
               Icon(icon, color: c, size: 22),
               const SizedBox(height: 2),
-              Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: c)),
+              Text(label,
+                  style: TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w600, color: c)),
             ],
           ),
         ),

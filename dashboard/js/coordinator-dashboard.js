@@ -128,6 +128,7 @@
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     };
     if (payload) options.body = JSON.stringify(payload);
+    options.signal = AbortSignal.timeout(15000);
     const response = await fetch(`${functionsBase}/${path}`, options);
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || 'No se pudo completar la operación.');
@@ -163,7 +164,7 @@
       ? `&proximity=${coordinatorPlace.lng},${coordinatorPlace.lat}`
       : '';
     const url = `https://api.mapbox.com/search/geocode/v6/forward?q=${encodeURIComponent(query.trim())}&autocomplete=true&limit=8&language=es&country=pe${proximity}&permanent=false&access_token=${encodeURIComponent(token)}`;
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
     if (!response.ok) throw new Error('No se pudo buscar la dirección.');
     const data = await response.json();
     return (data.features || []).map((feature) => ({
@@ -569,7 +570,7 @@
     if (!token) return 'No disponible';
     const origin = detail.driverLocation;
     const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${origin.lng},${origin.lat};${target.lng},${target.lat}?overview=false&access_token=${encodeURIComponent(token)}`;
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
     if (!response.ok) return 'No disponible';
     const route = (await response.json()).routes?.[0];
     if (!route || !Number.isFinite(Number(route.duration))) return 'No disponible';

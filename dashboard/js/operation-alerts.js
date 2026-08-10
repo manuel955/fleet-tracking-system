@@ -135,6 +135,7 @@
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'acknowledge', alertId }),
+        signal: AbortSignal.timeout(15000),
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || 'No se pudo reconocer la alerta.');

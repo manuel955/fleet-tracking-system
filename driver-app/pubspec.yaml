@@ -1,7 +1,7 @@
 name: fleet_driver_app
 description: App del conductor - envia ubicacion GPS en segundo plano cada 5s
 publish_to: "none"
-version: 1.0.1+53
+version: 1.0.1+54
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -14,6 +14,7 @@ dependencies:
   permission_handler: ^11.3.1
   flutter_background_service: ^5.0.10
   shared_preferences: ^2.2.3
+  flutter_secure_storage: ^10.3.1
   mapbox_maps_flutter: 2.25.0
   flutter_local_notifications: ^17.2.3
   image_picker: ^1.1.2

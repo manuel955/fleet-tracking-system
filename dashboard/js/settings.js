@@ -251,7 +251,7 @@ async function passengerInvitesRequest(payload) {
   const token = await auth.currentUser.getIdToken();
   const response = await fetch(
     'https://us-central1-rastreoflota-53052.cloudfunctions.net/managePassengerInvites',
-    { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) },
+    { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(15000) },
   );
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error || 'No se pudo administrar el acceso de pasajeros.');
@@ -409,7 +409,7 @@ async function dashboardUsersRequest(payload) {
   const token = await auth.currentUser.getIdToken();
   const response = await fetch(
     'https://us-central1-rastreoflota-53052.cloudfunctions.net/manageDashboardUsers',
-    { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) },
+    { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(15000) },
   );
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error || 'No se pudo administrar los usuarios');
@@ -734,6 +734,7 @@ async function requestBrandedAppBuild(app, feedbackId = `app-branding-feedback-$
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ app: app.key }),
+        signal: AbortSignal.timeout(20000),
       },
     );
     const result = await response.json().catch(() => ({}));

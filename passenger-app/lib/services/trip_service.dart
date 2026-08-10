@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
@@ -9,18 +10,38 @@ import 'auth_service.dart';
 /// viaje (status: 'searching') -- esta clase solo crea el registro inicial
 /// y despues consulta como va evolucionando.
 class TripService {
+  static const driverLocationFreshness = Duration(seconds: 30);
+  static const _networkTimeout = Duration(seconds: 15);
+  static const _createTripTimeout = Duration(seconds: 25);
+  static const _tripCachePrefix = 'cached_trip_';
+
+  static bool hasFreshDriverLocation(
+    Map<String, dynamic> location, {
+    DateTime? now,
+  }) {
+    final lastUpdate = location['lastUpdate'];
+    if (lastUpdate is! num || lastUpdate <= 0) return false;
+    final age =
+        (now ?? DateTime.now()).millisecondsSinceEpoch - lastUpdate.toInt();
+    return age >= 0 && age <= driverLocationFreshness.inMilliseconds;
+  }
+
+  static String _newRequestId() {
+    final random = Random.secure();
+    return List<int>.generate(
+      16,
+      (_) => random.nextInt(256),
+    ).map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+  }
+
   static Future<String> requestRide({
     required double pickupLat,
     required double pickupLng,
     required int passengerCount,
-    required String passengerName,
-    required String passengerPhone,
-    String? passengerPhotoUrl,
     String? pickupAddress,
     double? destinationLat,
     double? destinationLng,
     String? destinationAddress,
-    String? scheduledPickupLabel,
     int? scheduledPickupAt,
   }) async {
     if (passengerCount < 1 || passengerCount > 45) {
@@ -31,56 +52,65 @@ class TripService {
       );
     }
     final auth = await AuthService.signInAnonymously();
-    final uri = Uri.parse(
-      '${AppConfig.firebaseDbUrl}/trips.json?auth=${auth['idToken']}',
-    );
+    final prefs = await SharedPreferences.getInstance();
+    final requestPayload = <String, dynamic>{
+      'pickupLat': pickupLat,
+      'pickupLng': pickupLng,
+      'pickupAddress': pickupAddress,
+      'destinationLat': destinationLat,
+      'destinationLng': destinationLng,
+      'destinationAddress': destinationAddress,
+      'passengerCount': passengerCount,
+      'scheduledPickupAt': scheduledPickupAt,
+    };
+    final fingerprint = jsonEncode(requestPayload);
+    var requestId = prefs.getString('pending_trip_request_id');
+    if (requestId == null ||
+        prefs.getString('pending_trip_request_fingerprint') != fingerprint) {
+      requestId = _newRequestId();
+      await prefs.setString('pending_trip_request_id', requestId);
+      await prefs.setString('pending_trip_request_fingerprint', fingerprint);
+    }
 
-    final response = await http.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'passengerId': auth['uid'],
-        'passengerName': passengerName,
-        'passengerPhone': passengerPhone,
-        'passengerPhotoUrl': ?passengerPhotoUrl,
-        'passengerCount': passengerCount,
-        'pickupLat': pickupLat,
-        'pickupLng': pickupLng,
-        'pickupAddress': ?pickupAddress,
-        'destinationLat': ?destinationLat,
-        'destinationLng': ?destinationLng,
-        'destinationAddress': ?destinationAddress,
-        // Hora de recogida elegida, en formato 12h AM/PM (ej. "3:30 PM") --
-        // solo para mostrar. scheduledPickupAt (epoch ms) es lo que usa
-        // Cloud Functions (dispatchScheduledTrips) para decidir cuando
-        // despachar de verdad -- ver request_ride_screen.dart.
-        'scheduledPickupLabel': ?scheduledPickupLabel,
-        'scheduledPickupAt': ?scheduledPickupAt,
-        // Con hora programada el viaje espera en 'scheduled' -- Cloud
-        // Functions lo despacha (busca/asigna conductor) mas cerca de la
-        // hora elegida, no de inmediato como un pedido normal.
-        'status': scheduledPickupAt != null ? 'scheduled' : 'searching',
-        'requestedAt': DateTime.now().millisecondsSinceEpoch,
-        'rejectedDriverIds': <String, dynamic>{},
-      }),
-    );
-
-    if (response.statusCode != 200) {
+    final response = await http
+        .post(
+          Uri.parse('${AppConfig.cloudFunctionsBaseUrl}/createPassengerTrip'),
+          headers: {
+            'Authorization': 'Bearer ${auth['idToken']}',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({'requestId': requestId, ...requestPayload}),
+        )
+        .timeout(_createTripTimeout);
+    final data = jsonDecode(response.body);
+    String? tripId;
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      tripId = data is Map ? data['tripId']?.toString() : null;
+    } else if (response.statusCode == 409 && data is Map) {
+      // Si el servidor encontró otro viaje abierto, se recupera en lugar de
+      // crear uno nuevo o dejar al pasajero en una pantalla vacía.
+      tripId = data['existingTripId']?.toString();
+    }
+    if (tripId == null || tripId.isEmpty) {
       throw Exception(
-        'Firebase rechazo la solicitud (${response.statusCode}): ${response.body}',
+        data is Map
+            ? data['error'] ?? 'No se pudo solicitar el viaje.'
+            : 'No se pudo solicitar el viaje.',
       );
     }
 
-    final tripId = jsonDecode(response.body)['name'] as String;
-    final prefs = await SharedPreferences.getInstance();
+    final recoveredTrip = await getTrip(tripId);
+    final isScheduled = recoveredTrip?['status'] == 'scheduled';
     // Un viaje programado se guarda aparte del viaje "activo" (inmediato):
     // el pasajero puede tener un viaje programado esperando su hora Y pedir
     // un viaje para ahora mismo al mismo tiempo -- ver getScheduledTripId.
-    if (scheduledPickupAt != null) {
+    if (isScheduled) {
       await prefs.setString('scheduled_trip_id', tripId);
     } else {
       await prefs.setString('active_trip_id', tripId);
     }
+    await prefs.remove('pending_trip_request_id');
+    await prefs.remove('pending_trip_request_fingerprint');
     return tripId;
   }
 
@@ -89,14 +119,33 @@ class TripService {
     final uri = Uri.parse(
       '${AppConfig.firebaseDbUrl}/trips/$tripId.json?auth=${auth['idToken']}',
     );
-    final response = await http.get(uri);
+    final response = await http.get(uri).timeout(_networkTimeout);
     if (response.statusCode != 200) {
       throw Exception(
         'Firebase rechazo la consulta (${response.statusCode}): ${response.body}',
       );
     }
     final data = jsonDecode(response.body);
-    return data == null ? null : Map<String, dynamic>.from(data);
+    final prefs = await SharedPreferences.getInstance();
+    if (data == null) {
+      await prefs.remove('$_tripCachePrefix$tripId');
+      return null;
+    }
+    final trip = Map<String, dynamic>.from(data);
+    await prefs.setString('$_tripCachePrefix$tripId', jsonEncode(trip));
+    return trip;
+  }
+
+  static Future<Map<String, dynamic>?> getCachedTrip(String tripId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('$_tripCachePrefix$tripId');
+    if (raw == null) return null;
+    try {
+      return Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    } catch (_) {
+      await prefs.remove('$_tripCachePrefix$tripId');
+      return null;
+    }
   }
 
   static Future<Map<String, dynamic>?> getDriverLocation(
@@ -106,7 +155,7 @@ class TripService {
     final uri = Uri.parse(
       '${AppConfig.firebaseDbUrl}/driverLocations/$driverId.json?auth=${auth['idToken']}',
     );
-    final response = await http.get(uri);
+    final response = await http.get(uri).timeout(_networkTimeout);
     if (response.statusCode != 200) {
       throw Exception(
         'Firebase rechazo la consulta (${response.statusCode}): ${response.body}',
@@ -121,16 +170,18 @@ class TripService {
     final uri = Uri.parse(
       '${AppConfig.firebaseDbUrl}/trips/$tripId.json?auth=${auth['idToken']}',
     );
-    final response = await http.patch(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'status': 'cancelled',
-        'cancelledBy': 'passenger',
-        'cancelledAt': DateTime.now().millisecondsSinceEpoch,
-        'cancelReason': ?reason,
-      }),
-    );
+    final response = await http
+        .patch(
+          uri,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'status': 'cancelled',
+            'cancelledBy': 'passenger',
+            'cancelledAt': DateTime.now().millisecondsSinceEpoch,
+            'cancelReason': ?reason,
+          }),
+        )
+        .timeout(_networkTimeout);
     if (response.statusCode != 200) {
       throw Exception(
         'Firebase rechazo la cancelacion (${response.statusCode}): ${response.body}',
@@ -147,6 +198,7 @@ class TripService {
     if (prefs.getString('scheduled_trip_id') == tripId) {
       await prefs.remove('scheduled_trip_id');
     }
+    await prefs.remove('$_tripCachePrefix$tripId');
   }
 
   // Cambia el destino de un viaje ya en curso. Las reglas de RTDB solo lo
@@ -163,15 +215,17 @@ class TripService {
     final uri = Uri.parse(
       '${AppConfig.firebaseDbUrl}/trips/$tripId.json?auth=${auth['idToken']}',
     );
-    final response = await http.patch(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'destinationLat': destinationLat,
-        'destinationLng': destinationLng,
-        'destinationAddress': destinationAddress,
-      }),
-    );
+    final response = await http
+        .patch(
+          uri,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'destinationLat': destinationLat,
+            'destinationLng': destinationLng,
+            'destinationAddress': destinationAddress,
+          }),
+        )
+        .timeout(_networkTimeout);
     if (response.statusCode != 200) {
       throw Exception(
         'Firebase rechazo la modificacion (${response.statusCode}): ${response.body}',
@@ -184,16 +238,18 @@ class TripService {
     final uri = Uri.parse(
       '${AppConfig.firebaseDbUrl}/trips/$tripId.json?auth=${auth['idToken']}',
     );
-    final response = await http.patch(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'status': 'searching',
-        'requestedAt': DateTime.now().millisecondsSinceEpoch,
-        'noDriversReason': null,
-        'rejectedDriverIds': <String, dynamic>{},
-      }),
-    );
+    final response = await http
+        .patch(
+          uri,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'status': 'searching',
+            'requestedAt': DateTime.now().millisecondsSinceEpoch,
+            'noDriversReason': null,
+            'rejectedDriverIds': <String, dynamic>{},
+          }),
+        )
+        .timeout(_networkTimeout);
     if (response.statusCode != 200) {
       throw Exception(
         'Firebase rechazo el reintento (${response.statusCode}): ${response.body}',
@@ -221,9 +277,11 @@ class TripService {
     final auth = await AuthService.signInAnonymously();
     final uri = Uri.parse(
       '${AppConfig.cloudFunctionsBaseUrl}/getMyTrips'
-      '?idToken=${auth['idToken']}${last7Days ? '' : '&all=true'}',
+      '${last7Days ? '' : '?all=true'}',
     );
-    final response = await http.get(uri);
+    final response = await http
+        .get(uri, headers: {'Authorization': 'Bearer ${auth['idToken']}'})
+        .timeout(_networkTimeout);
     if (response.statusCode != 200) {
       throw Exception(
         'No se pudo obtener el historial (${response.statusCode}): ${response.body}',
@@ -243,6 +301,70 @@ class TripService {
     return entries;
   }
 
+  static Future<Map<String, dynamic>> submitFeedback({
+    required String tripId,
+    int? rating,
+    String comment = '',
+    String incidentCategory = 'none',
+    String incidentDetails = '',
+  }) async {
+    final auth = await AuthService.signInAnonymously();
+    final response = await http
+        .post(
+          Uri.parse('${AppConfig.cloudFunctionsBaseUrl}/submitTripFeedback'),
+          headers: {
+            'Authorization': 'Bearer ${auth['idToken']}',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            'tripId': tripId,
+            'rating': rating,
+            'comment': comment,
+            'incidentCategory': incidentCategory,
+            'incidentDetails': incidentDetails,
+          }),
+        )
+        .timeout(_networkTimeout);
+    final payload = jsonDecode(response.body.isEmpty ? '{}' : response.body);
+    if (response.statusCode != 200) {
+      throw Exception(
+        payload is Map
+            ? payload['error'] ?? 'No se pudo guardar tu comentario.'
+            : 'No se pudo guardar tu comentario.',
+      );
+    }
+    return Map<String, dynamic>.from(payload['feedback'] as Map);
+  }
+
+  static Future<
+    ({
+      MapEntry<String, Map<String, dynamic>>? active,
+      MapEntry<String, Map<String, dynamic>>? scheduled,
+    })
+  >
+  recoverOpenTrips() async {
+    final trips = await getMyTrips(last7Days: false);
+    MapEntry<String, Map<String, dynamic>>? active;
+    MapEntry<String, Map<String, dynamic>>? scheduled;
+    for (final entry in trips) {
+      final status = entry.value['status']?.toString();
+      if (status == 'completed' || status == 'cancelled') continue;
+      if (status == 'scheduled') {
+        scheduled ??= entry;
+      } else {
+        active ??= entry;
+      }
+    }
+    final prefs = await SharedPreferences.getInstance();
+    if (active != null) {
+      await prefs.setString('active_trip_id', active.key);
+    }
+    if (scheduled != null) {
+      await prefs.setString('scheduled_trip_id', scheduled.key);
+    }
+    return (active: active, scheduled: scheduled);
+  }
+
   /// Borra TODOS los viajes del pasajero (sin importar la fecha) -- se usa
   /// al cerrar sesion para no dejar historial guardado en Firebase
   /// asociado a una cuenta que ya no se va a volver a usar.
@@ -254,11 +376,13 @@ class TripService {
       '${AppConfig.firebaseDbUrl}/trips.json?auth=${auth['idToken']}',
     );
     final body = <String, dynamic>{for (final e in trips) e.key: null};
-    final response = await http.patch(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode(body),
-    );
+    final response = await http
+        .patch(
+          uri,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(body),
+        )
+        .timeout(_networkTimeout);
     if (response.statusCode != 200) {
       throw Exception(
         'Firebase rechazo el borrado (${response.statusCode}): ${response.body}',
@@ -296,7 +420,9 @@ class TripService {
 
   static Future<void> clearActiveTrip() async {
     final prefs = await SharedPreferences.getInstance();
+    final tripId = prefs.getString('active_trip_id');
     await prefs.remove('active_trip_id');
+    if (tripId != null) await prefs.remove('$_tripCachePrefix$tripId');
   }
 
   static Future<String?> getScheduledTripId() async {
@@ -306,7 +432,9 @@ class TripService {
 
   static Future<void> clearScheduledTrip() async {
     final prefs = await SharedPreferences.getInstance();
+    final tripId = prefs.getString('scheduled_trip_id');
     await prefs.remove('scheduled_trip_id');
+    if (tripId != null) await prefs.remove('$_tripCachePrefix$tripId');
   }
 
   // Cuando Cloud Functions despacha un viaje programado (deja de estar

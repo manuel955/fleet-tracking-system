@@ -52,6 +52,7 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
   bool _routeRequestInFlight = false;
   bool _tripPollInFlight = false;
   bool _driverPollInFlight = false;
+  bool _driverLocationStale = false;
   bool _busy = false;
   // La brújula/recentrado no forma parte de la interfaz operativa.
   final bool _showMapRecenterControl = true;
@@ -261,17 +262,20 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
       if (driver == null) return;
       final lat = driver['lat'] as num?;
       final lng = driver['lng'] as num?;
+      final fresh = TripService.hasFreshDriverLocation(driver);
       if (mounted) {
-        final driverPosition = lat != null && lng != null
+        final driverPosition = fresh && lat != null && lng != null
             ? LatLng(lat.toDouble(), lng.toDouble())
             : null;
-        if (_driverViewChanged(driver, driverPosition)) {
+        if (_driverViewChanged(driver, driverPosition) ||
+            _driverLocationStale != !fresh) {
           setState(() {
             _driverProfile = driver;
-            if (driverPosition != null) _driverLatLng = driverPosition;
+            _driverLatLng = driverPosition;
+            _driverLocationStale = !fresh;
           });
         }
-        if (lat == null || lng == null) return;
+        if (!fresh || lat == null || lng == null) return;
         if (_followDriver && driverPosition != null) {
           await _moveCameraTo(driverPosition);
         }
@@ -694,6 +698,17 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
                             fontWeight: FontWeight.w700,
                           ),
                         ),
+                        if (_driverLocationStale) ...[
+                          const SizedBox(height: 2),
+                          const Text(
+                            'Señal GPS del conductor temporalmente desactualizada.',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: AppColors.amber,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
                         if ((_trip['scheduledPickupLabel'] as String?)
                                 ?.isNotEmpty ==
                             true) ...[

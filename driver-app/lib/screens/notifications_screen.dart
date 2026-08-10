@@ -77,10 +77,9 @@ class _DriverNotificationsScreenState extends State<DriverNotificationsScreen> {
                     final labels = _labelsFor(item);
                     return Card(
                       elevation: 0,
-                      color:
-                          rejected
-                              ? AppColors.red.withValues(alpha: .10)
-                              : AppColors.green.withValues(alpha: .10),
+                      color: rejected
+                          ? AppColors.red.withValues(alpha: .10)
+                          : AppColors.green.withValues(alpha: .10),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),
                         side: BorderSide(

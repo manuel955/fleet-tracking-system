@@ -80,26 +80,29 @@ if (!emulatorHost) {
     ));
   });
 
-  test('credential reads allow the owner and dashboard staff except coordinators', async () => {
+  test('credential reads allow only the owner and dashboard admins', async () => {
     const filePath = 'passenger_credentials/passenger-1/credential.png';
     await seed(filePath, 'image/png');
     const owner = environment.authenticatedContext('passenger-1');
     const other = environment.authenticatedContext('passenger-2');
     const supervisor = dashboardContext('supervisor-1', 'SUPERVISOR');
+    const admin = dashboardContext('admin-1', 'ADMIN', true);
     const coordinator = dashboardContext('coordinator-1', 'COORDINATOR');
 
     await assertSucceeds(owner.storage().ref(filePath).getMetadata());
-    await assertSucceeds(supervisor.storage().ref(filePath).getMetadata());
+    await assertSucceeds(admin.storage().ref(filePath).getMetadata());
+    await assertFails(supervisor.storage().ref(filePath).getMetadata());
     await assertFails(other.storage().ref(filePath).getMetadata());
     await assertFails(coordinator.storage().ref(filePath).getMetadata());
   });
 
-  test('driver documents preserve owner writes and exclude coordinators from reads', async () => {
+  test('driver documents preserve owner writes and only admins can review them', async () => {
     const imagePath = 'driver_documents/driver-1/license.png';
     const pdfPath = 'driver_documents/driver-1/background.pdf';
     const owner = environment.authenticatedContext('driver-1');
     const other = environment.authenticatedContext('driver-2');
     const supervisor = dashboardContext('supervisor-1', 'SUPERVISOR');
+    const admin = dashboardContext('admin-1', 'ADMIN', true);
     const coordinator = dashboardContext('coordinator-1', 'COORDINATOR');
 
     await assertSucceeds(owner.storage().ref(imagePath).put(bytes(), {
@@ -111,7 +114,8 @@ if (!emulatorHost) {
     await assertFails(other.storage().ref(imagePath).put(bytes(), {
       contentType: 'image/png',
     }));
-    await assertSucceeds(supervisor.storage().ref(imagePath).getMetadata());
+    await assertSucceeds(admin.storage().ref(imagePath).getMetadata());
+    await assertFails(supervisor.storage().ref(imagePath).getMetadata());
     await assertFails(coordinator.storage().ref(imagePath).getMetadata());
   });
 

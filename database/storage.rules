@@ -4,8 +4,7 @@ service firebase.storage {
     match /passenger_credentials/{passengerId}/{fileName} {
       allow read: if request.auth != null
                   && (request.auth.uid == passengerId
-                      || (request.auth.token.dashboardUser == true
-                          && request.auth.token.dashboardRole != 'COORDINATOR'));
+                      || request.auth.token.dashboardAdmin == true);
       allow create, update: if request.auth != null
                    && request.auth.uid == passengerId
                    && request.resource.size < 5 * 1024 * 1024
@@ -51,8 +50,7 @@ service firebase.storage {
     match /driver_documents/{driverId}/{fileName} {
       allow read: if request.auth != null
                   && (request.auth.uid == driverId
-                      || (request.auth.token.dashboardUser == true
-                          && request.auth.token.dashboardRole != 'COORDINATOR'));
+                      || request.auth.token.dashboardAdmin == true);
       allow create, update: if request.auth != null
                    && request.auth.uid == driverId
                    && request.resource.size < 10 * 1024 * 1024

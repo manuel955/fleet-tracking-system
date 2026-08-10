@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -36,6 +37,8 @@ Future<void> pushBackgroundHandler(RemoteMessage message) async {
 /// pasajero (llegada del conductor, cambios de viaje) aunque la app este
 /// minimizada o cerrada.
 class PushService {
+  static StreamSubscription<String>? _tokenRefreshSubscription;
+
   static Future<void> initialize() async {
     await Firebase.initializeApp();
     FirebaseMessaging.onBackgroundMessage(pushBackgroundHandler);
@@ -45,9 +48,8 @@ class PushService {
     try {
       final token = await FirebaseMessaging.instance.getToken();
       if (token != null) await _saveToken(token);
-      FirebaseMessaging.instance.onTokenRefresh.listen((t) {
-        _saveToken(t);
-      });
+      _tokenRefreshSubscription ??= FirebaseMessaging.instance.onTokenRefresh
+          .listen((t) => unawaited(_saveToken(t)));
     } catch (_) {
       // Sin Google Play Services o sin red: el pasajero sigue operativo
       // via el polling de la pantalla de viaje activo, solo pierde el
@@ -60,10 +62,12 @@ class PushService {
     final uri = Uri.parse(
       '${AppConfig.firebaseDbUrl}/passengers/${auth['uid']}.json?auth=${auth['idToken']}',
     );
-    await http.patch(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'fcmToken': token}),
-    );
+    await http
+        .patch(
+          uri,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'fcmToken': token}),
+        )
+        .timeout(const Duration(seconds: 10));
   }
 }

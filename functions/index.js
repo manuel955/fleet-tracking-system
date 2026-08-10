@@ -23,28 +23,51 @@ const {
 const {
   EXPECTED_STATUS_BY_NEXT,
   prepareCoordinatorCancellation,
+  prepareDashboardCancellation,
   prepareDriverTripTransition,
   shouldReleaseAssignment,
 } = require('./trip-lifecycle-policy');
+const { buildPublicationDecision, nextBuildNumber } = require('./build-policy');
+const {
+  REQUIRED_DRIVER_DOCUMENTS,
+  driverApplicationIssues,
+  validVehicleData,
+} = require('./driver-application-policy');
+const {
+  PASSENGER_SCHEDULE_MAX_LEAD_MS,
+  PASSENGER_SCHEDULE_MIN_LEAD_MS,
+  passengerTripConflict,
+} = require('./passenger-trip-policy');
+const {
+  canMigrateLegacyPassengerAccess,
+  passengerAccessIsActive,
+  passengerAccessPayload,
+  revokePassengerAccess,
+} = require('./passenger-access-policy');
+const { buildTripFeedback } = require('./trip-feedback-policy');
 
 const BRANDING_BUCKET = 'rastreoflota-53052.firebasestorage.app';
-const BRANDING_SIGNING_PATH = 'build_signing/android-debug.keystore';
 const BRANDING_APPS = {
-  driver: { directory: 'driver-app', buildField: 'driverAppBuild', apkPath: 'app_releases/driver-app.apk', defaultName: 'APL Conductores' },
-  passenger: { directory: 'passenger-app', buildField: 'passengerAppBuild', apkPath: 'app_releases/passenger-app.apk', defaultName: 'APL Pasajeros' },
+  driver: {
+    directory: 'driver-app',
+    buildField: 'driverAppBuild',
+    apkPath: 'app_releases/driver-app.apk',
+    defaultName: 'APL Conductores',
+    versionName: '1.0.1',
+    minimumBuild: 54,
+  },
+  passenger: {
+    directory: 'passenger-app',
+    buildField: 'passengerAppBuild',
+    apkPath: 'app_releases/passenger-app.apk',
+    defaultName: 'APL Pasajeros',
+    versionName: '1.0.0',
+    minimumBuild: 43,
+  },
 };
 const BRANDING_BUILD_TTL_MS = 3 * 60 * 60 * 1000;
 const OWNER_DASHBOARD_EMAIL = 'anfurex.3351@gmail.com';
 const DATABASE_URL = 'https://rastreoflota-53052-default-rtdb.firebaseio.com';
-const VEHICLE_PASSENGER_RANGES = {
-  Auto: [1, 4],
-  SUV: [5, 7],
-  'Mini van': [8, 17],
-  Van: [18, 20],
-  'Mini bus': [21, 38],
-  Bus: [39, 45],
-};
-const VEHICLE_COLORS = new Set(['Negro', 'Gris', 'Plata', 'Blanco']);
 const LIMA_TIME_ZONE = 'America/Lima';
 // Es un token publico pk de Mapbox, el mismo proveedor que ya usa el mapa
 // cliente. Puede reemplazarse en Cloud Functions con MAPBOX_ACCESS_TOKEN sin
@@ -271,30 +294,6 @@ function parsePassengerInviteToken(rawValue) {
   return /^[a-f0-9]{32}$/i.test(value) ? value.toLowerCase() : '';
 }
 
-function passengerAccessIsActive(access) {
-  if (!access || access.status !== 'authorized') return false;
-  if (access.legacy === true) return true;
-  return Number(access.expiresAt || 0) > Date.now();
-}
-
-function passengerAccessPayload(access, source = 'invite') {
-  const hotelLat = Number(access.hotelLat);
-  const hotelLng = Number(access.hotelLng);
-  return {
-    status: 'authorized',
-    source,
-    hotelId: String(access.hotelId || ''),
-    hotelName: String(access.hotelName || ''),
-    hotelAddress: String(access.hotelAddress || ''),
-    hotelLat: Number.isFinite(hotelLat) ? hotelLat : null,
-    hotelLng: Number.isFinite(hotelLng) ? hotelLng : null,
-    grantedAt: Number(access.grantedAt || Date.now()),
-    expiresAt: Number(access.expiresAt || 0),
-    legacy: source === 'legacy',
-    inviteHash: access.inviteHash || null,
-  };
-}
-
 function isOwnedPassengerCredentialUrl(rawValue, uid) {
   try {
     const url = new URL(String(rawValue || '').trim());
@@ -361,8 +360,16 @@ function identityKey(value) {
   return crypto.createHash('sha256').update(normalizedIdentity(value)).digest('hex');
 }
 
-const DRIVER_UNIQUE_FIELDS = ['email', 'phone', 'plate', 'dni', 'name'];
+const DRIVER_UNIQUE_FIELDS = ['email', 'phone', 'plate', 'dni'];
+const DRIVER_IDENTITY_FIELDS = [
+  ['email', 'correo'],
+  ['phone', 'teléfono'],
+  ['plate', 'placa'],
+  ['dni', 'DNI'],
+];
 const DRIVER_REJECTION_FIELDS = new Set([
+  'personalData',
+  'vehicleData',
   'profile',
   'dni',
   'license',
@@ -395,18 +402,6 @@ async function releaseDriverIdentityReservations(driverId, driver = {}) {
     if (driver[field]) removals[identityKey(driver[field])] = null;
     if (Object.keys(removals).length) await ref.update(removals);
   }));
-}
-
-function isValidVehicleData(vehicleType, vehicleColor, vehicleSeats) {
-  const range = VEHICLE_PASSENGER_RANGES[vehicleType];
-  const seats = Number(vehicleSeats);
-  return Boolean(
-    range &&
-      VEHICLE_COLORS.has(vehicleColor) &&
-      Number.isInteger(seats) &&
-      seats >= range[0] &&
-      seats <= range[1]
-  );
 }
 
 async function deleteDriverDocuments(driverId) {
@@ -570,7 +565,7 @@ exports.reserveDriverIdentity = functions.https.onRequest(async (req, res) => {
     if (!/^\+\d{8,19}$/.test(String(phone).trim())) {
       return res.status(400).json({ error: 'El teléfono no tiene un formato válido.' });
     }
-    if (!isValidVehicleData(vehicleType, vehicleColor, vehicleSeats)) {
+    if (!validVehicleData(vehicleType, vehicleColor, vehicleSeats)) {
       return res.status(400).json({ error: 'Selecciona un tipo, color y cantidad de pasajeros válidos.' });
     }
     const fields = [
@@ -578,7 +573,6 @@ exports.reserveDriverIdentity = functions.https.onRequest(async (req, res) => {
       ['phone', phone, 'teléfono'],
       ['plate', plate, 'placa'],
       ['dni', dni, 'DNI'],
-      ['name', name, 'nombre completo'],
     ];
     const existingDrivers = (await admin.database().ref('drivers').once('value')).val() || {};
     for (const [, driver] of Object.entries(existingDrivers)) {
@@ -606,6 +600,313 @@ exports.reserveDriverIdentity = functions.https.onRequest(async (req, res) => {
   }
 });
 
+const DRIVER_APPLICATION_FIELDS = [
+  'name',
+  'age',
+  'phone',
+  'dni',
+  'plate',
+  'vehicleBrand',
+  'vehicleType',
+  'vehicleColor',
+  'vehicleSeats',
+  'profilePhotoUrl',
+  'dniDocUrl',
+  'dniFrontDocUrl',
+  'dniBackDocUrl',
+  'licenseDocUrl',
+  'licenseExpiresAt',
+  'soatDocUrl',
+  'soatExpiresAt',
+  'circulationCardDocUrl',
+  'technicalReviewDocUrl',
+  'technicalReviewExpiresAt',
+  'criminalRecordDocUrl',
+  'workCertificateDocUrl',
+];
+
+async function reserveDriverApplicationIdentities(uid, application) {
+  const drivers = (await admin.database().ref('drivers').once('value')).val() || {};
+  for (const [driverId, driver] of Object.entries(drivers)) {
+    if (driverId === uid) continue;
+    for (const [field, label] of DRIVER_IDENTITY_FIELDS) {
+      if (normalizedIdentity(driver?.[field]) === normalizedIdentity(application[field])) {
+        return { ok: false, error: `Ya existe un conductor con ese ${label}.`, reserved: [] };
+      }
+    }
+  }
+
+  const reserved = [];
+  for (const [field, label] of DRIVER_IDENTITY_FIELDS) {
+    const value = application[field];
+    const ok = await reserveUniqueDriverValue(field, value, uid);
+    if (!ok) {
+      await Promise.all(reserved.map(([reservedField, reservedValue]) => (
+        releaseUniqueDriverValue(reservedField, reservedValue, uid)
+      )));
+      return { ok: false, error: `Ya existe un conductor con ese ${label}.`, reserved: [] };
+    }
+    reserved.push([field, value]);
+  }
+  return { ok: true, reserved };
+}
+
+// Cierra el alta únicamente cuando la solicitud está completa. La operación
+// es reintentable: si la app se cerró después de crear la cuenta o subir una
+// parte de los archivos, el mismo correo y contraseña pueden continuar sin
+// crear otro UID ni dejar reservas huérfanas.
+exports.completeDriverRegistration = functions.https.onRequest(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
+
+  let reservation = null;
+  let authenticatedUid = '';
+  try {
+    const user = await requireAuthenticatedUser(req);
+    authenticatedUid = user.uid;
+    if (!user.email || user.firebase?.sign_in_provider !== 'password') {
+      return res.status(403).json({ error: 'El registro requiere una cuenta de correo y contraseña.' });
+    }
+
+    const application = { email: normalizedIdentity(user.email) };
+    for (const field of DRIVER_APPLICATION_FIELDS) application[field] = req.body?.[field];
+    application.name = String(application.name || '').trim();
+    application.age = Number(application.age);
+    application.phone = String(application.phone || '').trim();
+    application.dni = String(application.dni || '').trim();
+    application.plate = String(application.plate || '').trim().toUpperCase();
+    application.vehicleBrand = String(application.vehicleBrand || '').trim();
+    application.vehicleType = String(application.vehicleType || '').trim();
+    application.vehicleColor = String(application.vehicleColor || '').trim();
+    application.vehicleSeats = Number(application.vehicleSeats);
+
+    const driverRef = admin.database().ref(`drivers/${user.uid}`);
+    const current = (await driverRef.once('value')).val();
+    if (current) {
+      if (current.approvalStatus === 'pending_review') {
+        return res.json({ ok: true, resumed: true });
+      }
+      return res.status(409).json({ error: 'La cuenta ya tiene un registro de conductor.' });
+    }
+
+    const issues = driverApplicationIssues(application, user.uid, BRANDING_BUCKET);
+    if (issues.length) {
+      return res.status(400).json({
+        error: `Completa o corrige: ${issues.join(', ')}.`,
+        issues,
+      });
+    }
+
+    reservation = await reserveDriverApplicationIdentities(user.uid, application);
+    if (!reservation.ok) return res.status(409).json({ error: reservation.error });
+
+    const now = Date.now();
+    await driverRef.set({
+      ...application,
+      approvalStatus: 'pending_review',
+      registeredAt: now,
+      documentsSubmittedAt: now,
+    });
+    reservation = null;
+    return res.json({ ok: true, resumed: false });
+  } catch (error) {
+    if (reservation?.ok) {
+      await Promise.all(reservation.reserved.map(([field, value]) => (
+        releaseUniqueDriverValue(field, value, authenticatedUid)
+      ))).catch(() => null);
+    }
+    console.error('completeDriverRegistration', error);
+    return res.status(400).json({ error: error.message || 'No se pudo completar el registro.' });
+  }
+});
+
+const PERSONAL_DRIVER_FIELDS = ['name', 'age', 'phone', 'dni'];
+const VEHICLE_DRIVER_FIELDS = [
+  'plate',
+  'vehicleBrand',
+  'vehicleType',
+  'vehicleColor',
+  'vehicleSeats',
+];
+
+function requestedDocumentUpdate(body, document) {
+  const alternatives = document.alternatives || [document.fields];
+  const selected = alternatives.find((fields) => fields.every((field) => body?.[field]));
+  if (!selected) return null;
+  const update = {};
+  for (const fields of alternatives) {
+    for (const field of fields) update[field] = null;
+  }
+  for (const field of selected) update[field] = body[field];
+  if (document.expiresField) update[document.expiresField] = Number(body?.[document.expiresField]);
+  return update;
+}
+
+async function reserveChangedDriverIdentities(uid, current, updated) {
+  const changed = DRIVER_IDENTITY_FIELDS.filter(([field]) => (
+    normalizedIdentity(current[field]) !== normalizedIdentity(updated[field])
+  ));
+  if (!changed.length) return { ok: true, reserved: [] };
+
+  const drivers = (await admin.database().ref('drivers').once('value')).val() || {};
+  for (const [driverId, driver] of Object.entries(drivers)) {
+    if (driverId === uid) continue;
+    for (const [field, label] of changed) {
+      if (normalizedIdentity(driver?.[field]) === normalizedIdentity(updated[field])) {
+        return { ok: false, error: `Ya existe un conductor con ese ${label}.`, reserved: [] };
+      }
+    }
+  }
+
+  const reserved = [];
+  for (const [field, label] of changed) {
+    const value = updated[field];
+    if (!(await reserveUniqueDriverValue(field, value, uid))) {
+      await Promise.all(reserved.map(([reservedField, reservedValue]) => (
+        releaseUniqueDriverValue(reservedField, reservedValue, uid)
+      )));
+      return { ok: false, error: `Ya existe un conductor con ese ${label}.`, reserved: [] };
+    }
+    reserved.push([field, value]);
+  }
+  return { ok: true, reserved, changed };
+}
+
+exports.resubmitDriverApplication = functions.https.onRequest(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
+
+  let identityReservation = null;
+  let userId = '';
+  try {
+    const user = await requireAuthenticatedUser(req);
+    userId = user.uid;
+    const driverRef = admin.database().ref(`drivers/${user.uid}`);
+    const current = (await driverRef.once('value')).val();
+    if (!current) return res.status(404).json({ error: 'Perfil de conductor no encontrado.' });
+    if (current.approvalStatus !== 'rejected') {
+      return res.status(409).json({ error: 'El registro ya no está rechazado.' });
+    }
+
+    const rejectionFields = new Set(String(current.rejectionFieldKeys || '')
+      .split(',').map((field) => field.trim()).filter(Boolean));
+    const updates = {};
+
+    if (rejectionFields.has('personalData')) {
+      for (const field of PERSONAL_DRIVER_FIELDS) updates[field] = req.body?.[field];
+    }
+    if (rejectionFields.has('vehicleData')) {
+      for (const field of VEHICLE_DRIVER_FIELDS) updates[field] = req.body?.[field];
+    }
+
+    const rejectedDocuments = REQUIRED_DRIVER_DOCUMENTS.filter((document) => (
+      rejectionFields.has(document.key)
+    ));
+    for (const document of rejectedDocuments) {
+      const documentUpdate = requestedDocumentUpdate(req.body, document);
+      if (!documentUpdate) {
+        return res.status(400).json({ error: `Vuelve a subir ${document.label}.` });
+      }
+      Object.assign(updates, documentUpdate);
+    }
+
+    // Compatibilidad con rechazos antiguos que no guardaban campos: se
+    // acepta al menos un documento, pero nunca cambios silenciosos de perfil.
+    if (!rejectionFields.size) {
+      for (const document of REQUIRED_DRIVER_DOCUMENTS) {
+        const documentUpdate = requestedDocumentUpdate(req.body, document);
+        if (documentUpdate) Object.assign(updates, documentUpdate);
+      }
+    }
+    if (!Object.keys(updates).length) {
+      return res.status(400).json({ error: 'No se recibió ninguna corrección autorizada.' });
+    }
+
+    const merged = {
+      ...current,
+      ...updates,
+      email: normalizedIdentity(current.email || user.email),
+      name: String(updates.name ?? current.name ?? '').trim(),
+      age: Number(updates.age ?? current.age),
+      phone: String(updates.phone ?? current.phone ?? '').trim(),
+      dni: String(updates.dni ?? current.dni ?? '').trim(),
+      plate: String(updates.plate ?? current.plate ?? '').trim().toUpperCase(),
+      vehicleBrand: String(updates.vehicleBrand ?? current.vehicleBrand ?? '').trim(),
+      vehicleType: String(updates.vehicleType ?? current.vehicleType ?? '').trim(),
+      vehicleColor: String(updates.vehicleColor ?? current.vehicleColor ?? '').trim(),
+      vehicleSeats: Number(updates.vehicleSeats ?? current.vehicleSeats),
+    };
+    const issues = driverApplicationIssues(merged, user.uid, BRANDING_BUCKET);
+    if (issues.length) {
+      return res.status(400).json({
+        error: `Completa o corrige: ${issues.join(', ')}.`,
+        issues,
+      });
+    }
+
+    identityReservation = await reserveChangedDriverIdentities(user.uid, current, merged);
+    if (!identityReservation.ok) return res.status(409).json({ error: identityReservation.error });
+
+    const expectedReview = Number(current.reviewedAt || 0);
+    const transaction = await driverRef.transaction((latest) => {
+      if (!latest || latest.approvalStatus !== 'rejected') return;
+      if (Number(latest.reviewedAt || 0) !== expectedReview) return;
+      return {
+        ...latest,
+        ...updates,
+        name: merged.name,
+        age: merged.age,
+        phone: merged.phone,
+        dni: merged.dni,
+        plate: merged.plate,
+        vehicleBrand: merged.vehicleBrand,
+        vehicleType: merged.vehicleType,
+        vehicleColor: merged.vehicleColor,
+        vehicleSeats: merged.vehicleSeats,
+        approvalStatus: 'pending_review',
+        rejectionReason: null,
+        rejectionFieldKeys: null,
+        documentsSubmittedAt: Date.now(),
+      };
+    });
+    if (!transaction.committed) {
+      return res.status(409).json({ error: 'La revisión cambió mientras corregías. Actualiza e intenta de nuevo.' });
+    }
+
+    for (const [field] of identityReservation.changed || []) {
+      await releaseUniqueDriverValue(field, current[field], user.uid);
+    }
+    identityReservation = null;
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('resubmitDriverApplication', error);
+    return res.status(400).json({ error: error.message || 'No se pudo reenviar el registro.' });
+  } finally {
+    if (identityReservation?.ok) {
+      await Promise.all(identityReservation.reserved.map(([field, value]) => (
+        releaseUniqueDriverValue(field, value, userId)
+      ))).catch(() => null);
+    }
+  }
+});
+
+async function recordAuditEvent(actor, action, targetType, targetId, details = {}) {
+  const eventRef = admin.database().ref('auditLogs').push();
+  await eventRef.set({
+    action,
+    targetType,
+    targetId,
+    actorUid: actor?.uid || '',
+    actorEmail: actor?.email || '',
+    actorRole: actor?.dashboardRole || (actor?.dashboardAdmin === true ? 'ADMIN' : ''),
+    createdAt: Date.now(),
+    details,
+  });
+  return eventRef.key;
+}
+
 exports.manageDrivers = functions.https.onRequest(async (req, res) => {
   cors(res);
   if (req.method === 'OPTIONS') return res.status(204).send('');
@@ -620,6 +921,27 @@ exports.manageDrivers = functions.https.onRequest(async (req, res) => {
     // haya quitado el perfil y dejado la cuenta de Authentication o sus
     // reservas unicas pendientes.
     if (!driver && action !== 'delete') return res.status(404).json({ error: 'Conductor no encontrado' });
+    if (action === 'approve') {
+      if (driver.approvalStatus !== 'pending_review') {
+        return res.status(409).json({ error: 'Solo se puede aprobar un registro pendiente.' });
+      }
+      const issues = driverApplicationIssues(driver, driverId, BRANDING_BUCKET);
+      if (issues.length) {
+        return res.status(409).json({
+          error: `No se puede aprobar. Falta o está vencido: ${issues.join(', ')}.`,
+          issues,
+        });
+      }
+      await driverRef.update({
+        approvalStatus: 'approved',
+        rejectionReason: null,
+        rejectionFieldKeys: null,
+        reviewedAt: Date.now(),
+        reviewedBy: manager.email || '',
+      });
+      await recordAuditEvent(manager, 'DRIVER_APPROVED', 'driver', driverId);
+      return res.json({ ok: true });
+    }
     if (action === 'assignPlace') {
       if (!place?.name || !place?.type) return res.status(400).json({ error: 'Selecciona un hotel o sede.' });
       const assignedPlace = { name: String(place.name), type: String(place.type), assignedAt: Date.now() };
@@ -628,6 +950,41 @@ exports.manageDrivers = functions.https.onRequest(async (req, res) => {
         placeName: assignedPlace.name,
         placeType: assignedPlace.type,
       });
+      await recordAuditEvent(manager, 'DRIVER_PLACE_ASSIGNED', 'driver', driverId, assignedPlace);
+      return res.json({ ok: true });
+    }
+    if (action === 'suspend') {
+      const reason = String(req.body?.reason || '').trim();
+      if (reason.length < 5 || reason.length > 300) {
+        return res.status(400).json({ error: 'Escribe un motivo entre 5 y 300 caracteres.' });
+      }
+      if (driver.currentTripId || driver.status === 'busy') {
+        return res.status(409).json({ error: 'No puedes suspender a un conductor con un viaje activo.' });
+      }
+      const now = Date.now();
+      await driverRef.update({
+        suspended: true,
+        suspensionReason: reason,
+        suspendedAt: now,
+        suspendedBy: manager.email || '',
+        status: null,
+        turno_activo: false,
+        estado_conexion: 'OFFLINE',
+        ultima_conexion: now,
+        ultimo_motivo_desconexion: 'ADMIN',
+      });
+      await recordAuditEvent(manager, 'DRIVER_SUSPENDED', 'driver', driverId, { reason });
+      await sendPush(driver.fcmToken, 'driver_suspended', { reason });
+      return res.json({ ok: true });
+    }
+    if (action === 'reinstate') {
+      await driverRef.update({
+        suspended: null,
+        suspensionReason: null,
+        suspendedAt: null,
+        suspendedBy: null,
+      });
+      await recordAuditEvent(manager, 'DRIVER_REINSTATED', 'driver', driverId);
       return res.json({ ok: true });
     }
     if (action === 'reject') {
@@ -637,7 +994,7 @@ exports.manageDrivers = functions.https.onRequest(async (req, res) => {
         : [];
       if (!reason) return res.status(400).json({ error: 'Escribe el motivo del rechazo.' });
       if (!rejectionFields.length || rejectionFields.some((field) => !DRIVER_REJECTION_FIELDS.has(field))) {
-        return res.status(400).json({ error: 'Selecciona al menos un documento que deba corregirse.' });
+        return res.status(400).json({ error: 'Selecciona al menos un dato o documento que deba corregirse.' });
       }
       if (driver.currentTripId || driver.status === 'busy') {
         return res.status(409).json({ error: 'No puedes rechazar a un conductor con un viaje activo.' });
@@ -653,6 +1010,10 @@ exports.manageDrivers = functions.https.onRequest(async (req, res) => {
         ultima_conexion: Date.now(),
         ultimo_motivo_desconexion: 'ADMIN',
         currentTripId: null,
+      });
+      await recordAuditEvent(manager, 'DRIVER_REJECTED', 'driver', driverId, {
+        reason,
+        rejectionFields,
       });
       return res.json({ ok: true });
     }
@@ -677,6 +1038,9 @@ exports.manageDrivers = functions.https.onRequest(async (req, res) => {
         driverRef.remove(),
         admin.database().ref(`driverConnectionHistory/${driverId}`).remove(),
       ]);
+      await recordAuditEvent(manager, 'DRIVER_DELETED', 'driver', driverId, {
+        email: driver?.email || '',
+      });
       return res.json({ ok: true, authDeleted });
     }
     return res.status(400).json({ error: 'Accion invalida' });
@@ -925,6 +1289,7 @@ exports.updateDriverProfileOnce = functions.https.onRequest(async (req, res) => 
     const profileUrl = `${DATABASE_URL}/drivers/${user.uid}.json`;
     const getResponse = await fetch(profileUrl, {
       headers: { ...headers, 'X-Firebase-ETag': 'true' },
+      signal: AbortSignal.timeout(DATABASE_REQUEST_TIMEOUT_MS),
     });
     if (!getResponse.ok) {
       throw new Error(`No se pudo consultar el perfil (${getResponse.status})`);
@@ -934,7 +1299,7 @@ exports.updateDriverProfileOnce = functions.https.onRequest(async (req, res) => 
     const current = await getResponse.json();
     if (!current) return res.status(404).json({ error: 'Perfil de conductor no encontrado.' });
     if (current.approvalStatus !== 'approved') {
-      return res.status(403).json({ error: 'El conductor todavÃ­a no estÃ¡ aprobado.' });
+      return res.status(403).json({ error: 'El conductor todavía no está aprobado.' });
     }
 
     const currentPhone = String(current.phone || '').trim();
@@ -964,10 +1329,11 @@ exports.updateDriverProfileOnce = functions.https.onRequest(async (req, res) => 
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(updated),
+      signal: AbortSignal.timeout(DATABASE_REQUEST_TIMEOUT_MS),
     });
     if (putResponse.status === 412) {
       if (phoneReserved) await releaseUniqueDriverValue('phone', cleanPhone, user.uid);
-      return res.status(409).json({ error: 'El perfil cambiÃ³ mientras se guardaba. Intenta nuevamente.' });
+      return res.status(409).json({ error: 'El perfil cambió mientras se guardaba. Intenta nuevamente.' });
     }
     if (!putResponse.ok) {
       if (phoneReserved) await releaseUniqueDriverValue('phone', cleanPhone, user.uid);
@@ -1011,7 +1377,14 @@ exports.requestAppBrandingBuild = functions
       const configSnap = await admin.database().ref('config').once('value');
       const config = configSnap.val() || {};
       const branding = config.appBranding?.[appKey] || {};
-      const build = Number(config[app.buildField] || 0) + 1;
+      const buildSequenceRef = admin.database().ref(`appBuildSequences/${appKey}`);
+      const buildReservation = await buildSequenceRef.transaction((current) => nextBuildNumber({
+        configuredBuild: config[app.buildField],
+        reservedBuild: current,
+        minimumBuild: app.minimumBuild,
+      }));
+      if (!buildReservation.committed) throw new Error('No se pudo reservar un número de build.');
+      const build = Number(buildReservation.snapshot.val());
       const requestId = crypto.randomUUID();
       const token = crypto.randomBytes(32).toString('hex');
       const expiresAt = Date.now() + BRANDING_BUILD_TTL_MS;
@@ -1019,18 +1392,14 @@ exports.requestAppBrandingBuild = functions
       const [uploadUrl] = await bucket.file(app.apkPath).getSignedUrl({
         version: 'v4', action: 'write', expires: expiresAt, contentType: 'application/vnd.android.package-archive',
       });
-      const [signingUrl] = await bucket.file(BRANDING_SIGNING_PATH).getSignedUrl({
-        version: 'v4', action: 'read', expires: expiresAt,
-      });
-
       await admin.database().ref(`appBuildRequests/${requestId}`).set({
         app: appKey,
         build,
+        versionName: app.versionName,
         name: branding.name || app.defaultName,
         iconUrl: branding.iconUrl || '',
         apkPath: app.apkPath,
         uploadUrl,
-        signingUrl,
         tokenHash: requestTokenHash(token),
         status: 'building',
         createdAt: Date.now(),
@@ -1048,6 +1417,7 @@ exports.requestAppBrandingBuild = functions
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ ref: 'master', inputs: { app: appKey, request_id: requestId, build_token: token } }),
+          signal: AbortSignal.timeout(15000),
         },
       );
       if (!githubResponse.ok) {
@@ -1068,7 +1438,14 @@ exports.getAppBrandingBuild = functions.https.onRequest(async (req, res) => {
   if (req.method === 'OPTIONS') return res.status(204).send('');
   const request = await validBuildRequest(String(req.query.requestId || ''), String(req.query.token || ''));
   if (!request) return res.status(404).json({ error: 'Solicitud invalida o vencida' });
-  return res.json({ app: request.app, build: request.build, name: request.name, iconUrl: request.iconUrl, uploadUrl: request.uploadUrl, signingUrl: request.signingUrl });
+  return res.json({
+    app: request.app,
+    build: request.build,
+    versionName: request.versionName,
+    name: request.name,
+    iconUrl: request.iconUrl,
+    uploadUrl: request.uploadUrl,
+  });
 });
 
 // Se llama solo despues de que GitHub subio la APK a la URL firmada. Verifica
@@ -1083,7 +1460,20 @@ exports.completeAppBrandingBuild = functions.https.onRequest(async (req, res) =>
   const app = BRANDING_APPS[request.app];
   const [exists] = await admin.storage().bucket(BRANDING_BUCKET).file(request.apkPath).exists();
   if (!exists) return res.status(409).json({ error: 'La APK aun no fue subida' });
-  await admin.database().ref(`config/${app.buildField}`).set(request.build);
+  const buildRef = admin.database().ref(`config/${app.buildField}`);
+  const publication = await buildRef.transaction((current) => {
+    const decision = buildPublicationDecision(current, request.build);
+    return decision.ok ? decision.value : undefined;
+  });
+  if (!publication.committed) {
+    const currentBuild = Number((await buildRef.once('value')).val() || 0);
+    await admin.database().ref(`appBuildRequests/${requestId}`).update({
+      status: 'superseded',
+      supersededAt: Date.now(),
+      currentBuild,
+    });
+    return res.status(409).json({ error: `Ya existe un build superior (${currentBuild}).` });
+  }
   await admin.database().ref(`appBuildRequests/${requestId}`).update({ status: 'published', publishedAt: Date.now() });
   return res.json({ build: request.build });
 });
@@ -1187,8 +1577,24 @@ exports.managePassengerInvites = functions.https.onRequest(async (req, res) => {
     if (action === 'revoke') {
       const inviteId = String(req.body?.inviteId || '').trim().toLowerCase();
       if (!/^[a-f0-9]{64}$/.test(inviteId)) return res.status(400).json({ error: 'Invitación inválida.' });
-      await invitesRef.child(inviteId).update({ status: 'revoked', revokedAt: Date.now(), revokedBy: manager.uid });
-      return res.json({ ok: true });
+      const inviteRef = invitesRef.child(inviteId);
+      const invite = (await inviteRef.once('value')).val();
+      if (!invite) return res.status(404).json({ error: 'La invitación no existe.' });
+      const revokedAt = Date.now();
+      await inviteRef.update({ status: 'revoked', revokedAt, revokedBy: manager.uid });
+
+      const redeemedUserIds = Object.keys(invite.usedBy || {});
+      const revocations = await Promise.all(redeemedUserIds.map(async (uid) => {
+        const result = await admin.database().ref(`passengerAccess/${uid}`).transaction((current) => (
+          revokePassengerAccess(current, inviteId, manager.uid, revokedAt)
+        ));
+        return result.committed ? uid : null;
+      }));
+      const revokedAccesses = revocations.filter(Boolean).length;
+      await recordAuditEvent(manager, 'PASSENGER_INVITE_REVOKED', 'passengerInvite', inviteId, {
+        revokedAccesses,
+      });
+      return res.json({ ok: true, revokedAccesses });
     }
 
     return res.status(400).json({ error: 'Acción inválida.' });
@@ -1250,7 +1656,11 @@ exports.ensurePassengerAccess = functions.https.onRequest(async (req, res) => {
     const access = (await accessRef.once('value')).val();
     if (passengerAccessIsActive(access)) return res.json({ ok: true, access });
     const passenger = (await admin.database().ref(`passengers/${user.uid}`).once('value')).val();
-    if (!passenger || Number(passenger.registeredAt || 0) >= LEGACY_PASSENGER_ACCESS_CUTOFF_MS) {
+    if (!passenger || !canMigrateLegacyPassengerAccess(
+      access,
+      passenger.registeredAt,
+      LEGACY_PASSENGER_ACCESS_CUTOFF_MS,
+    )) {
       return res.status(403).json({ error: 'Activa primero el acceso con el código QR del hotel.' });
     }
     const legacyAccess = passengerAccessPayload({
@@ -1301,9 +1711,9 @@ exports.registerPassengerProfile = functions.https.onRequest(async (req, res) =>
   }
 });
 
-// Vincula una cuenta anónima existente con el UID creado por Firebase Phone
+// Vincula una cuenta anónima existente con una cuenta recuperable de Firebase
 // Auth. Se conserva el historial y el acceso del hotel; no se sobrescribe un
-// perfil telefónico que ya exista.
+// perfil que ya exista en la cuenta de destino.
 exports.migratePassengerAccount = functions.https.onRequest(async (req, res) => {
   cors(res);
   if (req.method === 'OPTIONS') return res.status(204).send('');
@@ -1324,7 +1734,7 @@ exports.migratePassengerAccount = functions.https.onRequest(async (req, res) => 
     const oldPassenger = oldPassengerSnap.val();
     const oldAccess = oldAccessSnap.val();
     if (!oldPassenger && !oldAccess) return res.json({ ok: true, migrated: false });
-    if (targetPassengerSnap.exists()) return res.status(409).json({ error: 'El número ya tiene otra cuenta de pasajero.' });
+    if (targetPassengerSnap.exists()) return res.status(409).json({ error: 'La cuenta de destino ya tiene otro perfil de pasajero.' });
 
     const updates = {};
     if (oldPassenger) updates[`passengers/${targetUser.uid}`] = oldPassenger;
@@ -1433,6 +1843,145 @@ exports.manageDashboardUsers = functions.https.onRequest(async (req, res) => {
   } catch (error) {
     console.error('manageDashboardUsers', error);
     return res.status(403).json({ error: error.message || 'No autorizado' });
+  }
+});
+
+exports.createPassengerTrip = functions.https.onRequest(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
+
+  let lockRef = null;
+  let lockToken = '';
+  try {
+    const passenger = await requireAuthenticatedUser(req);
+    const requestId = String(req.body?.requestId || '').trim().toLowerCase();
+    if (!/^[a-f0-9]{32}$/.test(requestId)) {
+      return res.status(400).json({ error: 'Identificador de solicitud inválido.' });
+    }
+
+    const tripId = `${passenger.uid}_${requestId}`;
+    const tripRef = admin.database().ref(`trips/${tripId}`);
+    const existing = (await tripRef.once('value')).val();
+    if (existing) {
+      if (existing.passengerId !== passenger.uid || existing.clientRequestId !== requestId) {
+        return res.status(409).json({ error: 'La solicitud entra en conflicto con otro viaje.' });
+      }
+      return res.json({ ok: true, tripId, trip: existing, idempotent: true });
+    }
+
+    const db = admin.database();
+    const [profileSnapshot, accessSnapshot] = await Promise.all([
+      db.ref(`passengers/${passenger.uid}`).once('value'),
+      db.ref(`passengerAccess/${passenger.uid}`).once('value'),
+    ]);
+    const profile = profileSnapshot.val();
+    const access = accessSnapshot.val();
+    const registeredAt = Number(profile?.registeredAt || 0);
+    const legacyAccess = canMigrateLegacyPassengerAccess(
+      access,
+      registeredAt,
+      LEGACY_PASSENGER_ACCESS_CUTOFF_MS,
+    );
+    if (!profile || (!passengerAccessIsActive(access) && !legacyAccess)) {
+      return res.status(403).json({ error: 'Tu acceso de pasajero no está vigente.' });
+    }
+
+    const pickup = tripPoint(req.body?.pickupLat, req.body?.pickupLng);
+    const destination = tripPoint(req.body?.destinationLat, req.body?.destinationLng);
+    const pickupAddress = String(req.body?.pickupAddress || '').trim().slice(0, 300);
+    const destinationAddress = String(req.body?.destinationAddress || '').trim().slice(0, 300);
+    const passengerCount = Number(req.body?.passengerCount);
+    if (!pickup || !destination || !pickupAddress || !destinationAddress) {
+      return res.status(400).json({ error: 'Selecciona un origen y destino válidos.' });
+    }
+    if (!Number.isInteger(passengerCount) || passengerCount < 1 || passengerCount > 45) {
+      return res.status(400).json({ error: 'El número de pasajeros debe estar entre 1 y 45.' });
+    }
+
+    const now = Date.now();
+    const requestedSchedule = req.body?.scheduledPickupAt;
+    const scheduledPickupAt = requestedSchedule == null ? null : Number(requestedSchedule);
+    if (scheduledPickupAt != null && (
+      !Number.isFinite(scheduledPickupAt)
+      || scheduledPickupAt < now + PASSENGER_SCHEDULE_MIN_LEAD_MS
+      || scheduledPickupAt > now + PASSENGER_SCHEDULE_MAX_LEAD_MS
+    )) {
+      return res.status(400).json({ error: 'Programa el viaje entre 15 minutos y 30 días desde ahora.' });
+    }
+
+    // Serializa pedidos simultáneos de una misma cuenta. El viaje usa además
+    // un ID determinista, por lo que repetir la misma solicitud nunca duplica.
+    lockToken = crypto.randomBytes(16).toString('hex');
+    lockRef = db.ref(`passengerTripLocks/${passenger.uid}`);
+    const lock = await lockRef.transaction((current) => {
+      if (current && Number(current.expiresAt || 0) > now) return;
+      return { token: lockToken, expiresAt: now + 15000 };
+    });
+    if (!lock.committed || lock.snapshot.val()?.token !== lockToken) {
+      return res.status(409).json({
+        code: 'REQUEST_IN_PROGRESS',
+        error: 'Ya se está procesando otra solicitud. Intenta nuevamente en unos segundos.',
+      });
+    }
+
+    const passengerTrips = (await db.ref('trips')
+      .orderByChild('passengerId').equalTo(passenger.uid).once('value')).val() || {};
+    const conflict = passengerTripConflict(passengerTrips, scheduledPickupAt, now);
+    if (conflict) {
+      const messages = {
+        ACTIVE_TRIP_EXISTS: 'Ya tienes un viaje activo.',
+        SCHEDULED_TRIP_EXISTS: 'Ya tienes un viaje programado.',
+        SCHEDULED_TRIP_TOO_CLOSE: 'Tu viaje programado está demasiado cerca para pedir otro ahora.',
+      };
+      return res.status(409).json({
+        code: conflict.code,
+        existingTripId: conflict.tripId,
+        error: messages[conflict.code],
+      });
+    }
+
+    const scheduledPickupLabel = scheduledPickupAt == null
+      ? null
+      : new Intl.DateTimeFormat('es-PE', {
+        timeZone: LIMA_TIME_ZONE,
+        day: '2-digit',
+        month: '2-digit',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      }).format(new Date(scheduledPickupAt));
+    const trip = {
+      passengerId: passenger.uid,
+      passengerName: String(profile.name || 'Pasajero').trim().slice(0, 120),
+      passengerPhone: String(profile.phone || '').trim().slice(0, 40),
+      ...(profile.photoUrl ? { passengerPhotoUrl: String(profile.photoUrl) } : {}),
+      passengerCount,
+      pickupLat: pickup.lat,
+      pickupLng: pickup.lng,
+      pickupAddress,
+      destinationLat: destination.lat,
+      destinationLng: destination.lng,
+      destinationAddress,
+      ...(scheduledPickupAt == null ? {} : { scheduledPickupAt, scheduledPickupLabel }),
+      status: scheduledPickupAt == null ? 'searching' : 'scheduled',
+      requestedAt: now,
+      rejectedDriverIds: {},
+      clientRequestId: requestId,
+    };
+    const created = await tripRef.transaction((current) => current || trip);
+    const saved = created.snapshot.val();
+    if (!created.committed || saved?.passengerId !== passenger.uid || saved?.clientRequestId !== requestId) {
+      throw new Error('No se pudo confirmar la creación del viaje.');
+    }
+    return res.status(201).json({ ok: true, tripId, trip: saved, idempotent: false });
+  } catch (error) {
+    console.error('createPassengerTrip', error);
+    return res.status(400).json({ error: error.message || 'No se pudo crear el viaje.' });
+  } finally {
+    if (lockRef && lockToken) {
+      await lockRef.transaction((current) => current?.token === lockToken ? null : current).catch(() => null);
+    }
   }
 });
 
@@ -1557,6 +2106,43 @@ exports.cancelCoordinatorTrip = functions.https.onRequest(async (req, res) => {
   }
 });
 
+exports.cancelDashboardTrip = functions.https.onRequest(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
+  try {
+    const manager = await requireDashboardManager(req);
+    const tripId = String(req.body?.tripId || '').trim();
+    const reason = String(req.body?.reason || '').trim();
+    if (!isValidFirebaseKey(tripId)) return res.status(400).json({ error: 'Viaje requerido' });
+
+    const accessToken = await functionsAccessToken();
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const { etag, value: trip } = await readDatabaseWithEtag(`trips/${tripId}`, accessToken);
+      const decision = prepareDashboardCancellation(trip, manager.email, reason, Date.now());
+      if (!decision.ok) return res.status(decision.httpStatus).json({ error: decision.error });
+      const response = await putDatabaseIfUnchanged(
+        `trips/${tripId}`,
+        decision.value,
+        etag,
+        accessToken,
+      );
+      if (response.ok) {
+        await recordAuditEvent(manager, 'TRIP_CANCELLED', 'trip', tripId, { reason });
+        return res.json({ ok: true, status: 'cancelled' });
+      }
+      if (response.status !== 412) {
+        throw new Error(`No se pudo cancelar el viaje (${response.status}).`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 80 * (attempt + 1)));
+    }
+    return res.status(409).json({ error: 'El viaje cambió mientras se cancelaba. Actualiza e intenta nuevamente.' });
+  } catch (error) {
+    console.error('cancelDashboardTrip', error);
+    return res.status(403).json({ error: error.message || 'No autorizado' });
+  }
+});
+
 // Espejo privado para que la interfaz coordinadora use la sincronización en
 // tiempo real de RTDB sin concederle lectura de todos los viajes.
 exports.syncCoordinatorTrip = functions.database
@@ -1622,6 +2208,14 @@ exports.dispatchScheduledTrips = functions.pubsub
       const scheduledAt = trip.scheduledPickupAt;
       const dispatch = !scheduledAt || scheduledAt - now <= SCHEDULED_TRIP_DISPATCH_BEFORE_MS;
       if (dispatch) {
+        const passengerTrips = (await db.ref('trips')
+          .orderByChild('passengerId').equalTo(trip.passengerId).once('value')).val() || {};
+        delete passengerTrips[tripId];
+        // Una reserva no se convierte en un segundo viaje activo si el
+        // pasajero todavía está realizando otro. Se reevalúa al minuto.
+        if (passengerTripConflict(passengerTrips, scheduledAt, now)?.code === 'ACTIVE_TRIP_EXISTS') {
+          continue;
+        }
         await attemptAssignment(
           tripId,
           trip.pickupLat,
@@ -1902,35 +2496,137 @@ exports.notifyApprovalStatusChange = functions.database
 // (que ignora las reglas) haga el query aca, verificando primero que el
 // idToken sea valido y usando su propio uid -- nunca uno que mande el
 // cliente.
-exports.getMyTrips = functions.https.onRequest(async (req, res) => {
-  if (req.method !== 'GET') {
-    res.status(405).json({ error: 'Metodo no permitido' });
-    return;
-  }
-
-  const idToken = req.query.idToken;
-  if (!idToken) {
-    res.status(401).json({ error: 'Falta idToken' });
-    return;
-  }
-
-  let uid;
+exports.submitTripFeedback = functions.https.onRequest(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
   try {
-    uid = (await admin.auth().verifyIdToken(String(idToken))).uid;
-  } catch (e) {
-    res.status(401).json({ error: 'Token invalido' });
-    return;
+    const passenger = await requireAuthenticatedUser(req);
+    const tripId = String(req.body?.tripId || '').trim();
+    if (!tripId || tripId.length > 160 || /[.#$\[\]]/.test(tripId)) {
+      return res.status(400).json({ error: 'Viaje invalido.' });
+    }
+    const feedbackPath = `tripFeedback/${tripId}`;
+    const [tripSnapshot, accessToken] = await Promise.all([
+      admin.database().ref(`trips/${tripId}`).once('value'),
+      functionsAccessToken(),
+    ]);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const existing = await readDatabaseWithEtag(feedbackPath, accessToken);
+      const feedback = buildTripFeedback(
+        req.body,
+        tripSnapshot.val(),
+        passenger.uid,
+        Date.now(),
+        existing.value,
+      );
+      const writeResponse = await putDatabaseIfUnchanged(
+        feedbackPath,
+        feedback,
+        existing.etag,
+        accessToken,
+      );
+      if (writeResponse.ok) return res.json({ ok: true, feedback });
+      if (writeResponse.status !== 412) {
+        throw new Error(`No se pudo guardar el comentario (${writeResponse.status}).`);
+      }
+    }
+    return res.status(409).json({
+      error: 'La incidencia cambio mientras la editabas. Revisa los datos e intenta nuevamente.',
+    });
+  } catch (error) {
+    return res.status(400).json({ error: error.message || 'No se pudo guardar tu comentario.' });
   }
+});
 
-  const all = req.query.all === 'true';
-  const days = Number(req.query.days) || 7;
-  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-
-  const snap = await admin.database().ref('trips').orderByChild('passengerId').equalTo(uid).once('value');
-  const trips = snap.val() || {};
-  const filtered = {};
-  for (const [id, trip] of Object.entries(trips)) {
-    if (all || (trip.requestedAt || 0) >= cutoff) filtered[id] = trip;
+exports.manageTripFeedback = functions.https.onRequest(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
+  try {
+    const manager = await requireDashboardManager(req);
+    const tripId = String(req.body?.tripId || '').trim();
+    const action = String(req.body?.action || '').trim();
+    if (!tripId || tripId.length > 160 || /[.#$\[\]]/.test(tripId)
+      || !['resolve', 'reopen'].includes(action)) {
+      return res.status(400).json({ error: 'Solicitud invalida.' });
+    }
+    const now = Date.now();
+    const feedbackPath = `tripFeedback/${tripId}`;
+    const accessToken = await functionsAccessToken();
+    const existing = await readDatabaseWithEtag(feedbackPath, accessToken);
+    if (!existing.value || existing.value.incidentCategory === 'none') {
+      return res.status(404).json({ error: 'Incidencia no encontrada.' });
+    }
+    let feedback;
+    if (action === 'resolve') {
+      feedback = {
+        ...existing.value,
+        incidentStatus: 'RESOLVED',
+        resolvedAt: now,
+        resolvedBy: manager.uid,
+        updatedAt: now,
+      };
+    } else {
+      feedback = { ...existing.value, incidentStatus: 'OPEN', updatedAt: now };
+      delete feedback.resolvedAt;
+      delete feedback.resolvedBy;
+    }
+    const writeResponse = await putDatabaseIfUnchanged(
+      feedbackPath,
+      feedback,
+      existing.etag,
+      accessToken,
+    );
+    if (writeResponse.status === 412) {
+      return res.status(409).json({
+        error: 'La incidencia cambio mientras la actualizabas. Recarga e intenta nuevamente.',
+      });
+    }
+    if (!writeResponse.ok) {
+      throw new Error(`No se pudo actualizar la incidencia (${writeResponse.status}).`);
+    }
+    await recordAuditEvent(
+      manager,
+      action === 'resolve' ? 'TRIP_INCIDENT_RESOLVED' : 'TRIP_INCIDENT_REOPENED',
+      'trip',
+      tripId,
+    );
+    return res.json({ ok: true, feedback });
+  } catch (error) {
+    const forbidden = /No autorizado|permiso/.test(String(error.message || ''));
+    return res.status(forbidden ? 403 : 500).json({
+      error: error.message || 'No se pudo actualizar la incidencia.',
+    });
   }
-  res.status(200).json(filtered);
+});
+
+exports.getMyTrips = functions.https.onRequest(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Metodo no permitido' });
+
+  try {
+    const passenger = await requireAuthenticatedUser(req);
+    const all = req.query.all === 'true';
+    const days = Math.min(90, Math.max(1, Number(req.query.days) || 7));
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+
+    const db = admin.database();
+    const [tripSnapshot, feedbackSnapshot] = await Promise.all([
+      db.ref('trips').orderByChild('passengerId').equalTo(passenger.uid).once('value'),
+      db.ref('tripFeedback').orderByChild('passengerId').equalTo(passenger.uid).once('value'),
+    ]);
+    const trips = tripSnapshot.val() || {};
+    const feedbackByTrip = feedbackSnapshot.val() || {};
+    const filtered = {};
+    for (const [id, trip] of Object.entries(trips)) {
+      if (all || (trip.requestedAt || 0) >= cutoff) {
+        filtered[id] = { ...trip, feedback: feedbackByTrip[id] || null };
+      }
+    }
+    return res.status(200).json(filtered);
+  } catch (error) {
+    return res.status(401).json({ error: error.message || 'Token invalido' });
+  }
 });

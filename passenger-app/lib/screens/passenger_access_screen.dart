@@ -1,21 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../services/passenger_service.dart';
-import 'phone_auth_screen.dart';
 import 'email_auth_screen.dart';
 import '../theme/app_theme.dart';
 
 class PassengerAccessScreen extends StatefulWidget {
   final ValueChanged<Map<String, dynamic>> onAuthorized;
   final Future<void> Function(Map<String, dynamic> session)?
-  onPhoneAuthenticated;
-  final Future<void> Function(Map<String, dynamic> session)?
   onEmailAuthenticated;
 
   const PassengerAccessScreen({
     super.key,
     required this.onAuthorized,
-    this.onPhoneAuthenticated,
     this.onEmailAuthenticated,
   });
 
@@ -95,16 +91,6 @@ class _PassengerAccessScreenState extends State<PassengerAccessScreen> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Future<void> _phoneLogin() async {
-    final callback = widget.onPhoneAuthenticated;
-    if (callback == null || !mounted) return;
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute(
-        builder: (_) => PhoneAuthScreen(onAuthenticated: callback),
       ),
     );
   }
@@ -202,16 +188,8 @@ class _PassengerAccessScreenState extends State<PassengerAccessScreen> {
               icon: const Icon(Icons.keyboard_outlined),
               label: const Text('Ingresar código manualmente'),
             ),
-            if (widget.onPhoneAuthenticated != null) ...[
-              const SizedBox(height: 8),
-              TextButton.icon(
-                onPressed: _busy ? null : _phoneLogin,
-                icon: const Icon(Icons.phone_android_outlined),
-                label: const Text('Ya tengo una cuenta: entrar con teléfono'),
-              ),
-            ],
             if (widget.onEmailAuthenticated != null) ...[
-              const SizedBox(height: 4),
+              const SizedBox(height: 8),
               TextButton.icon(
                 onPressed: _busy ? null : _emailLogin,
                 icon: const Icon(Icons.email_outlined),

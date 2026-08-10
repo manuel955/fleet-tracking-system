@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&family=Instrument+Sans:wght@500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=20260807a" />
+  <link rel="stylesheet" href="css/style.css?v=20260809a" />
 </head>
 <body>
 
@@ -31,6 +31,7 @@
     <input type="email" id="login-email" placeholder="Correo" required autocomplete="username" />
     <input type="password" id="login-password" placeholder="Contraseña" required autocomplete="current-password" />
     <button type="submit" id="login-submit">Entrar</button>
+    <button type="button" id="login-reset-password" class="login-reset-password">Olvidé mi contraseña</button>
     <p id="login-error" class="login-error"></p>
   </form>
 </div>
@@ -52,8 +53,8 @@
         Conductores
         <span id="pending-badge" class="pending-badge hidden">0</span>
       </button>
-      <button type="button" class="nav-tab" data-view="places">Lugares</button>
-      <button type="button" class="nav-tab" data-view="settings">Configuración</button>
+      <button type="button" class="nav-tab" data-view="places" data-admin-only-nav>Lugares</button>
+      <button type="button" class="nav-tab" data-view="settings" data-admin-only-nav>Configuración</button>
     </nav>
     <div class="topbar-right">
       <button type="button" id="operation-alerts-button" class="operation-alerts-button" aria-label="Abrir alertas de operación" title="Alertas de operación">
@@ -112,9 +113,9 @@
           <em id="overview-trips-delta">Actualizado</em>
         </article>
         <article class="stat-card">
-          <span>Tiempo medio</span>
+          <span>Duración media</span>
           <strong id="overview-eta-count">--:--</strong>
-          <em>Operativo</em>
+          <em>Viajes completados</em>
         </article>
       </div>
       <div class="map-stage">
@@ -216,33 +217,27 @@
 </aside>
 <div id="operation-alert-toast-region" class="operation-alert-toast-region" aria-live="assertive"></div>
 
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
-<script>
-  // Render de PDFs subidos como documento (SOAT, licencia, etc.) a imagen,
-  // para incrustarlos en el reporte igual que las fotos.
-  pdfjsLib.GlobalWorkerOptions.workerSrc =
-    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-</script>
-<link href="https://api.mapbox.com/mapbox-gl-js/v3.25.0/mapbox-gl.css" rel="stylesheet" />
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" integrity="sha384-AQ3POAMqIhwS81FrUH95ekxqBZHeP5tG2JfEL3+7GuTtfRLWnrRh32UxwzM+//A9" crossorigin="anonymous"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js" integrity="sha384-TnlRYaR4JYz/lpaGuaiU61PjNberSA4vjLjtF+oRC/IkohkJqnWxw5EmDSOt1vA1" crossorigin="anonymous"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js" integrity="sha384-1/m+A1jVWbD3yiK3/vtFvm1+LjK1WLpSoDY+Kaxppwn/yP9BVSgdHTNQVOjrzUO5" crossorigin="anonymous"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js" integrity="sha384-6I0gWsz4FIAr30c0TxIxJnPQuJiZ1FfILdZrgJdjxTH3R8dgPGTvexbyqTvReV6Z" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" integrity="sha384-JcnsjUPPylna1s1fvi1u12X5qjY5OL56iySh75FdtrwhO/SWXgMjoVqcKyIIWOLk" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" integrity="sha384-/1qUCSGwTur9vjf/z9lmu/eCUYbpOTgSjmpbMQZ1/CtX2v/WcAIKqRv+U1DUCG6e" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js" integrity="sha384-Izc791esqyEy3BEIC42q7jbE0AaOkACziN+dyyXgYeDmpeMCLz0xA+xYN3aCd5zz" crossorigin="anonymous"></script>
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.25.0/mapbox-gl.css" rel="stylesheet" integrity="sha384-fML+8Zffp1mTkSYjqh4tm+BMWAuAz/AW8KbK6bv5/PptIdD2sVCGkmEbFpc6Cq6F" crossorigin="anonymous" />
 <script src="js/firebase-config.js"></script>
-<script src="https://api.mapbox.com/mapbox-gl-js/v3.25.0/mapbox-gl.js"></script>
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.25.0/mapbox-gl.js" integrity="sha384-8BzM5kw/yLQ/0xcikcw1iUchzAgzTDpKxvDZ/UBmlheYzR4QhmFFYNgSFWHAEZls" crossorigin="anonymous"></script>
 <script src="js/mapbox-runtime-config.js?v=20260807a"></script>
 <script src="js/mapbox-runtime-config.generated.js?v=20260807a"></script>
 <script src="js/mapbox-config.js"></script>
 <script src="js/mapbox-adapter.js?v=20260804d"></script>
 <script src="js/driver-state.js?v=20260807b"></script>
-<script src="js/app.js?v=20260807f"></script>
+<script src="js/app.js?v=20260809a"></script>
 <script src="js/attendance-utils.js?v=20260805a"></script>
-<script src="js/drivers-admin.js?v=20260807f"></script>
-<script src="js/operation-alerts.js?v=20260804c"></script>
-    <script src="js/settings.js?v=20260807d"></script>
+<script src="js/drivers-admin.js?v=20260809a"></script>
+<script src="js/operation-alerts.js?v=20260809a"></script>
+<script src="js/settings.js?v=20260809a"></script>
 <script src="js/places-admin.js"></script>
-<script src="js/coordinator-dashboard.js?v=20260805d"></script>
+<script src="js/coordinator-dashboard.js?v=20260809a"></script>
 </body>
 </html>

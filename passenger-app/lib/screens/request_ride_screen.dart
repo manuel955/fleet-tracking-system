@@ -3,7 +3,6 @@ import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../services/directions_service.dart';
 import '../services/map_adapter.dart';
-import '../services/passenger_service.dart';
 import '../services/places_service.dart';
 import '../services/trip_service.dart';
 import 'destination_picker_screen.dart';
@@ -50,6 +49,7 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
   bool _showMap = false;
   bool _mapReady = false;
   List<LatLng> _routePoints = [];
+  DateTime? _scheduledDate;
   TimeOfDay? _scheduledTime;
   int _passengerCount = 1;
 
@@ -178,7 +178,12 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
   }
 
   void _selectNow() {
-    if (_scheduledTime != null) setState(() => _scheduledTime = null);
+    if (_scheduledTime != null || _scheduledDate != null) {
+      setState(() {
+        _scheduledDate = null;
+        _scheduledTime = null;
+      });
+    }
   }
 
   Future<void> _selectProgramar() async {
@@ -192,7 +197,7 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
       );
       return;
     }
-    await _pickScheduledTime();
+    await _pickScheduledDateTime();
   }
 
   Widget _buildWhenToggle() {
@@ -267,7 +272,17 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
     );
   }
 
-  Future<void> _pickScheduledTime() async {
+  Future<void> _pickScheduledDateTime() async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final date = await showDatePicker(
+      context: context,
+      initialDate: _scheduledDate ?? today,
+      firstDate: today,
+      lastDate: today.add(const Duration(days: 30)),
+      helpText: 'Fecha de recogida',
+    );
+    if (date == null || !mounted) return;
     final picked = await showTimePicker(
       context: context,
       initialTime: _scheduledTime ?? TimeOfDay.now(),
@@ -277,25 +292,31 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
         child: child!,
       ),
     );
-    if (picked != null) setState(() => _scheduledTime = picked);
+    if (picked == null || !mounted) return;
+    final candidate = DateTime(
+      date.year,
+      date.month,
+      date.day,
+      picked.hour,
+      picked.minute,
+    );
+    if (candidate.isBefore(now.add(const Duration(minutes: 15)))) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Programa la recogida con al menos 15 minutos.'),
+        ),
+      );
+      return;
+    }
+    setState(() {
+      _scheduledDate = date;
+      _scheduledTime = picked;
+    });
   }
 
-  // Solo se elige la hora (no la fecha): si ya paso por hoy, se asume que
-  // es para mañana a esa hora -- evita pedir un despacho "programado" en
-  // el pasado.
   DateTime _scheduledDateTime(TimeOfDay time) {
-    final now = DateTime.now();
-    var candidate = DateTime(
-      now.year,
-      now.month,
-      now.day,
-      time.hour,
-      time.minute,
-    );
-    if (candidate.isBefore(now)) {
-      candidate = candidate.add(const Duration(days: 1));
-    }
-    return candidate;
+    final date = _scheduledDate ?? DateTime.now();
+    return DateTime(date.year, date.month, date.day, time.hour, time.minute);
   }
 
   // "Mi ubicación actual" y "Punto marcado en el mapa" son etiquetas
@@ -326,7 +347,6 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
           // Se queda con la etiqueta generica si el geocoding falla.
         }
       }
-      final profile = await PassengerService.loadProfile();
       final tripId = await TripService.requestRide(
         pickupLat: _pickup.latitude,
         pickupLng: _pickup.longitude,
@@ -335,12 +355,6 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
         destinationLat: _destination?.latitude,
         destinationLng: _destination?.longitude,
         destinationAddress: _destinationLabel,
-        passengerName: profile?['name'] ?? 'Pasajero',
-        passengerPhone: profile?['phone'] ?? '',
-        passengerPhotoUrl: profile?['photoUrl'],
-        scheduledPickupLabel: _scheduledTime != null
-            ? _formatTime12h(_scheduledTime!)
-            : null,
         scheduledPickupAt: _scheduledTime != null
             ? _scheduledDateTime(_scheduledTime!).millisecondsSinceEpoch
             : null,
@@ -495,7 +509,7 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
             if (_scheduledTime != null) ...[
               const SizedBox(height: 10),
               InkWell(
-                onTap: _pickScheduledTime,
+                onTap: _pickScheduledDateTime,
                 borderRadius: BorderRadius.circular(8),
                 child: Row(
                   children: [
@@ -503,7 +517,9 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
                     const SizedBox(width: 14),
                     Expanded(
                       child: Text(
-                        'Recogida: ${_formatTime12h(_scheduledTime!)}',
+                        'Recogida: ${_scheduledDate!.day.toString().padLeft(2, '0')}/'
+                        '${_scheduledDate!.month.toString().padLeft(2, '0')}/'
+                        '${_scheduledDate!.year} · ${_formatTime12h(_scheduledTime!)}',
                         style: const TextStyle(
                           fontSize: 14,
                           color: AppColors.ink,

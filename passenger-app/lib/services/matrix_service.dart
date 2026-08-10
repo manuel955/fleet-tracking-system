@@ -46,14 +46,19 @@ class MatrixService {
     );
     final response = await http.get(uri).timeout(const Duration(seconds: 12));
     if (response.statusCode != 200) {
-      throw Exception('Mapbox Matrix rechazo la consulta (${response.statusCode})');
+      throw Exception(
+        'Mapbox Matrix rechazo la consulta (${response.statusCode})',
+      );
     }
     final data = jsonDecode(response.body) as Map<String, dynamic>;
-    List<List<double?>> matrix(String key) => (data[key] as List<dynamic>? ?? [])
-        .map((row) => (row as List<dynamic>)
-            .map((value) => value is num ? value.toDouble() : null)
-            .toList())
-        .toList();
+    List<List<double?>> matrix(String key) =>
+        (data[key] as List<dynamic>? ?? [])
+            .map(
+              (row) => (row as List<dynamic>)
+                  .map((value) => value is num ? value.toDouble() : null)
+                  .toList(),
+            )
+            .toList();
     return MatrixResult(
       durationsSeconds: matrix('durations'),
       distancesMeters: matrix('distances'),

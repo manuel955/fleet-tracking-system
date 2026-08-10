@@ -25,6 +25,8 @@ class PickedDocument {
 /// passenger-app (passenger_service.dart -> _uploadCredentialPhoto), pero
 /// aceptando imagen o PDF segun el `contentType` de cada archivo.
 class DriverProfileService {
+  static const _networkTimeout = Duration(seconds: 15);
+  static const _uploadTimeout = Duration(seconds: 60);
   static const _docFieldToUrlField = {
     'profile': 'profilePhotoUrl',
     'license': 'licenseDocUrl',
@@ -40,7 +42,7 @@ class DriverProfileService {
     final uri = Uri.parse(
       '${AppConfig.firebaseDbUrl}/drivers/$uid.json?auth=${auth['idToken']}',
     );
-    final response = await http.get(uri);
+    final response = await http.get(uri).timeout(_networkTimeout);
     if (response.statusCode != 200) {
       throw Exception(
           'Firebase rechazo la consulta (${response.statusCode}): ${response.body}');
@@ -49,9 +51,9 @@ class DriverProfileService {
     return data == null ? null : Map<String, dynamic>.from(data);
   }
 
-  /// Registro inicial: crea la cuenta, sube los documentos que el conductor
-  /// haya elegido y escribe el nodo `drivers/{uid}` completo con
-  /// `approvalStatus: 'pending_review'`.
+  /// Registro inicial reintentable: crea o recupera la misma cuenta, sube los
+  /// documentos obligatorios y deja que Cloud Functions valide y escriba el
+  /// perfil completo de forma privilegiada.
   static Future<void> registerDriver({
     required String email,
     required String password,
@@ -65,71 +67,75 @@ class DriverProfileService {
     required String vehicleColor,
     required int vehicleSeats,
     required Map<String, List<PickedDocument>> documents,
+    required Map<String, int> documentExpiries,
   }) async {
     final dniFiles = documents['dni'] ?? const <PickedDocument>[];
     if (!_isValidDniSelection(dniFiles)) {
       throw Exception('El DNI requiere 2 fotos o 1 solo PDF.');
     }
 
-    final auth =
-        await AuthService.registerWithEmail(email: email, password: password);
+    const requiredDocuments = {
+      'profile',
+      'dni',
+      'license',
+      'soat',
+      'circulationCard',
+      'technicalReview',
+      'criminalRecord',
+      'workCertificate',
+    };
+    final missingDocuments = requiredDocuments
+        .where((key) => (documents[key] ?? const <PickedDocument>[]).isEmpty)
+        .toList();
+    if (missingDocuments.isNotEmpty) {
+      throw Exception('Todos los documentos son obligatorios.');
+    }
+    for (final key in const ['license', 'soat', 'technicalReview']) {
+      final expiresAt = documentExpiries[key] ?? 0;
+      if (expiresAt <= DateTime.now().millisecondsSinceEpoch) {
+        throw Exception('Selecciona una fecha de vencimiento vigente.');
+      }
+    }
+
+    final auth = await AuthService.registerOrResumeWithEmail(
+      email: email,
+      password: password,
+    );
     final uid = auth['uid'] as String;
     final idToken = auth['idToken'] as String;
 
-    final validation = await http.post(
-      Uri.parse(
-          'https://us-central1-rastreoflota-53052.cloudfunctions.net/reserveDriverIdentity'),
-      headers: {
-        'Authorization': 'Bearer $idToken',
-        'Content-Type': 'application/json'
-      },
-      body: jsonEncode({
-        'email': email,
-        'phone': phone,
-        'name': name,
-        'dni': dni,
-        'plate': plate,
-        'vehicleType': vehicleType,
-        'vehicleColor': vehicleColor,
-        'vehicleSeats': vehicleSeats,
-      }),
-    );
-    if (validation.statusCode != 200) {
-      final response = jsonDecode(validation.body);
-      throw Exception(response is Map
-          ? response['error'] ?? 'No se pudo validar el registro.'
-          : 'No se pudo validar el registro.');
-    }
-
     final docUrls = await _uploadAll(uid, idToken, documents);
-    final now = DateTime.now().millisecondsSinceEpoch;
-
-    final uri =
-        Uri.parse('${AppConfig.firebaseDbUrl}/drivers/$uid.json?auth=$idToken');
-    final response = await http.put(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'email': email,
-        'name': name,
-        'age': age,
-        'phone': phone,
-        'dni': dni,
-        'plate': plate,
-        'vehicleBrand': vehicleBrand,
-        'vehicleType': vehicleType,
-        'vehicleColor': vehicleColor,
-        'vehicleSeats': vehicleSeats,
-        ...docUrls,
-        'approvalStatus': 'pending_review',
-        'registeredAt': now,
-        'documentsSubmittedAt': now,
-      }),
-    );
+    final response = await http
+        .post(
+          Uri.parse(
+              '${AppConfig.cloudFunctionsBaseUrl}/completeDriverRegistration'),
+          headers: {
+            'Authorization': 'Bearer $idToken',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            'name': name,
+            'age': age,
+            'phone': phone,
+            'dni': dni,
+            'plate': plate,
+            'vehicleBrand': vehicleBrand,
+            'vehicleType': vehicleType,
+            'vehicleColor': vehicleColor,
+            'vehicleSeats': vehicleSeats,
+            ...docUrls,
+            'licenseExpiresAt': documentExpiries['license'],
+            'soatExpiresAt': documentExpiries['soat'],
+            'technicalReviewExpiresAt': documentExpiries['technicalReview'],
+          }),
+        )
+        .timeout(_networkTimeout);
 
     if (response.statusCode != 200) {
-      throw Exception(
-          'Firebase rechazo el registro (${response.statusCode}): ${response.body}');
+      final data = jsonDecode(response.body);
+      throw Exception(data is Map
+          ? data['error'] ?? 'No se pudo completar el registro.'
+          : 'No se pudo completar el registro.');
     }
   }
 
@@ -137,7 +143,10 @@ class DriverProfileService {
   /// volvio a elegir y regresa el estado a `pending_review`, sin tocar
   /// nombre/telefono/DNI/placa.
   static Future<void> resubmitDocuments(
-      Map<String, List<PickedDocument>> documents) async {
+    Map<String, List<PickedDocument>> documents, {
+    required Map<String, int> documentExpiries,
+    Map<String, dynamic> profileChanges = const {},
+  }) async {
     if (documents.containsKey('dni') &&
         !_isValidDniSelection(documents['dni'] ?? const <PickedDocument>[])) {
       throw Exception('El DNI requiere 2 fotos o 1 solo PDF.');
@@ -148,22 +157,42 @@ class DriverProfileService {
     final idToken = auth['idToken'] as String;
 
     final docUrls = await _uploadAll(uid, idToken, documents);
+    final expiryFields = <String, int>{};
+    const expiryFieldByDocument = {
+      'license': 'licenseExpiresAt',
+      'soat': 'soatExpiresAt',
+      'technicalReview': 'technicalReviewExpiresAt',
+    };
+    for (final entry in expiryFieldByDocument.entries) {
+      if (!documents.containsKey(entry.key)) continue;
+      final expiresAt = documentExpiries[entry.key] ?? 0;
+      if (expiresAt <= DateTime.now().millisecondsSinceEpoch) {
+        throw Exception('Selecciona una fecha de vencimiento vigente.');
+      }
+      expiryFields[entry.value] = expiresAt;
+    }
 
-    final uri =
-        Uri.parse('${AppConfig.firebaseDbUrl}/drivers/$uid.json?auth=$idToken');
-    final response = await http.patch(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        ...docUrls,
-        'approvalStatus': 'pending_review',
-        'documentsSubmittedAt': DateTime.now().millisecondsSinceEpoch,
-      }),
-    );
+    final response = await http
+        .post(
+          Uri.parse(
+              '${AppConfig.cloudFunctionsBaseUrl}/resubmitDriverApplication'),
+          headers: {
+            'Authorization': 'Bearer $idToken',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            ...profileChanges,
+            ...docUrls,
+            ...expiryFields,
+          }),
+        )
+        .timeout(_networkTimeout);
 
     if (response.statusCode != 200) {
-      throw Exception(
-          'Firebase rechazo la actualizacion (${response.statusCode}): ${response.body}');
+      final data = jsonDecode(response.body);
+      throw Exception(data is Map
+          ? data['error'] ?? 'No se pudo reenviar el registro.'
+          : 'No se pudo reenviar el registro.');
     }
   }
 
@@ -180,11 +209,13 @@ class DriverProfileService {
 
     final uri =
         Uri.parse('${AppConfig.firebaseDbUrl}/drivers/$uid.json?auth=$idToken');
-    final response = await http.patch(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'activeSessionId': sessionId}),
-    );
+    final response = await http
+        .patch(
+          uri,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'activeSessionId': sessionId}),
+        )
+        .timeout(_networkTimeout);
 
     if (response.statusCode != 200) {
       throw Exception(
@@ -198,17 +229,19 @@ class DriverProfileService {
     final auth = await AuthService.currentSession();
     final idToken = auth['idToken'] as String;
 
-    final response = await http.post(
-      Uri.parse(
-          'https://us-central1-rastreoflota-53052.cloudfunctions.net/updateDriverProfileOnce'),
-      headers: {
-        'Authorization': 'Bearer $idToken',
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({
-        'phone': phone,
-      }),
-    );
+    final response = await http
+        .post(
+          Uri.parse(
+              'https://us-central1-rastreoflota-53052.cloudfunctions.net/updateDriverProfileOnce'),
+          headers: {
+            'Authorization': 'Bearer $idToken',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            'phone': phone,
+          }),
+        )
+        .timeout(_networkTimeout);
 
     if (response.statusCode != 200) {
       throw Exception(
@@ -265,14 +298,16 @@ class DriverProfileService {
       '?uploadType=media&name=$encodedPath',
     );
 
-    final response = await http.post(
-      uploadUri,
-      headers: {
-        'Authorization': 'Firebase $idToken',
-        'Content-Type': file.contentType,
-      },
-      body: file.bytes,
-    );
+    final response = await http
+        .post(
+          uploadUri,
+          headers: {
+            'Authorization': 'Firebase $idToken',
+            'Content-Type': file.contentType,
+          },
+          body: file.bytes,
+        )
+        .timeout(_uploadTimeout);
 
     if (response.statusCode != 200) {
       throw Exception(

@@ -40,7 +40,8 @@ class SupportButton extends StatelessWidget {
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.only(topLeft: Radius.circular(20), topRight: Radius.circular(20)),
+        borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(20), topRight: Radius.circular(20)),
       ),
       builder: (sheetContext) {
         return SafeArea(
@@ -49,7 +50,9 @@ class SupportButton extends StatelessWidget {
             children: [
               const Padding(
                 padding: EdgeInsets.all(16),
-                child: Text('Contactar a soporte', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                child: Text('Contactar a soporte',
+                    style:
+                        TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
               ),
               ListTile(
                 leading: const Icon(Icons.call, color: AppColors.ink),

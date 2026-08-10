@@ -1,36 +1,44 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
+import 'secure_session_store.dart';
 
 /// Autenticacion con correo/contraseña contra Firebase Auth via REST (mismo
 /// estilo REST-manual que el resto de la app: RTDB y Storage tampoco usan
 /// SDKs). El uid resultante se usa como driverId, lo que hace que las reglas
 /// de seguridad `auth.uid === $driverId` se cumplan automaticamente.
 class AuthService {
-  static Future<Map<String, dynamic>> registerWithEmail({
+  static const _networkTimeout = Duration(seconds: 15);
+
+  static Future<Map<String, dynamic>> registerOrResumeWithEmail({
     required String email,
     required String password,
   }) async {
     final uri = Uri.parse(
       'https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${AppConfig.firebaseApiKey}',
     );
-    final response = await http.post(
-      uri,
-      body: jsonEncode({
-        'email': email,
-        'password': password,
-        'returnSecureToken': true,
-      }),
-    );
+    final response = await http
+        .post(
+          uri,
+          body: jsonEncode({
+            'email': email,
+            'password': password,
+            'returnSecureToken': true,
+          }),
+        )
+        .timeout(_networkTimeout);
 
+    if (response.statusCode != 200 && response.body.contains('EMAIL_EXISTS')) {
+      // La cuenta puede haberse creado antes de que terminara la subida de
+      // documentos. Con las mismas credenciales se retoma el mismo UID.
+      return signInWithEmail(email: email, password: password);
+    }
     if (response.statusCode != 200) {
       throw Exception(friendlyError(response.body));
     }
 
     final data = jsonDecode(response.body);
-    final prefs = await SharedPreferences.getInstance();
-    await _persist(prefs, data);
+    await _persist(data);
     return {'uid': data['localId'], 'idToken': data['idToken']};
   }
 
@@ -41,40 +49,61 @@ class AuthService {
     final uri = Uri.parse(
       'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${AppConfig.firebaseApiKey}',
     );
-    final response = await http.post(
-      uri,
-      body: jsonEncode({
-        'email': email,
-        'password': password,
-        'returnSecureToken': true,
-      }),
-    );
+    final response = await http
+        .post(
+          uri,
+          body: jsonEncode({
+            'email': email,
+            'password': password,
+            'returnSecureToken': true,
+          }),
+        )
+        .timeout(_networkTimeout);
 
     if (response.statusCode != 200) {
       throw Exception(friendlyError(response.body));
     }
 
     final data = jsonDecode(response.body);
-    final prefs = await SharedPreferences.getInstance();
-    await _persist(prefs, data);
+    await _persist(data);
     return {'uid': data['localId'], 'idToken': data['idToken']};
   }
 
   static Future<bool> isLoggedIn() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('uid') != null &&
-        prefs.getString('refreshToken') != null;
+    final session = await SecureSessionStore.read();
+    return session['uid'] != null && session['refreshToken'] != null;
+  }
+
+  static Future<void> sendPasswordResetEmail(String email) async {
+    final normalizedEmail = email.trim();
+    if (normalizedEmail.isEmpty || !normalizedEmail.contains('@')) {
+      throw Exception('Escribe un correo valido.');
+    }
+    final response = await http
+        .post(
+          Uri.parse(
+            'https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${AppConfig.firebaseApiKey}',
+          ),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'requestType': 'PASSWORD_RESET',
+            'email': normalizedEmail,
+          }),
+        )
+        .timeout(_networkTimeout);
+    if (response.statusCode != 200) {
+      throw Exception(friendlyError(response.body));
+    }
   }
 
   /// Sesion actual (cacheada o refrescada). A diferencia de la version
   /// anterior (auth anonima), esta NO crea una cuenta nueva si no hay
   /// sesion -- solo se debe llamar despues de un login/registro exitoso.
   static Future<Map<String, dynamic>> currentSession() async {
-    final prefs = await SharedPreferences.getInstance();
-
-    final cachedUid = prefs.getString('uid');
-    final cachedToken = prefs.getString('idToken');
-    final expiresAt = prefs.getInt('expiresAt') ?? 0;
+    final session = await SecureSessionStore.read();
+    final cachedUid = session['uid'] as String?;
+    final cachedToken = session['idToken'] as String?;
+    final expiresAt = session['expiresAt'] as int? ?? 0;
 
     if (cachedUid != null &&
         cachedToken != null &&
@@ -82,7 +111,7 @@ class AuthService {
       return {'uid': cachedUid, 'idToken': cachedToken};
     }
 
-    final refreshToken = prefs.getString('refreshToken');
+    final refreshToken = session['refreshToken'] as String?;
     if (refreshToken != null) {
       final refreshed = await _refresh(refreshToken);
       if (refreshed != null) return refreshed;
@@ -92,11 +121,7 @@ class AuthService {
   }
 
   static Future<void> logout() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('uid');
-    await prefs.remove('idToken');
-    await prefs.remove('refreshToken');
-    await prefs.remove('expiresAt');
+    await SecureSessionStore.clear();
   }
 
   static Future<void> deleteCurrentAccount() async {
@@ -107,7 +132,7 @@ class AuthService {
         'Authorization': 'Bearer ${session['idToken']}',
         'Content-Type': 'application/json',
       },
-    );
+    ).timeout(_networkTimeout);
     if (response.statusCode != 200) {
       final body = jsonDecode(response.body);
       final message = body is Map ? body['error'] : null;
@@ -124,33 +149,29 @@ class AuthService {
       uri,
       headers: {'Content-Type': 'application/x-www-form-urlencoded'},
       body: {'grant_type': 'refresh_token', 'refresh_token': refreshToken},
-    );
+    ).timeout(_networkTimeout);
 
     if (response.statusCode != 200) return null;
 
     final data = jsonDecode(response.body);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('idToken', data['id_token']);
-    await prefs.setString('refreshToken', data['refresh_token']);
-    await prefs.setInt(
-      'expiresAt',
-      DateTime.now().millisecondsSinceEpoch +
-          (int.parse(data['expires_in']) * 1000) -
-          60000,
+    final expiresAt = DateTime.now().millisecondsSinceEpoch +
+        (int.parse(data['expires_in']) * 1000) -
+        60000;
+    await SecureSessionStore.write(
+      uid: data['user_id'],
+      idToken: data['id_token'],
+      refreshToken: data['refresh_token'],
+      expiresAt: expiresAt,
     );
     return {'uid': data['user_id'], 'idToken': data['id_token']};
   }
 
-  static Future<void> _persist(
-    SharedPreferences prefs,
-    Map<String, dynamic> data,
-  ) async {
-    await prefs.setString('uid', data['localId']);
-    await prefs.setString('idToken', data['idToken']);
-    await prefs.setString('refreshToken', data['refreshToken']);
-    await prefs.setInt(
-      'expiresAt',
-      DateTime.now().millisecondsSinceEpoch +
+  static Future<void> _persist(Map<String, dynamic> data) async {
+    await SecureSessionStore.write(
+      uid: data['localId'],
+      idToken: data['idToken'],
+      refreshToken: data['refreshToken'],
+      expiresAt: DateTime.now().millisecondsSinceEpoch +
           (int.parse(data['expiresIn']) * 1000) -
           60000,
     );
@@ -163,7 +184,7 @@ class AuthService {
   static String friendlyError(String responseBody) {
     const messages = {
       'EMAIL_EXISTS':
-          'Ya existe una cuenta con ese correo. Inicia sesión en vez de registrarte.',
+          'Ya existe una cuenta con ese correo y la contraseña no coincide.',
       'EMAIL_NOT_FOUND': 'Credenciales inválidas o usuario no existe.',
       'INVALID_PASSWORD': 'Credenciales inválidas o usuario no existe.',
       'INVALID_LOGIN_CREDENTIALS':

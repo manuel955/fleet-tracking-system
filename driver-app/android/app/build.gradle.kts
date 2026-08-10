@@ -6,9 +6,23 @@ plugins {
 }
 
 val fleetKeystorePath = System.getenv("FLEET_KEYSTORE_PATH")
-val fleetKeystorePassword = System.getenv("FLEET_KEYSTORE_PASSWORD") ?: "android"
-val fleetKeyAlias = System.getenv("FLEET_KEY_ALIAS") ?: "androiddebugkey"
-val fleetKeyPassword = System.getenv("FLEET_KEY_PASSWORD") ?: fleetKeystorePassword
+val fleetKeystorePassword = System.getenv("FLEET_KEYSTORE_PASSWORD")
+val fleetKeyAlias = System.getenv("FLEET_KEY_ALIAS")
+val fleetKeyPassword = System.getenv("FLEET_KEY_PASSWORD")
+val fleetSigningReady = listOf(
+    fleetKeystorePath,
+    fleetKeystorePassword,
+    fleetKeyAlias,
+    fleetKeyPassword,
+).all { !it.isNullOrBlank() }
+
+gradle.taskGraph.whenReady {
+    if (allTasks.any { it.name.contains("Release", ignoreCase = true) } && !fleetSigningReady) {
+        throw GradleException(
+            "Release signing is not configured. Define all FLEET_KEYSTORE_* variables."
+        )
+    }
+}
 
 android {
     namespace = "com.example.fleet_driver_app"
@@ -34,9 +48,9 @@ android {
     }
 
     signingConfigs {
-        if (!fleetKeystorePath.isNullOrBlank()) {
+        if (fleetSigningReady) {
             create("fleetRelease") {
-                storeFile = file(fleetKeystorePath)
+                storeFile = file(fleetKeystorePath!!)
                 storePassword = fleetKeystorePassword
                 keyAlias = fleetKeyAlias
                 keyPassword = fleetKeyPassword
@@ -46,12 +60,12 @@ android {
 
     buildTypes {
         release {
-            // GitHub usa una llave fija restaurada por el workflow. En local
-            // se conserva la llave debug para que `flutter run --release` funcione.
-            signingConfig = if (!fleetKeystorePath.isNullOrBlank()) {
+            // Un release sin las cuatro variables falla al configurar Gradle.
+            // Nunca se usa la llave debug ni se genera un artefacto ambiguo.
+            signingConfig = if (fleetSigningReady) {
                 signingConfigs.getByName("fleetRelease")
             } else {
-                signingConfigs.getByName("debug")
+                null
             }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

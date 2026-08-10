@@ -115,10 +115,12 @@ class PushService {
     final uri = Uri.parse(
       '${AppConfig.firebaseDbUrl}/drivers/${auth['uid']}.json?auth=${auth['idToken']}',
     );
-    await http.patch(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'fcmToken': token}),
-    );
+    await http
+        .patch(
+          uri,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'fcmToken': token}),
+        )
+        .timeout(const Duration(seconds: 10));
   }
 }

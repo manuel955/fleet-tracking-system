@@ -101,6 +101,28 @@ function prepareCoordinatorCancellation(trip, coordinatorUid, now) {
   };
 }
 
+function prepareDashboardCancellation(trip, managerEmail, reason, now) {
+  if (!trip) return policyError(404, 'Viaje no encontrado');
+  if (['in_progress', 'completed', 'cancelled'].includes(trip.status)) {
+    return policyError(409, 'Este viaje ya inició o terminó y no puede cancelarse desde el panel.');
+  }
+  const cleanReason = String(reason || '').trim();
+  if (cleanReason.length < 5 || cleanReason.length > 300) {
+    return policyError(400, 'Escribe un motivo de cancelación entre 5 y 300 caracteres.');
+  }
+  return {
+    ok: true,
+    value: {
+      ...trip,
+      status: 'cancelled',
+      cancelledBy: 'dashboard',
+      cancelReason: cleanReason,
+      cancelledAt: now,
+      cancelledByUser: String(managerEmail || ''),
+    },
+  };
+}
+
 function shouldReleaseAssignment(driverId, driver, trip, now) {
   const tripId = driver?.currentTripId;
   if (!tripId) return false;
@@ -119,6 +141,7 @@ module.exports = {
   ORPHANED_ASSIGNMENT_TIMEOUT_MS,
   distanceMeters,
   prepareCoordinatorCancellation,
+  prepareDashboardCancellation,
   prepareDriverTripTransition,
   shouldReleaseAssignment,
 };

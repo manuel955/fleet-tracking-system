@@ -4,19 +4,19 @@ import 'package:url_launcher/url_launcher.dart';
 import '../config.dart';
 import '../services/auth_service.dart';
 import '../services/passenger_service.dart';
-import 'phone_auth_screen.dart';
+import 'email_link_screen.dart';
 import '../theme/app_theme.dart';
 
 /// Pestaña "Cuenta": datos del perfil del pasajero.
 class AccountTabScreen extends StatefulWidget {
   final VoidCallback onLoggedOut;
   final Future<void> Function(Map<String, dynamic> session)
-  onPhoneAuthenticated;
+  onEmailAuthenticated;
 
   const AccountTabScreen({
     super.key,
     required this.onLoggedOut,
-    required this.onPhoneAuthenticated,
+    required this.onEmailAuthenticated,
   });
 
   @override
@@ -27,12 +27,14 @@ class _AccountTabScreenState extends State<AccountTabScreen> {
   Map<String, String>? _profile;
   String _versionLabel = '';
   bool _deleting = false;
-  bool _hasPhoneSession = false;
+  bool _hasEmailSession = false;
+  String? _accountEmail;
 
   @override
   void initState() {
     super.initState();
-    _hasPhoneSession = AuthService.hasPhoneSession;
+    _hasEmailSession = AuthService.hasEmailSession;
+    _accountEmail = AuthService.currentEmail;
     _load();
     _loadAppVersion();
   }
@@ -51,26 +53,29 @@ class _AccountTabScreenState extends State<AccountTabScreen> {
     }
   }
 
-  Future<void> _linkPhone() async {
+  Future<void> _linkEmail() async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
-        builder: (_) => PhoneAuthScreen(
-          initialPhone: _profile?['phone'],
-          onAuthenticated: widget.onPhoneAuthenticated,
-        ),
+        builder: (_) =>
+            EmailLinkScreen(onAuthenticated: widget.onEmailAuthenticated),
       ),
     );
-    if (mounted) setState(() => _hasPhoneSession = AuthService.hasPhoneSession);
+    if (mounted) {
+      setState(() {
+        _hasEmailSession = AuthService.hasEmailSession;
+        _accountEmail = AuthService.currentEmail;
+      });
+    }
   }
 
   Future<void> _logout() async {
-    if (!_hasPhoneSession) {
+    if (!_hasEmailSession) {
       await showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('Vincula tu teléfono primero'),
+          title: const Text('Vincula tu correo primero'),
           content: const Text(
-            'Para no perder tu cuenta, verifica tu número de teléfono antes de cerrar sesión. Después podrás volver a entrar con un código SMS.',
+            'Para no perder tu cuenta, crea un acceso con correo y contraseña antes de cerrar sesión.',
           ),
           actions: [
             TextButton(
@@ -80,9 +85,9 @@ class _AccountTabScreenState extends State<AccountTabScreen> {
             ElevatedButton(
               onPressed: () {
                 Navigator.pop(context);
-                _linkPhone();
+                _linkEmail();
               },
-              child: const Text('Vincular teléfono'),
+              child: const Text('Vincular correo'),
             ),
           ],
         ),
@@ -94,7 +99,7 @@ class _AccountTabScreenState extends State<AccountTabScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Cerrar sesión'),
         content: const Text(
-          '¿Seguro que quieres cerrar sesión? Vas a tener que registrarte de nuevo.',
+          '¿Seguro que quieres cerrar sesión? Podrás volver a entrar con tu correo y contraseña.',
         ),
         actions: [
           TextButton(
@@ -230,22 +235,22 @@ class _AccountTabScreenState extends State<AccountTabScreen> {
           ListTile(
             contentPadding: EdgeInsets.zero,
             leading: Icon(
-              _hasPhoneSession
+              _hasEmailSession
                   ? Icons.verified_user_outlined
-                  : Icons.phone_outlined,
-              color: _hasPhoneSession ? Colors.green : AppColors.ink,
+                  : Icons.email_outlined,
+              color: _hasEmailSession ? Colors.green : AppColors.ink,
             ),
             title: Text(
-              _hasPhoneSession
+              _hasEmailSession
                   ? 'Acceso recuperable activado'
-                  : 'Vincular teléfono para recuperar acceso',
+                  : 'Vincular correo para recuperar acceso',
             ),
             subtitle: Text(
-              _hasPhoneSession
-                  ? 'Podrás volver a entrar con un código SMS.'
-                  : 'Necesario antes de cerrar sesión.',
+              _hasEmailSession
+                  ? (_accountEmail ?? 'Podrás iniciar sesión con tu correo.')
+                  : 'Sin SMS. Necesario antes de cerrar sesión.',
             ),
-            onTap: _hasPhoneSession ? null : _linkPhone,
+            onTap: _hasEmailSession ? null : _linkEmail,
           ),
           const SizedBox(height: 8),
           ListTile(
