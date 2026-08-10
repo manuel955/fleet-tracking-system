@@ -39,5 +39,5 @@ Las claves de Firebase/Mapbox, tokens, contraseñas, teléfonos internos, correo
 1. Rotar y restringir las claves de cliente por dominio, aplicación, certificado y API.
 2. Desplegar y validar este grupo de cambios de Realtime Database, Storage, Cloud Functions y dashboard.
 3. Mantener el dashboard detrás de HTTPS y revisar periódicamente usuarios y custom claims.
-4. Crear o confirmar la keystore release definitiva, custodiarla y cargarla en GitHub Secrets. Los builds release locales sin `FLEET_KEYSTORE_*` fallan de forma segura.
+4. ✅ Confirmar la keystore release definitiva, custodiarla fuera del repositorio y cargarla en GitHub Secrets. El inventario de huellas y la evidencia están en [`release-signing/`](release-signing/); los builds release sin `FLEET_KEYSTORE_*` fallan de forma segura.
 5. Ejecutar la prueba de aceptación del [checklist de entrega](guia-despliegue-y-entrega.md#checklist-de-aceptación) con teléfonos físicos y una flota representativa.

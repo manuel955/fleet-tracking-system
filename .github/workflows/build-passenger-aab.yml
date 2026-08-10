@@ -23,7 +23,6 @@ jobs:
     timeout-minutes: 45
     env:
       ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
-      ANDROID_LEGACY_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
       ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
       ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
       ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
@@ -38,22 +37,14 @@ jobs:
 
       - name: Restore Android signing key
         run: |
-          if [ -n "$ANDROID_RELEASE_KEYSTORE_BASE64" ]; then
-            test -n "$ANDROID_RELEASE_KEYSTORE_PASSWORD"
-            test -n "$ANDROID_RELEASE_KEY_ALIAS"
-            test -n "$ANDROID_RELEASE_KEY_PASSWORD"
-            KEYSTORE_BASE64="$ANDROID_RELEASE_KEYSTORE_BASE64"
-            printf 'FLEET_KEYSTORE_PASSWORD=%s\n' "$ANDROID_RELEASE_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
-            printf 'FLEET_KEY_ALIAS=%s\n' "$ANDROID_RELEASE_KEY_ALIAS" >> "$GITHUB_ENV"
-            printf 'FLEET_KEY_PASSWORD=%s\n' "$ANDROID_RELEASE_KEY_PASSWORD" >> "$GITHUB_ENV"
-          else
-            echo "ADVERTENCIA: usando la llave heredada para conservar las actualizaciones instaladas."
-            test -n "$ANDROID_LEGACY_KEYSTORE_BASE64"
-            KEYSTORE_BASE64="$ANDROID_LEGACY_KEYSTORE_BASE64"
-            echo 'FLEET_KEYSTORE_PASSWORD=android' >> "$GITHUB_ENV"
-            echo 'FLEET_KEY_ALIAS=androiddebugkey' >> "$GITHUB_ENV"
-            echo 'FLEET_KEY_PASSWORD=android' >> "$GITHUB_ENV"
-          fi
+          test -n "$ANDROID_RELEASE_KEYSTORE_BASE64"
+          test -n "$ANDROID_RELEASE_KEYSTORE_PASSWORD"
+          test -n "$ANDROID_RELEASE_KEY_ALIAS"
+          test -n "$ANDROID_RELEASE_KEY_PASSWORD"
+          KEYSTORE_BASE64="$ANDROID_RELEASE_KEYSTORE_BASE64"
+          printf 'FLEET_KEYSTORE_PASSWORD=%s\n' "$ANDROID_RELEASE_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          printf 'FLEET_KEY_ALIAS=%s\n' "$ANDROID_RELEASE_KEY_ALIAS" >> "$GITHUB_ENV"
+          printf 'FLEET_KEY_PASSWORD=%s\n' "$ANDROID_RELEASE_KEY_PASSWORD" >> "$GITHUB_ENV"
           mkdir -p "$(dirname "$FLEET_KEYSTORE_PATH")"
           echo "$KEYSTORE_BASE64" | base64 --decode > "$FLEET_KEYSTORE_PATH"
 
