@@ -1,0 +1,135 @@
+name: Build signed passenger AAB
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: Android version code
+        required: true
+        default: '44'
+        type: string
+      version_name:
+        description: Android version name
+        required: true
+        default: '1.0.0'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+      ANDROID_LEGACY_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+      ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+      ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+      ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+      ANDROID_RELEASE_CERT_SHA256: ${{ secrets.ANDROID_RELEASE_CERT_SHA256 }}
+      FLEET_KEYSTORE_PATH: /home/runner/.android/fleet-signing.keystore
+      PASSENGER_GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.PASSENGER_GOOGLE_SERVICES_JSON_BASE64 }}
+      MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
+      MAPBOX_STYLE_URI: ${{ secrets.MAPBOX_STYLE_URI }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Restore Android signing key
+        run: |
+          if [ -n "$ANDROID_RELEASE_KEYSTORE_BASE64" ]; then
+            test -n "$ANDROID_RELEASE_KEYSTORE_PASSWORD"
+            test -n "$ANDROID_RELEASE_KEY_ALIAS"
+            test -n "$ANDROID_RELEASE_KEY_PASSWORD"
+            KEYSTORE_BASE64="$ANDROID_RELEASE_KEYSTORE_BASE64"
+            printf 'FLEET_KEYSTORE_PASSWORD=%s\n' "$ANDROID_RELEASE_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            printf 'FLEET_KEY_ALIAS=%s\n' "$ANDROID_RELEASE_KEY_ALIAS" >> "$GITHUB_ENV"
+            printf 'FLEET_KEY_PASSWORD=%s\n' "$ANDROID_RELEASE_KEY_PASSWORD" >> "$GITHUB_ENV"
+          else
+            echo "ADVERTENCIA: usando la llave heredada para conservar las actualizaciones instaladas."
+            test -n "$ANDROID_LEGACY_KEYSTORE_BASE64"
+            KEYSTORE_BASE64="$ANDROID_LEGACY_KEYSTORE_BASE64"
+            echo 'FLEET_KEYSTORE_PASSWORD=android' >> "$GITHUB_ENV"
+            echo 'FLEET_KEY_ALIAS=androiddebugkey' >> "$GITHUB_ENV"
+            echo 'FLEET_KEY_PASSWORD=android' >> "$GITHUB_ENV"
+          fi
+          mkdir -p "$(dirname "$FLEET_KEYSTORE_PATH")"
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$FLEET_KEYSTORE_PATH"
+
+      - name: Verify signing certificate
+        run: |
+          test -n "$ANDROID_RELEASE_CERT_SHA256"
+          ACTUAL_SHA256=$(keytool -list -v -keystore "$FLEET_KEYSTORE_PATH" \
+            -storepass "$FLEET_KEYSTORE_PASSWORD" -alias "$FLEET_KEY_ALIAS" \
+            | sed -n 's/.*SHA256: //p' | head -n 1 | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+          EXPECTED_SHA256=$(echo "$ANDROID_RELEASE_CERT_SHA256" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+          test -n "$ACTUAL_SHA256"
+          test "$ACTUAL_SHA256" = "$EXPECTED_SHA256"
+          echo "Certificado de firma verificado: $ACTUAL_SHA256"
+
+      - name: Restore Firebase Android configuration
+        run: |
+          test -n "$PASSENGER_GOOGLE_SERVICES_JSON_BASE64"
+          echo "$PASSENGER_GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > passenger-app/android/app/google-services.json
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Cache Flutter and Android build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.pub-cache
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            passenger-app/.dart_tool
+            passenger-app/build
+          key: ${{ runner.os }}-passenger-release-${{ hashFiles('passenger-app/pubspec.lock', 'passenger-app/android/**') }}
+          restore-keys: |
+            ${{ runner.os }}-passenger-release-
+
+      - name: Prepare Flutter dependencies
+        working-directory: passenger-app
+        run: flutter pub get
+
+      - name: Build signed Android App Bundle
+        working-directory: passenger-app
+        env:
+          GRADLE_OPTS: >-
+            -Dorg.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1G
+            -Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false
+        run: |
+          test -n "$MAPBOX_ACCESS_TOKEN"
+          AAB_PATH="$PWD/build/app/outputs/bundle/release/app-release.aab"
+          BUILD_LOG="$RUNNER_TEMP/passenger-aab-build.log"
+          rm -f "$AAB_PATH" "$BUILD_LOG"
+          set +e
+          timeout --foreground --kill-after=30s 30m flutter build appbundle --release --no-pub \
+            --build-name "${{ inputs.version_name }}" \
+            --build-number "${{ inputs.build_number }}" \
+            --dart-define=MAPBOX_ACCESS_TOKEN="$MAPBOX_ACCESS_TOKEN" \
+            --dart-define=MAPBOX_STYLE_URI="${MAPBOX_STYLE_URI:-mapbox://styles/mapbox/standard}" \
+            2>&1 | tee "$BUILD_LOG"
+          BUILD_STATUS=${PIPESTATUS[0]}
+          set -e
+          if [ "$BUILD_STATUS" -ne 0 ] || [ ! -s "$AAB_PATH" ]; then
+            echo "La compilacion del AAB fallo. Ultimas lineas del log:"
+            tail -n 200 "$BUILD_LOG"
+            exit 1
+          fi
+          unzip -t "$AAB_PATH" >/dev/null
+          echo "AAB valido generado: $AAB_PATH"
+
+      - name: Verify generated certificate
+        working-directory: passenger-app
+        run: |
+          keytool -printcert -jarfile build/app/outputs/bundle/release/app-release.aab
+
+      - name: Upload signed AAB
+        uses: actions/upload-artifact@v7
+        with:
+          name: apl-pasajeros-${{ inputs.version_name }}-${{ inputs.build_number }}-signed
+          path: passenger-app/build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
