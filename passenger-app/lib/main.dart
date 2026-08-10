@@ -268,7 +268,9 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
       // Conserva el acceso de cuentas antiguas. El servidor solo migra
       // perfiles creados antes de activar el control QR.
       try {
-        accessGranted = await PassengerService.ensureAccess() || accessGranted;
+        // Una respuesta del servidor tiene prioridad sobre la caché local:
+        // si el administrador revocó el QR, no se conserva un acceso antiguo.
+        accessGranted = await PassengerService.ensureAccess();
       } catch (_) {
         // Si no hay red, no se rompe la pantalla ya registrada; el siguiente
         // intento volverá a sincronizar la autorización.

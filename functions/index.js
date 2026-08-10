@@ -217,6 +217,21 @@ async function requireAuthenticatedUser(req) {
   return admin.auth().verifyIdToken(header.slice(7));
 }
 
+// Una revocación hecha con una versión anterior podía actualizar la invitación
+// sin alcanzar el registro de acceso ya canjeado. Sincroniza ese estado antes
+// de aceptar cualquier operación del pasajero, de forma idempotente.
+async function syncRevokedPassengerAccess(uid, access) {
+  if (!access || access.legacy === true || !access.inviteHash) return access;
+  const invite = (await admin.database().ref(`passengerInvites/${access.inviteHash}`).once('value')).val();
+  if (!invite || invite.status !== 'revoked') return access;
+  const revokedAt = Number(invite.revokedAt) || Date.now();
+  const revokedBy = String(invite.revokedBy || 'system');
+  const result = await admin.database().ref(`passengerAccess/${uid}`).transaction((current) => (
+    revokePassengerAccess(current, access.inviteHash, revokedBy, revokedAt)
+  ));
+  return result.snapshot.val();
+}
+
 async function requireDashboardManager(req) {
   const user = await requireDashboardAdmin(req);
   // Los roles viven en Firebase Auth. Asi el acceso al dashboard no depende de
@@ -1653,7 +1668,10 @@ exports.ensurePassengerAccess = functions.https.onRequest(async (req, res) => {
   try {
     const user = await requireAuthenticatedUser(req);
     const accessRef = admin.database().ref(`passengerAccess/${user.uid}`);
-    const access = (await accessRef.once('value')).val();
+    const access = await syncRevokedPassengerAccess(
+      user.uid,
+      (await accessRef.once('value')).val(),
+    );
     if (passengerAccessIsActive(access)) return res.json({ ok: true, access });
     const passenger = (await admin.database().ref(`passengers/${user.uid}`).once('value')).val();
     if (!passenger || !canMigrateLegacyPassengerAccess(
@@ -1876,7 +1894,10 @@ exports.createPassengerTrip = functions.https.onRequest(async (req, res) => {
       db.ref(`passengerAccess/${passenger.uid}`).once('value'),
     ]);
     const profile = profileSnapshot.val();
-    const access = accessSnapshot.val();
+    const access = await syncRevokedPassengerAccess(
+      passenger.uid,
+      accessSnapshot.val(),
+    );
     const registeredAt = Number(profile?.registeredAt || 0);
     const legacyAccess = canMigrateLegacyPassengerAccess(
       access,
