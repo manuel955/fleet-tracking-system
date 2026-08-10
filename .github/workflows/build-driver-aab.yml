@@ -72,6 +72,17 @@ jobs:
         with:
           channel: stable
 
+      - name: Cache Gradle and pub dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.pub-cache
+          key: ${{ runner.os }}-driver-release-${{ hashFiles('driver-app/pubspec.lock', 'driver-app/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-driver-release-
+
       - name: Prepare Flutter dependencies
         working-directory: driver-app
         run: flutter pub get
@@ -82,55 +93,24 @@ jobs:
           GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false
         run: |
           test -n "$MAPBOX_ACCESS_TOKEN"
-          heartbeat() {
-            while true; do
-              echo "Compilando AAB de conductores... $(date -u +%H:%M:%S) UTC"
-              sleep 30
-            done
-          }
-          kill_tree() {
-            local pid="$1"
-            [ -z "$pid" ] && return 0
-            for child in $(pgrep -P "$pid" 2>/dev/null || true); do
-              kill_tree "$child"
-            done
-            kill "$pid" 2>/dev/null || true
-          }
-          heartbeat &
-          HEARTBEAT_PID=$!
-          BUILD_PID=""
-          trap 'kill_tree "$BUILD_PID"; kill "$HEARTBEAT_PID" 2>/dev/null || true' EXIT
           AAB_PATH="$PWD/build/app/outputs/bundle/release/app-release.aab"
           BUILD_LOG="$RUNNER_TEMP/driver-aab-build.log"
           rm -f "$AAB_PATH" "$BUILD_LOG"
-          flutter build appbundle --release --no-pub \
+          set +e
+          timeout --foreground --kill-after=30s 30m flutter build appbundle --release --no-pub \
             --build-number "${{ inputs.build_number }}" \
             --dart-define=MAPBOX_ACCESS_TOKEN="$MAPBOX_ACCESS_TOKEN" \
             --dart-define=MAPBOX_STYLE_URI="${MAPBOX_STYLE_URI:-mapbox://styles/mapbox/standard}" \
-            >"$BUILD_LOG" 2>&1 &
-          BUILD_PID=$!
-          AAB_READY=false
-          while kill -0 "$BUILD_PID" 2>/dev/null; do
-            if [ -s "$AAB_PATH" ] && unzip -t "$AAB_PATH" >/dev/null 2>&1; then
-              echo "AAB valido generado; cerrando el watcher de Gradle para continuar."
-              AAB_READY=true
-              break
-            fi
-            sleep 15
-          done
-          if [ "$AAB_READY" = true ]; then
-            kill_tree "$BUILD_PID"
-            BUILD_PID=""
-          else
-            BUILD_STATUS=0
-            wait "$BUILD_PID" || BUILD_STATUS=$?
-            BUILD_PID=""
-            if [ "$BUILD_STATUS" -ne 0 ] || [ ! -s "$AAB_PATH" ]; then
-              echo "La compilacion del AAB fallo. Ultimas lineas del log:"
-              tail -n 200 "$BUILD_LOG"
-              exit 1
-            fi
+            2>&1 | tee "$BUILD_LOG"
+          BUILD_STATUS=${PIPESTATUS[0]}
+          set -e
+          if [ "$BUILD_STATUS" -ne 0 ] || [ ! -s "$AAB_PATH" ]; then
+            echo "La compilacion del AAB fallo. Ultimas lineas del log:"
+            tail -n 200 "$BUILD_LOG"
+            exit 1
           fi
+          unzip -t "$AAB_PATH" >/dev/null
+          echo "AAB valido generado: $AAB_PATH"
 
       - name: Upload signed AAB
         uses: actions/upload-artifact@v7
