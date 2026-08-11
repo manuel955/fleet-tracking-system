@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
 import 'auth_service.dart';
+import 'vps_api_client.dart';
 
 /// Registro del pasajero: nombre, telefono y una foto de su credencial
 /// (DNI/carnet). A diferencia de la app del conductor, esta foto NO se usa
@@ -19,11 +20,13 @@ class PassengerService {
   static const _accessLegacyKey = 'passenger_access_legacy';
 
   static Future<bool> isRegistered() async {
+    if (AppConfig.useVpsBackend && AuthService.hasEmailSession) return true;
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool('registered') ?? false;
   }
 
   static Future<bool> hasAccess() async {
+    if (AppConfig.useVpsBackend && AuthService.hasEmailSession) return true;
     final prefs = await SharedPreferences.getInstance();
     if (prefs.getBool(_accessGrantedKey) != true) return false;
     if (prefs.getBool(_accessLegacyKey) == true) return true;
@@ -68,6 +71,17 @@ class PassengerService {
   /// nuevas no pueden usar este camino: el servidor exige un perfil creado
   /// antes del corte de la migración.
   static Future<bool> ensureAccess() async {
+    if (AppConfig.useVpsBackend) {
+      final session = await AuthService.signInAnonymously();
+      final result = await VpsApiClient.me(session['idToken']!.toString());
+      final user = result['user'];
+      if (user is! Map || user['role']?.toString() != 'passenger') {
+        await clearCachedAccess();
+        return false;
+      }
+      await _persistAccess({'status': 'authorized', 'legacy': true});
+      return true;
+    }
     final auth = await AuthService.signInAnonymously();
     final response = await http
         .post(
@@ -120,6 +134,17 @@ class PassengerService {
   /// Refresca el perfil remoto para que una cuenta existente tambien pueda
   /// compartir su foto en el siguiente viaje.
   static Future<Map<String, String>?> loadProfile() async {
+    if (AppConfig.useVpsBackend && AuthService.hasEmailSession) {
+      final prefs = await SharedPreferences.getInstance();
+      final name = AuthService.currentDisplayName?.trim().isNotEmpty == true
+          ? AuthService.currentDisplayName!.trim()
+          : 'Pasajero';
+      final phone = prefs.getString('passenger_phone') ?? '';
+      await prefs.setBool('registered', true);
+      await prefs.setString('passenger_name', name);
+      await prefs.setString('passenger_phone', phone);
+      return {'name': name, 'phone': phone};
+    }
     final cached = await cachedProfile();
     try {
       final auth = await AuthService.signInAnonymously();

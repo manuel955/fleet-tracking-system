@@ -458,7 +458,7 @@ class _DriverHomePageState extends State<DriverHomePage>
       final uid = auth['uid'] as String;
 
       String? sessionId;
-      if (claimSession) {
+      if (claimSession && !AppConfig.useVpsBackend) {
         sessionId = await SessionService.startNewSession();
         await DriverProfileService.claimSession(sessionId);
       } else {
@@ -484,7 +484,7 @@ class _DriverHomePageState extends State<DriverHomePage>
       // telefono mientras esta app estaba cerrada: no se llega a mostrar
       // nada, se cierra de una vez en vez de esperar el primer tick del
       // poll periodico de abajo.
-      if (!claimSession) {
+      if (!claimSession && !AppConfig.useVpsBackend) {
         final remoteSessionId = profile['activeSessionId'] as String?;
         if (remoteSessionId != null &&
             sessionId != null &&

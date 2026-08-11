@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import '../config.dart';
 import 'auth_service.dart';
+import 'vps_api_client.dart';
 
 /// Un documento ya elegido (foto o PDF) listo para subir a Storage.
 class PickedDocument {
@@ -39,6 +40,21 @@ class DriverProfileService {
 
   static Future<Map<String, dynamic>?> fetchProfile(String uid) async {
     final auth = await AuthService.currentSession();
+    if (AppConfig.useVpsBackend) {
+      final profile = await VpsApiClient.driverMe(auth['idToken'].toString());
+      final availability =
+          profile['availabilityStatus']?.toString() ?? 'offline';
+      return {
+        ...profile,
+        'name': profile['name'] ?? 'Conductor',
+        'age': profile['age'] ?? '',
+        'vehicleBrand': profile['vehicleBrand'] ?? '',
+        'vehicleColor': profile['vehicleColor'] ?? '',
+        'status': availability,
+        'turno_activo': availability == 'online',
+        'suspended': profile['suspended'] == true,
+      };
+    }
     final uri = Uri.parse(
       '${AppConfig.firebaseDbUrl}/drivers/$uid.json?auth=${auth['idToken']}',
     );
@@ -203,6 +219,7 @@ class DriverProfileService {
   /// `activeSessionId` y se cierre solo (ver main.dart
   /// `_checkSessionStillActive`).
   static Future<void> claimSession(String sessionId) async {
+    if (AppConfig.useVpsBackend) return;
     final auth = await AuthService.currentSession();
     final uid = auth['uid'] as String;
     final idToken = auth['idToken'] as String;

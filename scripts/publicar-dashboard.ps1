@@ -105,11 +105,14 @@ try {
     "rsync -a --delete $stagingRemoto/ $destinoRemoto/",
     "rm -rf $stagingRemoto $archivoRemoto",
     "echo $overrideBase64 | base64 -d > $overrideRemoto",
+    # El Caddyfile puede conservar CRLF al editarlo desde Windows; normalizar
+    # antes de quitar el bloque evita que se acumulen hosts duplicados.
+    "sed -i 's/\r$//' $caddyRemoto",
     "sed -i '/^#BEGIN_APL_FLEET_DASHBOARD$/,/^#END_APL_FLEET_DASHBOARD$/d' $caddyRemoto",
     "echo $caddyBase64 | base64 -d >> $caddyRemoto",
-    "docker compose --env-file $envRemoto -f $composeRemoto -f $overrideRemoto config >/dev/null",
-    "docker compose --env-file $envRemoto -f $composeRemoto -f $overrideRemoto up -d caddy",
-    "docker compose --env-file $envRemoto -f $composeRemoto -f $overrideRemoto exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile",
+    "docker compose --env-file $envRemoto -f $composeRemoto -f $overrideRemoto -f /opt/sistema-pos/docker-compose.fleet-api.yml config >/dev/null",
+    "docker compose --env-file $envRemoto -f $composeRemoto -f $overrideRemoto -f /opt/sistema-pos/docker-compose.fleet-api.yml up -d caddy",
+    "docker compose --env-file $envRemoto -f $composeRemoto -f $overrideRemoto -f /opt/sistema-pos/docker-compose.fleet-api.yml exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile",
     "curl -fsS --resolve ${Dominio}:80:127.0.0.1 http://${Dominio}/ >/dev/null"
   ) -join '; '
 

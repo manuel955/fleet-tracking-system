@@ -12,6 +12,7 @@ class AuthService {
   static const _networkTimeout = Duration(seconds: 15);
   static FirebaseAuth get _firebaseAuth => FirebaseAuth.instance;
   static String? _vpsEmail;
+  static String? _vpsDisplayName;
 
   static Future<void> initialize() async {
     if (!AppConfig.useVpsBackend) return;
@@ -20,6 +21,7 @@ class AuthService {
     final expiresAt = session['expiresAt'] as int? ?? 0;
     if (DateTime.now().millisecondsSinceEpoch < expiresAt) {
       _vpsEmail = prefs.getString('vps_email');
+      _vpsDisplayName = prefs.getString('vps_display_name');
     }
   }
 
@@ -99,6 +101,11 @@ class AuthService {
     }
   }
 
+  /// Nombre devuelto por el API VPS para poder construir el perfil local del
+  /// pasajero sin depender del antiguo registro anónimo de Firebase.
+  static String? get currentDisplayName =>
+      AppConfig.useVpsBackend ? _vpsDisplayName : null;
+
   static Future<Map<String, dynamic>> signInWithEmailPassword({
     required String email,
     required String password,
@@ -108,10 +115,16 @@ class AuthService {
       final user = data['user'];
       final token = data['token']?.toString();
       final uid = user is Map ? user['id']?.toString() : null;
+      final displayName = user is Map ? user['displayName']?.toString() : null;
       if (token == null || token.isEmpty || uid == null || uid.isEmpty) {
         throw Exception('El API VPS no devolvio una sesion valida.');
       }
-      await _persistVpsUser(uid: uid, token: token, email: email);
+      await _persistVpsUser(
+        uid: uid,
+        token: token,
+        email: email,
+        displayName: displayName,
+      );
       return {'uid': uid, 'idToken': token};
     }
     final result = await _firebaseAuth
@@ -156,7 +169,12 @@ class AuthService {
       if (token == null || token.isEmpty || uid == null || uid.isEmpty) {
         throw Exception('El API VPS no devolvio una sesion valida.');
       }
-      await _persistVpsUser(uid: uid, token: token, email: normalizedEmail);
+      await _persistVpsUser(
+        uid: uid,
+        token: token,
+        email: normalizedEmail,
+        displayName: user is Map ? user['displayName']?.toString() : null,
+      );
       return {'uid': uid, 'idToken': token};
     }
     final normalizedEmail = email.trim().toLowerCase();
@@ -269,8 +287,12 @@ class AuthService {
     required String uid,
     required String token,
     required String email,
+    String? displayName,
   }) async {
     _vpsEmail = email.trim().toLowerCase();
+    _vpsDisplayName = displayName?.trim().isNotEmpty == true
+        ? displayName!.trim()
+        : 'Pasajero';
     await SecureSessionStore.write(
       uid: uid,
       idToken: token,
@@ -279,6 +301,7 @@ class AuthService {
     );
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('vps_email', _vpsEmail!);
+    await prefs.setString('vps_display_name', _vpsDisplayName!);
   }
 
   static Future<void> deleteCurrentAccount() async {
@@ -302,6 +325,7 @@ class AuthService {
 
   static Future<void> clearLocalSession() async {
     _vpsEmail = null;
+    _vpsDisplayName = null;
     try {
       await _firebaseAuth.signOut();
     } catch (_) {}
@@ -316,6 +340,7 @@ class AuthService {
     await prefs.remove('passenger_access_legacy');
     await prefs.remove('active_trip_id');
     await prefs.remove('vps_email');
+    await prefs.remove('vps_display_name');
     await prefs.remove('scheduled_trip_id');
     for (final key in prefs.getKeys().where(
       (key) => key.startsWith('cached_trip_'),
