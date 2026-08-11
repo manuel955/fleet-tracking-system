@@ -33,5 +33,22 @@
     return payload;
   }
 
-  global.vpsConfigApi = Object.freeze({ publicConfig, request });
+  async function uploadFile(key, file, token, onProgress) {
+    if (!file || typeof file.arrayBuffer !== 'function') throw new Error('Selecciona un archivo válido.');
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const chunkSize = 0x8000;
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      const end = Math.min(offset + chunkSize, bytes.length);
+      binary += String.fromCharCode(...bytes.subarray(offset, end));
+      if (onProgress) onProgress(Math.round((end / bytes.length) * 100));
+    }
+    return request('/api/v1/storage/upload', {
+      token,
+      method: 'POST',
+      body: { key, contentType: file.type || 'application/octet-stream', dataBase64: btoa(binary) },
+    });
+  }
+
+  global.vpsConfigApi = Object.freeze({ publicConfig, request, uploadFile });
 })(typeof globalThis !== 'undefined' ? globalThis : window);

@@ -14,6 +14,10 @@ export const config = Object.freeze({
   redisUrl: process.env.REDIS_URL ?? '',
   s3Endpoint: process.env.S3_ENDPOINT ?? '',
   s3Bucket: process.env.S3_BUCKET ?? '',
+  s3Region: process.env.S3_REGION ?? 'us-east-1',
+  s3AccessKey: process.env.S3_ACCESS_KEY ?? '',
+  s3SecretKey: process.env.S3_SECRET_KEY ?? '',
+  publicApiBaseUrl: process.env.PUBLIC_API_BASE_URL ?? 'https://api.tucomprass.com',
   jwtSecret: process.env.JWT_SECRET ?? 'development-only-secret-change-me',
   // Firebase is retained only as the identity provider for the existing
   // dashboard and FCM. The operational data remains in PostgreSQL on the

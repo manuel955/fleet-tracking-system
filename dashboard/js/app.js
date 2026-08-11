@@ -109,6 +109,7 @@ const AUTH_ERROR_MESSAGES = {
   'auth/network-request-failed': 'No se pudo conectar con Firebase. Revisa tu conexión.',
   'auth/too-many-requests': 'Demasiados intentos. Espera unos minutos y vuelve a probar.',
   'auth/operation-not-allowed': 'El inicio de sesión por correo está deshabilitado.',
+  'auth/password-reset-unavailable': 'En el VPS, un administrador cambia la contraseña desde Configuración > Usuarios del dashboard.',
 };
 
 loginForm.addEventListener('submit', async (e) => {
@@ -181,6 +182,7 @@ auth.onAuthStateChanged(async (user) => {
     coordinatorAppEl.classList.add('hidden');
     userAuthenticated = false;
     window.dashboardRole = '';
+    window.dashboardIsAdmin = false;
     window.dashboardIsCoordinator = false;
     return;
   }
@@ -195,7 +197,7 @@ auth.onAuthStateChanged(async (user) => {
     let claims = tokenResult.claims || {};
     // El propietario puede recuperar el claim ADMIN una sola vez si se creó
     // antes de que existiera el sistema de roles.
-    if (claims.dashboardRole !== 'COORDINATOR') {
+    if (!window.vpsApiBaseUrl && claims.dashboardRole !== 'COORDINATOR') {
       await initializeDashboardAdmin(user);
       if (flowId !== authFlowId || !auth.currentUser) return;
       tokenResult = await user.getIdTokenResult(true);
@@ -204,6 +206,7 @@ auth.onAuthStateChanged(async (user) => {
 
     if (claims.dashboardRole === 'COORDINATOR') {
       window.dashboardRole = 'COORDINATOR';
+      window.dashboardIsAdmin = false;
       window.dashboardIsCoordinator = true;
       coordinatorAppEl.classList.remove('hidden');
       if (typeof window.startCoordinatorDispatch === 'function') {
@@ -214,6 +217,7 @@ auth.onAuthStateChanged(async (user) => {
 
     if (claims.dashboardUser === true || claims.dashboardAdmin === true) {
       window.dashboardRole = claims.dashboardAdmin === true ? 'ADMIN' : (claims.dashboardRole || 'SUPERVISOR');
+      window.dashboardIsAdmin = claims.dashboardAdmin === true || claims.dashboardRole === 'ADMIN';
       window.dashboardIsCoordinator = false;
       syncDashboardRoleNavigation();
       appEl.classList.remove('hidden');

@@ -140,6 +140,7 @@ async function refreshSettingsFromVps() {
 }
 
 async function loadAppDownloadUrls() {
+  if (window.vpsApiBaseUrl) return;
   await Promise.all(UPDATE_APPS.map(async (app) => {
     try {
       appDownloadUrls[app.key] = await storage.ref(app.storagePath).getDownloadURL();
@@ -443,18 +444,22 @@ async function saveDashboardLogo(file) {
   const feedback = document.getElementById('dashboard-logo-feedback');
   feedback.textContent = 'Subiendo logo…';
   try {
-    const ref = storage.ref('dashboard_branding/logo');
-    await ref.put(file, { contentType: file.type });
-    const downloadUrl = await ref.getDownloadURL();
     if (window.vpsApiBaseUrl) {
       const token = await auth.currentUser.getIdToken();
+      const uploaded = await window.vpsConfigApi.uploadFile('dashboard_branding/logo', file, token);
+      const downloadUrl = uploaded.url;
       await window.vpsConfigApi.request('/api/v1/dashboard/config/dashboardLogoUrl', {
         token, method: 'PUT', body: { value: downloadUrl },
       });
       currentDashboardLogoUrl = downloadUrl;
       applyDashboardLogo(downloadUrl);
     } else {
+      const ref = storage.ref('dashboard_branding/logo');
+      await ref.put(file, { contentType: file.type });
+      const downloadUrl = await ref.getDownloadURL();
       await db.ref('config/dashboardLogoUrl').set(downloadUrl);
+      currentDashboardLogoUrl = downloadUrl;
+      applyDashboardLogo(downloadUrl);
     }
     feedback.textContent = 'Logo actualizado.';
     feedback.className = 'settings-feedback success';
@@ -463,6 +468,13 @@ async function saveDashboardLogo(file) {
 
 async function dashboardUsersRequest(payload) {
   const token = await auth.currentUser.getIdToken();
+  if (window.vpsApiBaseUrl) {
+    return window.vpsConfigApi.request('/api/v1/dashboard/users', {
+      token,
+      method: 'POST',
+      body: payload,
+    });
+  }
   const response = await fetch(
     'https://us-central1-rastreoflota-53052.cloudfunctions.net/manageDashboardUsers',
     { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(15000) },
@@ -768,11 +780,23 @@ async function saveAppBranding(app, name, icon) {
   try {
     const changes = { name };
     if (icon) {
-      const iconRef = storage.ref(`app_branding/${app.key}-icon`);
-      await iconRef.put(icon, { contentType: icon.type });
-      changes.iconUrl = await iconRef.getDownloadURL();
+      if (window.vpsApiBaseUrl) {
+        const token = await auth.currentUser.getIdToken();
+        const uploaded = await window.vpsConfigApi.uploadFile(`app_branding/${app.key}-icon`, icon, token);
+        changes.iconUrl = uploaded.url;
+      } else {
+        const iconRef = storage.ref(`app_branding/${app.key}-icon`);
+        await iconRef.put(icon, { contentType: icon.type });
+        changes.iconUrl = await iconRef.getDownloadURL();
+      }
     }
-    await db.ref(`config/appBranding/${app.key}`).update(changes);
+    if (window.vpsApiBaseUrl) {
+      const token = await auth.currentUser.getIdToken();
+      currentAppBranding = { ...currentAppBranding, [app.key]: { ...(currentAppBranding[app.key] || {}), ...changes } };
+      await window.vpsConfigApi.request('/api/v1/dashboard/config/appBranding', { token, method: 'PUT', body: { value: currentAppBranding } });
+    } else {
+      await db.ref(`config/appBranding/${app.key}`).update(changes);
+    }
     feedback.textContent = 'Guardado. Iniciando APK con el nombre e ícono nuevos…';
     feedback.className = 'settings-feedback success';
     await requestBrandedAppBuild(app);
@@ -784,6 +808,11 @@ async function saveAppBranding(app, name, icon) {
 
 async function requestBrandedAppBuild(app, feedbackId = `app-branding-feedback-${app.key}`) {
   const feedback = document.getElementById(feedbackId);
+  if (window.vpsApiBaseUrl) {
+    feedback.className = 'settings-feedback success';
+    feedback.textContent = 'Guardado en el VPS. La compilaciÃ³n automÃ¡tica queda pendiente del pipeline local.';
+    return;
+  }
   feedback.className = 'settings-feedback';
   feedback.textContent = 'Solicitando compilación…';
   try {
@@ -854,6 +883,28 @@ function saveSupportPhone(value) {
 function publishAppUpdate(app, file, build) {
   const feedback = document.getElementById(`update-feedback-${app.key}`);
   feedback.className = 'settings-feedback';
+
+  if (window.vpsApiBaseUrl) {
+    (async () => {
+      try {
+        const token = await auth.currentUser.getIdToken();
+        const uploaded = await window.vpsConfigApi.uploadFile(app.storagePath, file, token, (pct) => {
+          feedback.textContent = `Subiendo... ${pct}%`;
+        });
+        appDownloadUrls[app.key] = uploaded.url;
+        await window.vpsConfigApi.request(`/api/v1/dashboard/config/${app.buildField}`, { token, method: 'PUT', body: { value: build } });
+        await window.vpsConfigApi.request(`/api/v1/dashboard/config/${app.key}ApkUrl`, { token, method: 'PUT', body: { value: uploaded.url } });
+        currentBuilds[app.buildField] = build;
+        feedback.textContent = `Publicado en el VPS: ${app.label} build ${build}.`;
+        feedback.className = 'settings-feedback success';
+        renderSettings();
+      } catch (error) {
+        feedback.textContent = `Error al subir el APK: ${error.message || error}`;
+        feedback.className = 'settings-feedback error';
+      }
+    })();
+    return;
+  }
 
   const uploadTask = storage.ref(app.storagePath).put(file, {
     contentType: 'application/vnd.android.package-archive',

@@ -3,6 +3,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { config } from './config.js';
 import { databaseHealth, pool, withTransaction } from './db.js';
 import { authenticate, hashPassword, publicUser, signUser, verifyPassword } from './auth.js';
+import { authorizePrivateDownload, getStorageObject, isPublicStorageKey, normalizeStorageKey, publicStorageUrl, storageConfigured, uploadStorageObject } from './storage.js';
 
 function json(res, status, body) {
   const payload = JSON.stringify(body);
@@ -199,6 +200,158 @@ async function removePlace(user, id) {
   return { id };
 }
 
+function normalizeDashboardRole(value) {
+  const role = String(value ?? 'supervisor').trim().toLowerCase();
+  if (!['admin', 'supervisor', 'coordinator'].includes(role)) {
+    const error = new Error('Rol de dashboard inválido.');
+    error.statusCode = 400;
+    throw error;
+  }
+  return role;
+}
+
+function dashboardRoleClaim(role) {
+  return role === 'admin' ? 'ADMIN' : role === 'coordinator' ? 'COORDINATOR' : 'SUPERVISOR';
+}
+
+function publicDashboardUser(row, currentId) {
+  return {
+    uid: row.id,
+    name: row.display_name || '',
+    email: row.email || '',
+    disabled: row.status !== 'active',
+    role: String(row.dashboard_role || 'SUPERVISOR').toLowerCase(),
+    sedeId: row.dashboard_sede_id || '',
+    sedeType: row.dashboard_sede_type || '',
+    sedeName: row.sede_name || '',
+    isCurrent: row.id === currentId,
+    createdAt: row.created_at,
+  };
+}
+
+async function manageDashboardUsers(user, body) {
+  requireRole(user, ['dashboard']);
+  if (String(user.dashboard_role || '').toUpperCase() !== 'ADMIN') {
+    const error = new Error('Solo un administrador puede gestionar usuarios.');
+    error.statusCode = 403;
+    throw error;
+  }
+  const action = requiredString(body.action, 'action', { max: 20 });
+  if (action === 'list') {
+    const result = await pool.query(
+      `SELECT u.id, u.email, u.display_name, u.status, u.created_at,
+          u.dashboard_role, u.dashboard_sede_type, u.dashboard_sede_id,
+          p.name AS sede_name
+       FROM users u
+       LEFT JOIN places p ON p.id = u.dashboard_sede_id
+       WHERE u.role = 'dashboard' ORDER BY u.created_at`,
+    );
+    return { users: result.rows.map((row) => publicDashboardUser(row, user.id)) };
+  }
+  if (action === 'create') {
+    const email = requiredString(body.email, 'email', { max: 254 }).toLowerCase();
+    const name = requiredString(body.name ?? '', 'name', { max: 120 });
+    const password = requiredString(body.password, 'password', { min: 8, max: 128 });
+    const role = normalizeDashboardRole(body.role);
+    const sedeType = role === 'coordinator' ? requiredString(body.sedeType, 'sedeType', { max: 20 }) : null;
+    const sedeId = role === 'coordinator' ? requiredString(body.sedeId, 'sedeId', { max: 120 }) : null;
+    if (role === 'coordinator') {
+      const category = ['hotel', 'hotels'].includes(sedeType) ? 'hotels' : ['sportVenue', 'sportVenues'].includes(sedeType) ? 'sportVenues' : '';
+      const place = await pool.query('SELECT 1 FROM places WHERE id = $1 AND category = $2', [sedeId, category]);
+      if (!place.rowCount) {
+        const error = new Error('La sede seleccionada no existe.');
+        error.statusCode = 400;
+        throw error;
+      }
+    }
+    const passwordHash = await hashPassword(password);
+    try {
+      const result = await pool.query(
+        `INSERT INTO users (role, email, password_hash, display_name, dashboard_role, dashboard_sede_type, dashboard_sede_id)
+         VALUES ('dashboard', $1, $2, $3, $4, $5, $6)
+         RETURNING id, email, display_name, status, created_at, dashboard_role, dashboard_sede_type, dashboard_sede_id`,
+        [email, passwordHash, name, dashboardRoleClaim(role), sedeType, sedeId],
+      );
+      return { user: publicDashboardUser(result.rows[0], user.id) };
+    } catch (error) {
+      if (error?.code === '23505') {
+        error.statusCode = 409;
+        error.message = 'Ya existe una cuenta con ese correo.';
+      }
+      throw error;
+    }
+  }
+  if (action === 'grantAdmin') {
+    const email = requiredString(body.email, 'email', { max: 254 }).toLowerCase();
+    const result = await pool.query(
+      `UPDATE users SET role='dashboard', dashboard_role='ADMIN', dashboard_sede_type=NULL,
+         dashboard_sede_id=NULL, updated_at=now() WHERE email=$1 RETURNING id`,
+      [email],
+    );
+    if (!result.rowCount) {
+      const error = new Error('Usuario no encontrado.');
+      error.statusCode = 404;
+      throw error;
+    }
+    return { ok: true };
+  }
+  if (action === 'update') {
+    const id = requiredString(body.uid, 'uid', { max: 120 });
+    if (id === user.id && body.role && normalizeDashboardRole(body.role) !== 'admin') {
+      const error = new Error('No puedes quitarte el rol de administrador.');
+      error.statusCode = 400;
+      throw error;
+    }
+    const changes = [];
+    const values = [];
+    const add = (sql, value) => { values.push(value); changes.push(`${sql} = $${values.length}`); };
+    if (body.email) add('email', requiredString(body.email, 'email', { max: 254 }).toLowerCase());
+    if (body.name !== undefined) add('display_name', requiredString(body.name, 'name', { max: 120 }));
+    if (body.password !== undefined) add('password_hash', await hashPassword(requiredString(body.password, 'password', { min: 8, max: 128 })));
+    if (typeof body.disabled === 'boolean') add('status', body.disabled ? 'disabled' : 'active');
+    if (body.role) {
+      const role = normalizeDashboardRole(body.role);
+      add('dashboard_role', dashboardRoleClaim(role));
+      add('dashboard_sede_type', role === 'coordinator' ? requiredString(body.sedeType, 'sedeType', { max: 20 }) : null);
+      add('dashboard_sede_id', role === 'coordinator' ? requiredString(body.sedeId, 'sedeId', { max: 120 }) : null);
+    }
+    if (!changes.length) {
+      const error = new Error('No hay cambios para guardar.');
+      error.statusCode = 400;
+      throw error;
+    }
+    values.push(id);
+    const result = await pool.query(
+      `UPDATE users SET ${changes.join(', ')}, updated_at=now() WHERE id=$${values.length} AND role='dashboard' RETURNING id`,
+      values,
+    );
+    if (!result.rowCount) {
+      const error = new Error('Usuario de dashboard no encontrado.');
+      error.statusCode = 404;
+      throw error;
+    }
+    return { ok: true };
+  }
+  if (action === 'delete') {
+    const id = requiredString(body.uid, 'uid', { max: 120 });
+    if (id === user.id) {
+      const error = new Error('No puedes eliminar tu propia cuenta.');
+      error.statusCode = 400;
+      throw error;
+    }
+    const result = await pool.query(`DELETE FROM users WHERE id=$1 AND role='dashboard'`, [id]);
+    if (!result.rowCount) {
+      const error = new Error('Usuario de dashboard no encontrado.');
+      error.statusCode = 404;
+      throw error;
+    }
+    return { ok: true };
+  }
+  const error = new Error('Acción inválida.');
+  error.statusCode = 400;
+  throw error;
+}
+
 async function managePassengerInvites(user, body) {
   requireRole(user, ['dashboard']);
   const action = requiredString(body.action, 'action', { max: 20 });
@@ -352,7 +505,9 @@ async function login(body) {
   const password = requiredString(body.password, 'password', { min: 1, max: 128 });
   if (!pool) throw new Error('Database is not configured');
   const result = await pool.query(
-    'SELECT id, role, email, password_hash, display_name, status FROM users WHERE email = $1',
+    `SELECT u.id, u.role, u.email, u.password_hash, u.display_name, u.status,
+        u.dashboard_role, u.dashboard_sede_type, u.dashboard_sede_id, p.name AS sede_name
+     FROM users u LEFT JOIN places p ON p.id = u.dashboard_sede_id WHERE u.email = $1`,
     [email],
   );
   const user = result.rows[0];
@@ -977,8 +1132,45 @@ export function createApp({ health = databaseHealth } = {}) {
           apiVersion: 'v1',
           migration: 'vps-core-config-firebase-auth-fcm',
           realtime: 'dashboard-polling',
-          storage: config.s3Bucket ? 's3-compatible' : 'unconfigured',
+          storage: storageConfigured() ? 's3-compatible' : 'unconfigured',
+          storagePublicBaseUrl: config.publicApiBaseUrl,
         });
+      }
+
+      const publicStorageMatch = url.pathname.match(/^\/api\/v1\/storage\/public\/(.+)$/);
+      if (req.method === 'GET' && publicStorageMatch) {
+        const key = decodeURIComponent(publicStorageMatch[1]);
+        if (!isPublicStorageKey(key)) return json(res, 404, { error: 'Archivo no encontrado.' });
+        const object = await getStorageObject(key);
+        res.writeHead(200, {
+          'content-type': object.ContentType || 'application/octet-stream',
+          'content-length': object.ContentLength,
+          'cache-control': object.CacheControl || 'public, max-age=300',
+          'etag': object.ETag || '',
+        });
+        object.Body.pipe(res);
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/v1/storage/upload') {
+        const user = await authenticate(req);
+        return json(res, 201, await uploadStorageObject(user, await readJson(req)));
+      }
+
+      const storageDownloadMatch = url.pathname.match(/^\/api\/v1\/storage\/download\/(.+)$/);
+      if (req.method === 'GET' && storageDownloadMatch) {
+        const user = await authenticate(req);
+        const key = normalizeStorageKey(decodeURIComponent(storageDownloadMatch[1]));
+        await authorizePrivateDownload(user, key);
+        const object = await getStorageObject(key);
+        res.writeHead(200, {
+          'content-type': object.ContentType || 'application/octet-stream',
+          'content-length': object.ContentLength,
+          'cache-control': 'private, max-age=60',
+          'etag': object.ETag || '',
+        });
+        object.Body.pipe(res);
+        return;
       }
 
       // Public, cache-free configuration for the mobile apps. Operational
@@ -1015,6 +1207,11 @@ export function createApp({ health = databaseHealth } = {}) {
       if (req.method === 'POST' && url.pathname === '/api/v1/dashboard/passenger-invites') {
         const user = await authenticate(req);
         return json(res, 200, await managePassengerInvites(user, await readJson(req)));
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/v1/dashboard/users') {
+        const user = await authenticate(req);
+        return json(res, 200, await manageDashboardUsers(user, await readJson(req)));
       }
 
       if (req.method === 'POST' && url.pathname === '/api/v1/passenger-invites/redeem') {
