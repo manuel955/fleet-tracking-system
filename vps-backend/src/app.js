@@ -13,6 +13,24 @@ function json(res, status, body) {
   res.end(payload);
 }
 
+const DASHBOARD_ORIGINS = new Set([
+  'https://apl.tucomprass.com',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+]);
+
+function applyCors(req, res) {
+  const origin = req.headers.origin;
+  if (!origin || !DASHBOARD_ORIGINS.has(origin)) return false;
+  res.setHeader('access-control-allow-origin', origin);
+  res.setHeader('access-control-allow-credentials', 'true');
+  res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
+  res.setHeader('access-control-allow-headers', 'Authorization, Content-Type');
+  res.setHeader('access-control-max-age', '600');
+  res.setHeader('vary', 'Origin');
+  return true;
+}
+
 async function readJson(req) {
   let body = '';
   for await (const chunk of req) body += chunk;
@@ -670,6 +688,11 @@ export function createApp({ health = databaseHealth } = {}) {
   return http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+      const corsEnabled = applyCors(req, res);
+
+      if (req.method === 'OPTIONS') {
+        return res.writeHead(corsEnabled ? 204 : 403).end();
+      }
 
       if (req.method === 'GET' && url.pathname === '/health') {
         const database = await health();
