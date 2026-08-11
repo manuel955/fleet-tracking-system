@@ -44,9 +44,24 @@ CREATE TABLE IF NOT EXISTS trips (
   destination_lat DOUBLE PRECISION NOT NULL,
   destination_lng DOUBLE PRECISION NOT NULL,
   scheduled_pickup_at TIMESTAMPTZ,
+  passenger_count SMALLINT NOT NULL DEFAULT 1 CHECK (passenger_count BETWEEN 1 AND 45),
+  cancelled_by TEXT,
+  cancel_reason TEXT,
+  completed_at TIMESTAMPTZ,
+  rating SMALLINT CHECK (rating BETWEEN 1 AND 5),
+  feedback_comment TEXT,
+  feedback_submitted_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE trips ADD COLUMN IF NOT EXISTS passenger_count SMALLINT NOT NULL DEFAULT 1;
+ALTER TABLE trips ADD COLUMN IF NOT EXISTS cancelled_by TEXT;
+ALTER TABLE trips ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
+ALTER TABLE trips ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+ALTER TABLE trips ADD COLUMN IF NOT EXISTS rating SMALLINT;
+ALTER TABLE trips ADD COLUMN IF NOT EXISTS feedback_comment TEXT;
+ALTER TABLE trips ADD COLUMN IF NOT EXISTS feedback_submitted_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_trips_status_created ON trips(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_trips_driver_status ON trips(driver_id, status);
