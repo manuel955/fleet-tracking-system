@@ -59,3 +59,22 @@ puede reintentarse desde el endpoint de reintento.
 Implementar autenticación, API de viajes, GPS, asignación, WebSocket y envío
 FCM. Cada endpoint debe tener una prueba de contrato antes de cambiar una app
 Flutter o el dashboard.
+
+## Cliente Flutter opcional
+
+Las apps incluyen un cliente VPS gradual, pero Firebase sigue siendo el valor
+predeterminado. Para compilar una APK de laboratorio que use el API:
+
+```powershell
+flutter build apk --debug --dart-define=VPS_API_BASE_URL=https://api.ejemplo.com
+```
+
+La variable se acepta en `passenger-app` y `driver-app`. La integracion actual
+cubre inicio de sesion, viajes del pasajero, acciones del conductor,
+disponibilidad y GPS. El seguimiento de la posicion del conductor al pasajero,
+WebSocket, FCM nativo del VPS y el alta completa de conductores siguen
+pendientes de contrato antes de activar esta bandera para usuarios reales.
+
+No se debe usar `http://86.48.19.189` en una APK de produccion: el API actual
+escucha solo en `127.0.0.1:8080`. Primero hay que publicar un dominio HTTPS
+independiente del POS y probarlo con una APK de laboratorio.
