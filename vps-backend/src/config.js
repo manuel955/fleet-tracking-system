@@ -21,6 +21,8 @@ export const config = Object.freeze({
   // staging without copying any private Firebase credentials to the server.
   firebaseProjectId: process.env.FIREBASE_PROJECT_ID ?? 'rastreoflota-53052',
   firebaseDashboardAuth: process.env.FIREBASE_DASHBOARD_AUTH !== 'false',
+  fcmWebhookUrl: process.env.FCM_WEBHOOK_URL ?? '',
+  fcmWebhookSecret: process.env.FCM_WEBHOOK_SECRET ?? '',
 });
 
 export { required };

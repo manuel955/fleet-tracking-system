@@ -1,10 +1,11 @@
 const functions = require('firebase-functions/v1');
+const { defineString } = require('firebase-functions/params');
 const admin = require('firebase-admin');
 const crypto = require('crypto');
 admin.initializeApp();
 
 const { attemptAssignment, releaseDriver } = require('./matching');
-const { sendPush } = require('./notifications');
+const { sendPush, notificationData } = require('./notifications');
 const {
   disconnectReasonLabel,
   isAlertableDisconnectReason,
@@ -69,6 +70,41 @@ const BRANDING_BUILD_TTL_MS = 3 * 60 * 60 * 1000;
 const OWNER_DASHBOARD_EMAIL = 'anfurex.3351@gmail.com';
 const DATABASE_URL = 'https://rastreoflota-53052-default-rtdb.firebaseio.com';
 const LIMA_TIME_ZONE = 'America/Lima';
+const vpsPushSecretParam = defineString('VPS_PUSH_SECRET', {
+  description: 'Secret shared only by the VPS and the FCM bridge',
+  default: '',
+});
+const VPS_PUSH_SECRET = vpsPushSecretParam.value();
+
+// The VPS owns the trip state after the migration, while this small bridge
+// deliberately keeps Firebase Admin as the Android FCM sender. It accepts
+// only a server-to-server secret and never exposes Admin credentials to the
+// VPS or to a mobile client.
+exports.sendVpsPush = functions.https.onRequest(async (req, res) => {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'method_not_allowed' });
+  const provided = String(req.get('x-vps-push-secret') || '');
+  if (!VPS_PUSH_SECRET || provided.length !== VPS_PUSH_SECRET.length
+      || !crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(VPS_PUSH_SECRET))) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  const body = req.body || {};
+  const tokens = Array.isArray(body.tokens)
+    ? body.tokens.filter((token) => typeof token === 'string' && token.length > 0).slice(0, 500)
+    : [];
+  const data = notificationData(body.type || 'trip_updated', body.data || {});
+  if (!tokens.length) return res.status(200).json({ sent: 0, failed: 0 });
+  try {
+    const result = await admin.messaging().sendEachForMulticast({
+      tokens,
+      data,
+      android: { priority: 'high', ttl: 120000, directBootOk: true },
+    });
+    return res.status(200).json({ sent: result.successCount, failed: result.failureCount });
+  } catch (error) {
+    console.error(`VPS FCM bridge fallo: ${error.message || error}`);
+    return res.status(502).json({ error: 'fcm_unavailable' });
+  }
+});
 
 function formatScheduledPickupSpeech(timestamp) {
   const value = Number(timestamp);

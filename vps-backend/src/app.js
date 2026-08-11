@@ -217,7 +217,7 @@ async function createTrip(user, body) {
     ? 'scheduled'
     : 'searching';
 
-  return withTransaction(async (client) => {
+  const trip = await withTransaction(async (client) => {
     const inserted = await client.query(
       `INSERT INTO trips (
         passenger_id, status, origin_address, origin_lat, origin_lng,
@@ -236,6 +236,18 @@ async function createTrip(user, body) {
     const result = await client.query(`${tripSelect} WHERE id = $1`, [tripId]);
     return publicTrip(result.rows[0]);
   });
+  if (trip.driverId) {
+    await notifyVpsDevices([trip.driverId], 'trip_assigned', {
+      tripId: trip.id,
+      status: trip.status,
+      pickupAddress: trip.pickupAddress,
+      destinationAddress: trip.destinationAddress,
+      scheduledPickupAt: trip.scheduledPickupAt,
+      route: 'active-trip',
+      deepLink: `driver://trip/${trip.id}`,
+    });
+  }
+  return trip;
 }
 
 function canReadTrip(user, trip) {
@@ -446,7 +458,7 @@ async function advanceDriverTrip(user, tripId, body) {
   requireRole(user, ['driver']);
   const action = requiredString(body.action ?? body.newStatus, 'action', { max: 40 });
   const requestedStatus = ({ arrive: 'arrived_at_pickup', start: 'in_progress', complete: 'completed' })[action] ?? action;
-  return withTransaction(async (client) => {
+  const trip = await withTransaction(async (client) => {
     const result = await client.query(`${tripSelect} WHERE id = $1 FOR UPDATE`, [tripId]);
     const trip = result.rows[0];
     if (!trip || trip.driver_id !== user.id) {
@@ -474,12 +486,20 @@ async function advanceDriverTrip(user, tripId, body) {
     const updated = await client.query(`${tripSelect} WHERE id = $1`, [tripId]);
     return publicTrip(updated.rows[0]);
   });
+  await notifyVpsDevices([trip.passengerId], 'trip_status', {
+    tripId: trip.id,
+    status: trip.status,
+    ratingRequired: trip.status === 'completed',
+    route: trip.status === 'completed' ? 'rate-trip' : 'active-trip',
+    deepLink: trip.status === 'completed' ? `passenger://rate-trip/${trip.id}` : `passenger://trip/${trip.id}`,
+  });
+  return trip;
 }
 
 async function cancelTrip(user, tripId, body) {
   requireRole(user, ['passenger', 'dashboard']);
   const reason = body.reason === undefined ? null : requiredString(body.reason, 'reason', { max: 255 });
-  return withTransaction(async (client) => {
+  const trip = await withTransaction(async (client) => {
     const result = await client.query(`${tripSelect} WHERE id = $1 FOR UPDATE`, [tripId]);
     const trip = result.rows[0];
     if (!trip || (user.role === 'passenger' && trip.passenger_id !== user.id)) {
@@ -504,6 +524,18 @@ async function cancelTrip(user, tripId, body) {
     const updated = await client.query(`${tripSelect} WHERE id = $1`, [tripId]);
     return publicTrip(updated.rows[0]);
   });
+  if (trip.status === 'cancelled') {
+    const recipientIds = [trip.passengerId, trip.driverId].filter(Boolean);
+    await notifyVpsDevices(recipientIds, 'trip_cancelled', {
+      tripId: trip.id,
+      status: trip.status,
+      cancelReason: trip.cancelReason,
+      cancelledBy: trip.cancelledBy,
+      route: 'home',
+      deepLink: 'passenger://home',
+    });
+  }
+  return trip;
 }
 
 async function retryTrip(user, tripId) {
@@ -566,6 +598,31 @@ async function registerDeviceToken(user, body) {
     [user.id, token, platform],
   );
   return { registered: true };
+}
+
+async function notifyVpsDevices(userIds, type, data = {}) {
+  if (!config.fcmWebhookUrl || !config.fcmWebhookSecret || !pool || !userIds?.length) return;
+  try {
+    const result = await pool.query(
+      'SELECT token FROM device_tokens WHERE user_id = ANY($1::uuid[])',
+      [userIds],
+    );
+    const tokens = result.rows.map((row) => row.token).filter(Boolean);
+    if (!tokens.length) return;
+    const response = await fetch(config.fcmWebhookUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-vps-push-secret': config.fcmWebhookSecret,
+      },
+      body: JSON.stringify({ tokens, type, data }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) console.error(`FCM webhook returned ${response.status}`);
+  } catch (error) {
+    // A push outage must never roll back a committed trip transition.
+    console.error(`FCM webhook failed: ${error?.message || error}`);
+  }
 }
 
 /**
