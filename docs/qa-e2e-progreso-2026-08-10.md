@@ -37,6 +37,8 @@ D=WOMDqpodQEc0qvvVbCpMChVRFZ82   # UID del conductor de prueba (Auto CYV627, 4 a
 | **Notif asignación (voz)** | ✅ | `GoogleTTSServiceImpl: Synthesis request spa-ESP` + `tts is now playing` ~3s + sonido del canal de alerta |
 | **Notif cambio de destino (voz)** | ✅ | TTS disparó al mover destino (17:40:27) |
 | **D** Avance completo | ✅ | `arrived_at_pickup`→`in_progress`→`completed`; conductor liberado (`online`, `currentTripId=null`). *Ojo:* "Finalizar" está **geo-restringido** al destino; se movió el destino con "Modificar viaje" a la posición del conductor para desbloquearlo. |
+| **Calificación automática al finalizar (pasajero)** | ❌ | Al terminar el viaje, el pasajero no es enviado automáticamente a la pantalla de calificación; debe entrar manualmente a Actividad. |
+| **Aviso de GPS desactualizado (pasajero)** | ❌ | Durante el viaje aparece «Señal GPS del conductor temporalmente desactualizada»; este mensaje no debe mostrarse al pasajero como estado normal. |
 | **Notif llegada** (`driver_arrived`) | ✅ | UI del pasajero sincroniza; confirmado también en segundo plano (ver §3) |
 | **E** Calificación/incidencia (pasajero) | ✅ | "5/5 · Incidencia enviada" (Objeto perdido); `submitTripFeedback` OK |
 | **K** Historial | ✅ | Actividad muestra el viaje completado con conductor/fecha |
@@ -124,10 +126,16 @@ D=WOMDqpodQEc0qvvVbCpMChVRFZ82   # UID del conductor de prueba (Auto CYV627, 4 a
 10. **Voz de viaje programado:** al asignarse un viaje del mismo día, el conductor
     escucha la fecha numérica (por ejemplo, "diez octavos"). Debe decir **"Hoy a las
     [hora]"**; para otra fecha, usar una frase natural con día y mes.
-11. **FCM con app del conductor forzada a detener:** Android no entrega el aviso/voz cuando
+11. **FALLO TOTAL — FCM con app del conductor forzada a detener:** Android no entrega el aviso/voz cuando
     el paquete está `stopped=true`; el viaje se asigna en backend, pero el conductor no se
     entera hasta abrir la app. Revisar el canal de notificación y la estrategia de entrega
     para este estado del sistema.
+12. **Calificación automática al finalizar para el pasajero:** al completar el viaje, abrir
+    inmediatamente la vista de calificación (con opción de omitir o hacerlo después en
+    Actividad), en vez de dejar al pasajero en la pantalla anterior.
+13. **Mensaje «Señal GPS del conductor temporalmente desactualizada»:** no debe aparecer al
+    pasajero como aviso durante un viaje; corregir la condición de refresco o reemplazarlo
+    por un estado silencioso que no alarme al usuario mientras el viaje sigue activo.
 
 > Estos hallazgos también están en la memoria de Claude
 > (`~/.claude/projects/.../memory/`), archivos `bug_*` / `feature_*`. Para Codex, esta
