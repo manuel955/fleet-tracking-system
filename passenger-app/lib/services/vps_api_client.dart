@@ -108,13 +108,12 @@ class VpsApiClient {
     required String token,
     required String deviceToken,
     required String platform,
-  }) =>
-      _request(
-        'POST',
-        '/api/v1/device-tokens',
-        token: token,
-        body: {'token': deviceToken, 'platform': platform},
-      );
+  }) => _request(
+    'POST',
+    '/api/v1/device-tokens',
+    token: token,
+    body: {'token': deviceToken, 'platform': platform},
+  );
 
   static Future<List<Map<String, dynamic>>> listTrips({
     required String token,
@@ -167,8 +166,24 @@ class VpsApiClient {
     normalized['pickupAddress'] ??= normalized['originAddress'];
     normalized['pickupLat'] ??= normalized['originLat'];
     normalized['pickupLng'] ??= normalized['originLng'];
-    normalized['scheduledPickupLabel'] ??= normalized['scheduledPickupAt']
-        ?.toString();
+    if (normalized['scheduledPickupLabel'] == null &&
+        normalized['scheduledPickupAt'] is num) {
+      final pickupAt = DateTime.fromMillisecondsSinceEpoch(
+        (normalized['scheduledPickupAt'] as num).toInt(),
+      ).toLocal();
+      final now = DateTime.now();
+      final hhmm =
+          '${pickupAt.hour.toString().padLeft(2, '0')}:${pickupAt.minute.toString().padLeft(2, '0')}';
+      if (pickupAt.year == now.year &&
+          pickupAt.month == now.month &&
+          pickupAt.day == now.day) {
+        normalized['scheduledPickupLabel'] = 'Hoy a las $hhmm';
+      } else {
+        normalized['scheduledPickupLabel'] =
+            '${pickupAt.day.toString().padLeft(2, '0')}/'
+            '${pickupAt.month.toString().padLeft(2, '0')}/${pickupAt.year} · $hhmm';
+      }
+    }
     return normalized;
   }
 
@@ -248,6 +263,14 @@ class VpsApiClient {
       'lng': data['longitude'],
       'accuracy': data['accuracyM'],
       'lastUpdate': data['recordedAt'],
+      'driverId': payload['driverId'],
+      'driverName': payload['driverName'] ?? payload['name'],
+      'name': payload['name'] ?? payload['driverName'],
+      'driverPhone': payload['driverPhone'] ?? payload['phone'],
+      'driverPlate': payload['driverPlate'] ?? payload['plate'],
+      'plate': payload['plate'] ?? payload['driverPlate'],
+      'vehicleType': payload['vehicleType'],
+      'vehicleSeats': payload['vehicleSeats'],
     };
   }
 

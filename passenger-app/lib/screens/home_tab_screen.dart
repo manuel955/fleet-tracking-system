@@ -439,7 +439,7 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
               Expanded(
                 child: Text(
                   label != null
-                      ? 'Viaje programado para las $label'
+                      ? 'Viaje programado: $label'
                       : 'Tienes un viaje programado',
                   style: const TextStyle(
                     fontSize: 14,

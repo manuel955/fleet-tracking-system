@@ -112,8 +112,24 @@ class VpsApiClient {
 
   static Map<String, dynamic> normalizeTrip(Map<String, dynamic> trip) {
     final normalized = Map<String, dynamic>.from(trip);
-    normalized['scheduledPickupLabel'] ??=
-        normalized['scheduledPickupAt']?.toString();
+    if (normalized['scheduledPickupLabel'] == null &&
+        normalized['scheduledPickupAt'] is num) {
+      final pickupAt = DateTime.fromMillisecondsSinceEpoch(
+        (normalized['scheduledPickupAt'] as num).toInt(),
+      ).toLocal();
+      final now = DateTime.now();
+      final hhmm =
+          '${pickupAt.hour.toString().padLeft(2, '0')}:${pickupAt.minute.toString().padLeft(2, '0')}';
+      if (pickupAt.year == now.year &&
+          pickupAt.month == now.month &&
+          pickupAt.day == now.day) {
+        normalized['scheduledPickupLabel'] = 'Hoy a las $hhmm';
+      } else {
+        normalized['scheduledPickupLabel'] =
+            '${pickupAt.day.toString().padLeft(2, '0')}/'
+            '${pickupAt.month.toString().padLeft(2, '0')}/${pickupAt.year} · $hhmm';
+      }
+    }
     return normalized;
   }
 

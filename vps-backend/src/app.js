@@ -340,21 +340,35 @@ async function getTripDriverLocation(user, tripId) {
     throw error;
   }
   const result = await pool.query(
-    `SELECT latitude, longitude, accuracy_m, recorded_at
-       FROM driver_locations
-      WHERE driver_id = $1`,
+    `SELECT d.id, u.display_name, d.phone, d.plate, d.vehicle_type,
+            d.vehicle_seats, l.latitude, l.longitude, l.accuracy_m,
+            l.recorded_at
+       FROM drivers d
+       JOIN users u ON u.id = d.id
+       LEFT JOIN driver_locations l ON l.driver_id = d.id
+      WHERE d.id = $1`,
     [trip.driver_id],
   );
   const row = result.rows[0];
   return {
     tripId,
     driverId: trip.driver_id,
-    location: row ? {
-      latitude: Number(row.latitude),
-      longitude: Number(row.longitude),
-      accuracyM: row.accuracy_m === null ? null : Number(row.accuracy_m),
-      recordedAt: new Date(row.recorded_at).getTime(),
-    } : null,
+    driverName: row?.display_name ?? '',
+    name: row?.display_name ?? '',
+    driverPhone: row?.phone ?? '',
+    phone: row?.phone ?? '',
+    driverPlate: row?.plate ?? '',
+    plate: row?.plate ?? '',
+    vehicleType: row?.vehicle_type ?? '',
+    vehicleSeats: row?.vehicle_seats ?? null,
+    location: row?.latitude === null || row?.latitude === undefined
+      ? null
+      : {
+          latitude: Number(row.latitude),
+          longitude: Number(row.longitude),
+          accuracyM: row.accuracy_m === null ? null : Number(row.accuracy_m),
+          recordedAt: new Date(row.recorded_at).getTime(),
+        },
   };
 }
 

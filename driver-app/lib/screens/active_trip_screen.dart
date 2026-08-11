@@ -503,7 +503,7 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
                       true) ...[
                     const SizedBox(height: 4),
                     Text(
-                      'Viaje programado para ${NotificationService.scheduledPickupText(trip['scheduledPickupLabel'] as String?)}',
+                      'Viaje programado: ${NotificationService.scheduledPickupText(trip['scheduledPickupLabel'] as String?)}',
                       style:
                           const TextStyle(fontSize: 13, color: AppColors.muted),
                     ),
