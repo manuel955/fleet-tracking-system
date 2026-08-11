@@ -39,6 +39,7 @@ jobs:
       PASSENGER_GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.PASSENGER_GOOGLE_SERVICES_JSON_BASE64 }}
       MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
       MAPBOX_STYLE_URI: ${{ secrets.MAPBOX_STYLE_URI }}
+      VPS_API_BASE_URL: https://api.tucomprass.com
 
     steps:
       - uses: actions/checkout@v4
@@ -131,6 +132,7 @@ jobs:
             --build-number "$BUILD_NUMBER" \
             --dart-define=MAPBOX_ACCESS_TOKEN="$MAPBOX_ACCESS_TOKEN" \
             --dart-define=MAPBOX_STYLE_URI="${MAPBOX_STYLE_URI:-mapbox://styles/mapbox/standard}" \
+            --dart-define=VPS_API_BASE_URL="$VPS_API_BASE_URL" \
             >"$BUILD_LOG" 2>&1; then
             echo "Signed APK build failed; last log lines:"
             tail -n 200 "$BUILD_LOG"

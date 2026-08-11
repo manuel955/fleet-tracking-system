@@ -27,6 +27,7 @@ jobs:
       GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
       MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
       MAPBOX_STYLE_URI: ${{ secrets.MAPBOX_STYLE_URI }}
+      VPS_API_BASE_URL: https://api.tucomprass.com
 
     steps:
       - uses: actions/checkout@v7
@@ -98,6 +99,7 @@ jobs:
             --build-number "${{ inputs.build_number }}" \
             --dart-define=MAPBOX_ACCESS_TOKEN="$MAPBOX_ACCESS_TOKEN" \
             --dart-define=MAPBOX_STYLE_URI="${MAPBOX_STYLE_URI:-mapbox://styles/mapbox/standard}" \
+            --dart-define=VPS_API_BASE_URL="$VPS_API_BASE_URL" \
             2>&1 | tee "$BUILD_LOG"
           BUILD_STATUS=${PIPESTATUS[0]}
           set -e
