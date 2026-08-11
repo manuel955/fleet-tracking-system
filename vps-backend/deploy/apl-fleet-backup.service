@@ -1,0 +1,8 @@
+[Unit]
+Description=Backup APL Logistics VPS PostgreSQL
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/apl-fleet-vps/deploy/backup-postgres.sh
