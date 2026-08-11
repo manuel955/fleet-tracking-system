@@ -463,6 +463,34 @@ async function registerDeviceToken(user, body) {
   return { registered: true };
 }
 
+/**
+ * Promueve viajes programados cuya hora ya llegó y ejecuta el mismo
+ * emparejamiento transaccional que usa una solicitud inmediata. El proceso
+ * se ejecuta desde server.js y es idempotente: cada fila se bloquea antes de
+ * cambiar de estado, por lo que dos instancias no despachan el mismo viaje.
+ */
+export async function dispatchScheduledTrips({ now = new Date() } = {}) {
+  return withTransaction(async (client) => {
+    const due = await client.query(
+      `${tripSelect}
+        WHERE status = 'scheduled' AND scheduled_pickup_at <= $1
+        ORDER BY scheduled_pickup_at ASC
+        FOR UPDATE SKIP LOCKED`,
+      [now],
+    );
+    let dispatched = 0;
+    for (const trip of due.rows) {
+      await client.query(
+        `UPDATE trips SET status = 'searching', updated_at = now() WHERE id = $1`,
+        [trip.id],
+      );
+      await assignAvailableDriver(client, trip.id, trip.passenger_count ?? 1);
+      dispatched += 1;
+    }
+    return dispatched;
+  });
+}
+
 export function createApp({ health = databaseHealth } = {}) {
   return http.createServer(async (req, res) => {
     try {

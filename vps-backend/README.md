@@ -49,6 +49,11 @@ y una prueba de recuperación del POS.
 - `POST /api/v1/device-tokens` registra el token del dispositivo; el envío
   push todavía se mantiene en Firebase hasta cerrar la migración FCM.
 
+El despachador del backend revisa cada 15 segundos los viajes programados cuya
+hora ya llegó y los pasa al emparejamiento transaccional. Si no hay un
+conductor aprobado y disponible, el viaje queda en `no_drivers_available` y
+puede reintentarse desde el endpoint de reintento.
+
 ## Siguiente fase
 
 Implementar autenticación, API de viajes, GPS, asignación, WebSocket y envío
