@@ -97,15 +97,66 @@ jobs:
         working-directory: ${{ inputs.app == 'driver' && 'driver-app' || 'passenger-app' }}
         env:
           GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false
+          PUB_CACHE: /home/runner/.pub-cache
         run: |
           set -euo pipefail
           test -n "$MAPBOX_ACCESS_TOKEN"
+          APK_PATH="$PWD/build/app/outputs/flutter-apk/app-release.apk"
+          BUILD_LOG="$RUNNER_TEMP/${APP_KIND}-signed-apk-build.log"
+          rm -f "$APK_PATH" "$BUILD_LOG"
+
+          kill_tree() {
+            local pid="$1"
+            [ -z "$pid" ] && return 0
+            for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+              kill_tree "$child"
+            done
+            kill "$pid" 2>/dev/null || true
+          }
+
+          heartbeat() {
+            while true; do
+              echo "Compilando APK firmado $APP_KIND... $(date -u +%H:%M:%S) UTC"
+              sleep 30
+            done
+          }
+
+          heartbeat &
+          HEARTBEAT_PID=$!
+          BUILD_PID=""
+          trap 'kill_tree "$BUILD_PID"; kill "$HEARTBEAT_PID" 2>/dev/null || true' EXIT
+          export GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false"
+
           flutter build apk --release --no-pub \
             --build-name "$VERSION_NAME" \
             --build-number "$BUILD_NUMBER" \
             --dart-define=MAPBOX_ACCESS_TOKEN="$MAPBOX_ACCESS_TOKEN" \
-            --dart-define=MAPBOX_STYLE_URI="${MAPBOX_STYLE_URI:-mapbox://styles/mapbox/standard}"
-          test -s build/app/outputs/flutter-apk/app-release.apk
+            --dart-define=MAPBOX_STYLE_URI="${MAPBOX_STYLE_URI:-mapbox://styles/mapbox/standard}" \
+            >"$BUILD_LOG" 2>&1 &
+          BUILD_PID=$!
+          BUILD_STATUS=0
+          APK_READY=false
+          while kill -0 "$BUILD_PID" 2>/dev/null; do
+            if [ -s "$APK_PATH" ] && unzip -t "$APK_PATH" >/dev/null 2>&1; then
+              APK_READY=true
+              echo "APK valida generada; cerrando el watcher de Gradle."
+              break
+            fi
+            sleep 15
+          done
+          if [ "$APK_READY" = true ]; then
+            kill_tree "$BUILD_PID"
+            BUILD_PID=""
+          else
+            wait "$BUILD_PID" || BUILD_STATUS=$?
+            BUILD_PID=""
+            if [ "$BUILD_STATUS" -ne 0 ] || [ ! -s "$APK_PATH" ]; then
+              echo "La compilación del APK firmado falló. Últimas líneas del log:"
+              tail -n 200 "$BUILD_LOG"
+              exit 1
+            fi
+          fi
+          unzip -t "$APK_PATH" >/dev/null
 
       - name: Upload signed APK artifact
         uses: actions/upload-artifact@v4
