@@ -11,6 +11,12 @@ const firebaseConfig = {
   measurementId: "G-MN64N2R9L6"
 };
 
+// Operational data is served by the Contabo VPS. Firebase remains here for
+// dashboard identity and FCM/legacy configuration during the migration.
+// Keeping the URL in the static runtime config avoids putting any secret in
+// the dashboard bundle.
+window.vpsApiBaseUrl = 'https://api.tucomprass.com';
+
 firebase.initializeApp(firebaseConfig);
 
 const auth = firebase.auth();

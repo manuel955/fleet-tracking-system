@@ -27,6 +27,52 @@ export function readBearer(request) {
   return header.slice('Bearer '.length).trim() || null;
 }
 
+let firebaseCertificates = { expiresAt: 0, values: null };
+
+async function getFirebaseCertificates() {
+  if (firebaseCertificates.values && firebaseCertificates.expiresAt > Date.now()) {
+    return firebaseCertificates.values;
+  }
+  const response = await fetch('https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com');
+  if (!response.ok) throw new Error(`Firebase certificate request failed: ${response.status}`);
+  const values = await response.json();
+  const maxAge = Number((response.headers.get('cache-control') || '').match(/max-age=(\d+)/i)?.[1] || 3600);
+  firebaseCertificates = { values, expiresAt: Date.now() + Math.max(60, maxAge - 30) * 1000 };
+  return values;
+}
+
+async function authenticateFirebaseDashboardToken(token) {
+  if (!config.firebaseDashboardAuth || !config.firebaseProjectId) return null;
+  const decoded = jwt.decode(token, { complete: true });
+  if (!decoded || typeof decoded !== 'object' || typeof decoded.header?.kid !== 'string') return null;
+  const certs = await getFirebaseCertificates();
+  const certificate = certs[decoded.header.kid];
+  if (!certificate) return null;
+  const claims = jwt.verify(token, certificate, {
+    algorithms: ['RS256'],
+    audience: config.firebaseProjectId,
+    issuer: `https://securetoken.google.com/${config.firebaseProjectId}`,
+  });
+  if (typeof claims !== 'object' || typeof claims.sub !== 'string') return null;
+  // Do not turn an ordinary passenger/driver Firebase session into a
+  // dashboard session. The custom claims are assigned by the existing
+  // initializeDashboardAdmin/manageDashboardUsers functions.
+  const isDashboard = claims.dashboardUser === true
+    || claims.dashboardAdmin === true
+    || claims.dashboardRole === 'ADMIN'
+    || claims.dashboardRole === 'SUPERVISOR'
+    || claims.dashboardRole === 'COORDINATOR';
+  if (!isDashboard) return null;
+  return {
+    id: claims.sub,
+    role: 'dashboard',
+    email: claims.email ?? null,
+    display_name: claims.name ?? claims.email ?? '',
+    status: 'active',
+    firebaseClaims: claims,
+  };
+}
+
 export async function authenticate(request) {
   const token = readBearer(request);
   if (!token || !pool) return null;
@@ -41,7 +87,11 @@ export async function authenticate(request) {
     if (!user || user.status !== 'active') return null;
     return user;
   } catch (_) {
-    return null;
+    try {
+      return await authenticateFirebaseDashboardToken(token);
+    } catch (_) {
+      return null;
+    }
   }
 }
 

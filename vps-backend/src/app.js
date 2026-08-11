@@ -260,6 +260,70 @@ async function listTrips(user, url) {
   return result.rows.map(publicTrip);
 }
 
+/**
+ * Read-only operational snapshot for the VPS-backed dashboard. Firebase
+ * remains the login/FCM provider, but this endpoint makes PostgreSQL the
+ * source of truth for the map, driver cards and trip counters. It is kept as
+ * one bounded snapshot so the browser can poll safely without opening a
+ * database or WebSocket connection from the public network.
+ */
+async function dashboardOverview(user) {
+  requireRole(user, ['dashboard']);
+  const [driversResult, tripsResult] = await Promise.all([
+    pool.query(`
+      SELECT d.id, u.display_name, u.email, u.status AS user_status,
+        d.approval_status, d.phone, d.plate, d.vehicle_type, d.vehicle_seats,
+        d.availability_status, d.current_trip_id,
+        l.latitude, l.longitude, l.accuracy_m, l.recorded_at
+      FROM drivers d
+      JOIN users u ON u.id = d.id
+      LEFT JOIN driver_locations l ON l.driver_id = d.id
+      ORDER BY u.display_name ASC, d.id ASC`),
+    pool.query(`${tripSelect} ORDER BY created_at DESC LIMIT 200`),
+  ]);
+
+  const trips = tripsResult.rows.map(publicTrip);
+  const tripById = new Map(trips.map((trip) => [trip.id, trip]));
+  const drivers = driversResult.rows.map((row) => ({
+    id: row.id,
+    name: row.display_name,
+    email: row.email,
+    userStatus: row.user_status,
+    approvalStatus: row.approval_status,
+    phone: row.phone,
+    plate: row.plate,
+    vehicleType: row.vehicle_type,
+    vehicleSeats: row.vehicle_seats,
+    availabilityStatus: row.availability_status,
+    currentTripId: row.current_trip_id,
+    currentTrip: row.current_trip_id ? tripById.get(row.current_trip_id) ?? null : null,
+    lat: row.latitude === null ? null : Number(row.latitude),
+    lng: row.longitude === null ? null : Number(row.longitude),
+    accuracyM: row.accuracy_m === null ? null : Number(row.accuracy_m),
+    lastUpdate: row.recorded_at ? new Date(row.recorded_at).getTime() : null,
+  }));
+
+  const todayTrips = trips.filter((trip) => {
+    const timestamp = Number(trip.requestedAt || 0);
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    return timestamp >= start.getTime();
+  });
+  return {
+    updatedAt: Date.now(),
+    drivers,
+    trips,
+    stats: {
+      vehicles: drivers.filter((driver) => driver.approvalStatus === 'approved').length,
+      active: drivers.filter((driver) => driver.approvalStatus === 'approved' && driver.availabilityStatus !== 'offline').length,
+      available: drivers.filter((driver) => driver.approvalStatus === 'approved' && driver.availabilityStatus === 'online' && !driver.currentTripId).length,
+      tripsToday: todayTrips.filter((trip) => trip.status !== 'cancelled').length,
+      completedToday: todayTrips.filter((trip) => trip.status === 'completed').length,
+      cancelledToday: todayTrips.filter((trip) => trip.status === 'cancelled').length,
+    },
+  };
+}
+
 async function setDriverAvailability(user, body) {
   requireRole(user, ['driver']);
   const online = body.online === true || body.online === 'true';
@@ -588,6 +652,11 @@ export function createApp({ health = databaseHealth } = {}) {
       if (req.method === 'POST' && url.pathname === '/api/v1/device-tokens') {
         const user = await authenticate(req);
         return json(res, 200, await registerDeviceToken(user, await readJson(req)));
+      }
+
+      if (req.method === 'GET' && url.pathname === '/api/v1/dashboard/overview') {
+        const user = await authenticate(req);
+        return json(res, 200, await dashboardOverview(user));
       }
 
       const driverLocationMatch = url.pathname.match(/^\/api\/v1\/trips\/([^/]+)\/driver-location$/);

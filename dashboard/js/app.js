@@ -10,6 +10,8 @@ const OFFLINE_AFTER_MS = 3 * 60 * 1000; // se retira el marcador del mapa tras 3
 const GPS_RENDER_INTERVAL_MS = 5 * 1000;
 const ROUTE_RECALCULATION_INTERVAL_MS = 30 * 1000;
 const ROUTE_RECALCULATION_DISTANCE_METERS = 50;
+const VPS_API_BASE_URL = String(window.vpsApiBaseUrl || '').replace(/\/$/, '');
+let vpsPollTimer = null;
 
 const STATE_COLORS = {
   connecting: '#0ea5e9',
@@ -240,6 +242,16 @@ function tryStartDashboard() {
   if (!mapboxReady) return;
   if (!subscribed) {
     subscribed = true;
+    if (VPS_API_BASE_URL) {
+      refreshVpsDashboard();
+      vpsPollTimer = setInterval(refreshVpsDashboard, 5000);
+      setInterval(() => {
+        if (!map) return;
+        Object.entries(driversCache).forEach(([driverId, d]) => updateMarkerForDriver(driverId, d));
+        scheduleSidebarRender();
+      }, GPS_RENDER_INTERVAL_MS);
+      return;
+    }
     subscribeToDrivers();
     subscribeTodayTrips();
     ['hotels', 'sportVenues'].forEach((key) => db.ref(`config/${key}`).on('value', (snapshot) => {
@@ -255,6 +267,46 @@ function tryStartDashboard() {
       Object.entries(driversCache).forEach(([driverId, d]) => updateMarkerForDriver(driverId, d));
       scheduleSidebarRender();
     }, GPS_RENDER_INTERVAL_MS);
+  }
+}
+
+async function refreshVpsDashboard() {
+  if (!VPS_API_BASE_URL || !auth.currentUser || !userAuthenticated) return;
+  try {
+    const token = await auth.currentUser.getIdToken();
+    const response = await fetch(`${VPS_API_BASE_URL}/api/v1/dashboard/overview`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!response.ok) throw new Error(`VPS dashboard ${response.status}`);
+    const snapshot = await response.json();
+    const nextDrivers = Object.fromEntries((snapshot.drivers || []).map((driver) => [driver.id, driver]));
+    driversCache = nextDrivers;
+    activeTripsCache = Object.fromEntries((snapshot.trips || [])
+      .filter((trip) => !['completed', 'cancelled'].includes(trip.status) && trip.driverId)
+      .map((trip) => [trip.id, trip]));
+    todayTripsCache = Object.fromEntries((snapshot.trips || []).map((trip) => [trip.id, trip]));
+
+    const seenIds = new Set(Object.keys(driversCache));
+    Object.keys(markers).forEach((id) => {
+      if (!seenIds.has(id)) {
+        markers[id].setMap(null);
+        delete markers[id];
+      }
+    });
+    if (expandedDriverId && !seenIds.has(expandedDriverId)) {
+      expandedDriverId = null;
+      clearRoute();
+    }
+    Object.entries(driversCache).forEach(([driverId, driver]) => updateMarkerForDriver(driverId, driver));
+    scheduleSidebarRender();
+    window.vpsDashboardLastError = '';
+  } catch (error) {
+    // Keep the last good snapshot visible. The top-level live indicator and
+    // freshness rules make a stale VPS connection obvious without blanking
+    // the operator's map during a short network hiccup.
+    window.vpsDashboardLastError = error?.message || 'VPS unavailable';
   }
 }
 
@@ -955,10 +1007,13 @@ async function cancelTrip(tripId) {
   if (reason.trim().length < 5) return alert('Escribe un motivo de al menos 5 caracteres.');
   try {
     const token = await auth.currentUser.getIdToken();
-    const response = await fetch('https://us-central1-rastreoflota-53052.cloudfunctions.net/cancelDashboardTrip', {
+    const endpoint = VPS_API_BASE_URL
+      ? `${VPS_API_BASE_URL}/api/v1/trips/${encodeURIComponent(tripId)}/cancel`
+      : 'https://us-central1-rastreoflota-53052.cloudfunctions.net/cancelDashboardTrip';
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tripId, reason: reason.trim() }),
+      body: JSON.stringify(VPS_API_BASE_URL ? { reason: reason.trim() } : { tripId, reason: reason.trim() }),
       signal: AbortSignal.timeout(15000),
     });
     const result = await response.json().catch(() => ({}));
