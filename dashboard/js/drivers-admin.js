@@ -69,6 +69,13 @@ let tripHistoryHoverDate = '';
 let tripHistoryClickTimer = null;
 let tripHistoryOutsideListenerBound = false;
 
+// El mapa ya usa el API del VPS como fuente operativa. Las vistas de
+// Conductores deben usar la misma fuente para no quedar en blanco cuando un
+// listener antiguo de Firebase tarda, falla o pierde la sesión.
+const DRIVER_ADMIN_VPS_API_BASE_URL = String(window.vpsApiBaseUrl || '').replace(/\/$/, '');
+let driverAdminVpsTimer = null;
+let driverAdminVpsError = '';
+
 const mapViewEl = document.getElementById('map-view');
 const adminViewEl = document.getElementById('drivers-admin-view');
 const pendingBadgeEl = document.getElementById('pending-badge');
@@ -105,6 +112,10 @@ function subscribeAdminValue(path, handler) {
 }
 
 function resetDriversAdminSubscriptions() {
+  if (driverAdminVpsTimer) {
+    clearInterval(driverAdminVpsTimer);
+    driverAdminVpsTimer = null;
+  }
   adminListenerBindings.forEach(({ reference, handler }) => reference.off('value', handler));
   adminListenerBindings = [];
   adminTripHistory = {};
@@ -127,6 +138,19 @@ function startDriversAdmin() {
   if (adminSubscribed) resetDriversAdminSubscriptions();
   adminSubscribed = true;
   adminSubscribedRole = role;
+
+  if (DRIVER_ADMIN_VPS_API_BASE_URL) {
+    // Pintar el estado inicial evita una pantalla vacía mientras se obtiene
+    // el primer token/snapshot. El refresco posterior reemplaza este estado.
+    driverAdminVpsError = '';
+    updatePendingBadge();
+    renderDriversAdmin();
+    refreshDriversAdminFromVps();
+    if (driverAdminVpsTimer) clearInterval(driverAdminVpsTimer);
+    driverAdminVpsTimer = setInterval(refreshDriversAdminFromVps, 5000);
+    return;
+  }
+
   subscribeAdminValue('drivers', (snapshot) => {
     adminDriversCache = snapshot.val() || {};
     updatePendingBadge();
@@ -140,6 +164,55 @@ function startDriversAdmin() {
     subscribeAdminValue('tripHistory', (snapshot) => { adminTripHistory = snapshot.val() || {}; renderDriversAdmin(); });
     subscribeAdminValue('tripFeedback', (snapshot) => { adminTripFeedback = snapshot.val() || {}; renderDriversAdmin(); });
     subscribeAdminValue('driverConnectionHistory', (snapshot) => { adminConnectionHistory = snapshot.val() || {}; renderDriversAdmin(); });
+  }
+}
+
+function mapVpsDriverForAdmin(driver) {
+  const availability = String(driver.availabilityStatus || 'offline').toLowerCase();
+  const status = availability === 'online'
+    ? (driver.currentTripId ? 'busy' : 'online')
+    : 'offline';
+  return {
+    ...driver,
+    approvalStatus: driver.approvalStatus || 'pending_review',
+    status,
+    estado_conexion: availability === 'online' ? 'ONLINE' : 'OFFLINE',
+    ultima_conexion: driver.lastUpdate || null,
+    lat: driver.lat,
+    lng: driver.lng,
+    lastUpdate: driver.lastUpdate,
+    assignedPlace: driver.assignedPlace || null,
+  };
+}
+
+async function refreshDriversAdminFromVps() {
+  if (!DRIVER_ADMIN_VPS_API_BASE_URL) return;
+  try {
+    const currentUser = auth.currentUser;
+    if (!currentUser) throw new Error('Sesión del dashboard no disponible.');
+    const token = await currentUser.getIdToken();
+    const response = await fetch(`${DRIVER_ADMIN_VPS_API_BASE_URL}/api/v1/dashboard/overview`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(15000),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.message || `API ${response.status}`);
+    adminDriversCache = Object.fromEntries(
+      (Array.isArray(result.drivers) ? result.drivers : []).map((driver) => [driver.id, mapVpsDriverForAdmin(driver)]),
+    );
+    adminTripHistory = Object.fromEntries(
+      (Array.isArray(result.trips) ? result.trips : []).map((trip) => [trip.id, trip]),
+    );
+    driverAdminVpsError = '';
+    updatePendingBadge();
+    renderDriversAdmin();
+  } catch (error) {
+    // Mantener el toolbar/estado vacío es preferible a dejar toda la vista en
+    // blanco. El siguiente ciclo reintenta sin interrumpir el mapa.
+    driverAdminVpsError = error?.message || 'No se pudo cargar el API del VPS.';
+    updatePendingBadge();
+    renderDriversAdmin();
   }
 }
 
@@ -382,7 +455,10 @@ function renderDriversAdmin() {
     ? `<div class="driver-admin-grid">${entries.map(([id, d]) => driverAdminCardHtml(id, d)).join('')}</div>`
     : '<p class="drivers-admin-empty">Sin conductores para este filtro.</p>';
 
-  adminViewEl.innerHTML = toolbarHtml + gridHtml;
+  const vpsErrorHtml = driverAdminVpsError
+    ? `<p class="settings-feedback error">No se pudo actualizar la flota: ${escapeHtml(driverAdminVpsError)}. Reintentando...</p>`
+    : '';
+  adminViewEl.innerHTML = toolbarHtml + vpsErrorHtml + gridHtml;
 
   adminViewEl.querySelectorAll('[data-admin-filter]').forEach((btn) => {
     btn.addEventListener('click', () => {

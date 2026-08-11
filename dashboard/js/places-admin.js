@@ -11,20 +11,59 @@ const PLACE_LISTS = [
 const placesViewEl = document.getElementById('places-view');
 let placesSubscribed = false;
 let placesCache = {};
+let placesLoadError = '';
+const FIREBASE_CONFIG_REST_URL = String(firebaseConfig?.databaseURL || '').replace(/\/$/, '');
 
 function startPlaces() {
   if (placesSubscribed) return;
   placesSubscribed = true;
+  // Renderizar de inmediato evita la pantalla blanca aunque Firebase tarde
+  // en abrir el listener. El REST público de config sirve como respaldo y
+  // conserva los lugares ya existentes durante la migración al VPS.
+  placesLoadError = '';
+  renderPlaces();
   PLACE_LISTS.forEach((list) => {
-    db.ref(`config/${list.key}`).on('value', (snapshot) => {
-      placesCache[list.key] = snapshot.val() || {};
-      renderPlaces();
-    });
+    db.ref(`config/${list.key}`).on(
+      'value',
+      (snapshot) => {
+        placesCache[list.key] = snapshot.val() || {};
+        placesLoadError = '';
+        renderPlaces();
+      },
+      (error) => {
+        placesLoadError = error?.message || 'No se pudo leer Firebase.';
+        renderPlaces();
+      },
+    );
   });
+  refreshPlacesFromRest();
+}
+
+async function refreshPlacesFromRest() {
+  if (!FIREBASE_CONFIG_REST_URL) return;
+  try {
+    const results = await Promise.all(PLACE_LISTS.map(async (list) => {
+      const response = await fetch(`${FIREBASE_CONFIG_REST_URL}/config/${list.key}.json`, {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!response.ok) throw new Error(`Firebase ${response.status}`);
+      return [list.key, (await response.json()) || {}];
+    }));
+    results.forEach(([key, value]) => { placesCache[key] = value; });
+    placesLoadError = '';
+    renderPlaces();
+  } catch (error) {
+    placesLoadError = error?.message || 'No se pudieron cargar los lugares.';
+    renderPlaces();
+  }
 }
 
 function renderPlaces() {
-  placesViewEl.innerHTML = PLACE_LISTS.map((list) => placeListCardHtml(list)).join('');
+  const errorHtml = placesLoadError
+    ? `<p class="settings-feedback error">No se pudo actualizar la lista: ${escapeHtml(placesLoadError)}. Reintentando con Firebase...</p>`
+    : '';
+  placesViewEl.innerHTML = errorHtml + PLACE_LISTS.map((list) => placeListCardHtml(list)).join('');
 
   PLACE_LISTS.forEach((list) => {
     document.getElementById(`place-form-${list.key}`).addEventListener('submit', (event) => {
