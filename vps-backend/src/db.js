@@ -16,3 +16,19 @@ export async function databaseHealth() {
 export async function closeDatabase() {
   await pool?.end();
 }
+
+export async function withTransaction(callback) {
+  if (!pool) throw new Error('Database is not configured');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await callback(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}

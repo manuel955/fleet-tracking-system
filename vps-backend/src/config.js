@@ -14,6 +14,7 @@ export const config = Object.freeze({
   redisUrl: process.env.REDIS_URL ?? '',
   s3Endpoint: process.env.S3_ENDPOINT ?? '',
   s3Bucket: process.env.S3_BUCKET ?? '',
+  jwtSecret: process.env.JWT_SECRET ?? 'development-only-secret-change-me',
 });
 
 export { required };
