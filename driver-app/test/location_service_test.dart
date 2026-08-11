@@ -118,5 +118,18 @@ void main() {
       ),
       isFalse,
     );
+    expect(
+      LocationService.shouldPublishPosition(
+        point(
+          latitude: -12.1,
+          longitude: -77.01,
+          timestamp: now,
+          accuracy: 45,
+        ),
+        null,
+        now: now,
+      ),
+      isFalse,
+    );
   });
 }

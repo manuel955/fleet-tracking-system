@@ -557,7 +557,10 @@ function updateMarkerForDriver(driverId, d) {
 
   if (markers[driverId]) {
     lastKnownMarkerIds.delete(driverId);
-    markers[driverId].setPosition(position);
+    // El GPS envia muestras cada ~2 s; una animacion de 5 s dejaba el
+    // marcador visualmente atrasado hasta una cuadra cuando el vehiculo
+    // avanzaba. Interpolamos solo lo suficiente para evitar saltos.
+    markers[driverId].setPosition(position, { durationMs: 900 });
     markers[driverId].setIcon(icon);
     markers[driverId].setOpacity(isStale ? 0.55 : 1);
   } else {

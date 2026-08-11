@@ -13,10 +13,12 @@ import 'notification_service.dart';
 
 const String _notificationChannelId = 'fleet_tracking_channel';
 const int _notificationId = 888;
-const Duration _uiGpsFixTimeout = Duration(seconds: 4);
+const Duration _uiGpsFixTimeout = Duration(seconds: 12);
 const Duration _networkTimeout = Duration(seconds: 8);
 const Duration _maxStreamPositionAge = Duration(seconds: 15);
-const double _maxAcceptedAccuracyMeters = 80;
+// No mostramos una coordenada con un radio de error de una cuadra como si
+// fuera exacta. El servicio sigue intentando hasta obtener una fijacion mejor.
+const double _maxAcceptedAccuracyMeters = 35;
 const double _stationarySpeedMetersPerSecond = 1.5;
 // A phone reporting ~50-60m horizontal accuracy can drift a whole block
 // while parked. A slow vehicle (speed <=1.5m/s) is still allowed to move
@@ -113,7 +115,7 @@ class LocationService {
 
     try {
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
+        desiredAccuracy: LocationAccuracy.bestForNavigation,
         timeLimit: _uiGpsFixTimeout,
       );
       return shouldPublishPosition(position, null) ? position : null;
@@ -299,9 +301,10 @@ void onServiceStart(ServiceInstance service) async {
 
   final LocationSettings locationSettings = Platform.isAndroid
       ? AndroidSettings(
-          accuracy: LocationAccuracy.high,
+          accuracy: LocationAccuracy.bestForNavigation,
           distanceFilter: _locationDistanceFilterMeters,
           intervalDuration: _locationUpdateInterval,
+          forceLocationManager: true,
         )
       : const LocationSettings(
           accuracy: LocationAccuracy.high,
