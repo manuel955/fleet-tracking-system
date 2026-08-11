@@ -37,6 +37,26 @@ class PassengerService {
   }
 
   static Future<Map<String, dynamic>> redeemInvite(String code) async {
+    if (AppConfig.useVpsBackend) {
+      final result = await VpsApiClient.redeemPassengerInvite(code);
+      final user = result['user'];
+      final token = result['token']?.toString();
+      final uid = user is Map ? user['id']?.toString() : null;
+      if (token == null || token.isEmpty || uid == null || uid.isEmpty) {
+        throw Exception('El API VPS no devolvió una sesión de invitado válida.');
+      }
+      await AuthService.adoptVpsSession(
+        uid: uid,
+        token: token,
+        email: user is Map ? user['email']?.toString() : null,
+        displayName: user is Map ? user['displayName']?.toString() : null,
+      );
+      final access = result['access'];
+      if (access is! Map) throw Exception('El VPS no devolvió el acceso del huésped.');
+      final normalizedAccess = Map<String, dynamic>.from(access);
+      await _persistAccess(normalizedAccess);
+      return normalizedAccess;
+    }
     final auth = await AuthService.signInAnonymously();
     final response = await http
         .post(

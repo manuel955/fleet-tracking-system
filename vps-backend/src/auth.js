@@ -80,7 +80,9 @@ export async function authenticate(request) {
     const claims = jwt.verify(token, config.jwtSecret);
     if (typeof claims !== 'object' || typeof claims.sub !== 'string') return null;
     const result = await pool.query(
-      'SELECT id, role, email, display_name, status FROM users WHERE id = $1',
+      `SELECT id, role, email, display_name, status,
+          passenger_access_invite_id, passenger_access_status, passenger_access_expires_at
+       FROM users WHERE id = $1`,
       [claims.sub],
     );
     const user = result.rows[0];

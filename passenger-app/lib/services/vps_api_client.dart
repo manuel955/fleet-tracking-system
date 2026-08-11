@@ -101,6 +101,13 @@ class VpsApiClient {
     },
   );
 
+  static Future<Map<String, dynamic>> redeemPassengerInvite(String code) =>
+      _request(
+        'POST',
+        '/api/v1/passenger-invites/redeem',
+        body: {'code': code},
+      );
+
   static Future<Map<String, dynamic>> me(String token) =>
       _request('GET', '/api/v1/auth/me', token: token);
 

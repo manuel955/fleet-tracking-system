@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { config } from './config.js';
 import { databaseHealth, pool, withTransaction } from './db.js';
 import { authenticate, hashPassword, publicUser, signUser, verifyPassword } from './auth.js';
@@ -97,6 +97,58 @@ const PUBLIC_CONFIG_KEYS = new Set([
   'driverApkUrl', 'passengerApkUrl',
 ]);
 
+function inviteTokenHash(token) {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+function normalizeInviteToken(value) {
+  let token = String(value ?? '').trim();
+  if (token.startsWith('apl-passenger://')) {
+    try { token = new URL(token).searchParams.get('token') || ''; } catch (_) { token = ''; }
+  }
+  if (token.startsWith('http://') || token.startsWith('https://')) {
+    try { token = new URL(token).searchParams.get('token') || ''; } catch (_) { token = ''; }
+  }
+  return /^[a-f0-9]{32,128}$/i.test(token) ? token.toLowerCase() : null;
+}
+
+function assertPassengerAccess(user) {
+  requireRole(user, ['passenger']);
+  if (user.passenger_access_status === 'revoked') {
+    const error = new Error('El acceso de pasajero fue revocado.');
+    error.statusCode = 403;
+    throw error;
+  }
+  if (user.passenger_access_expires_at && new Date(user.passenger_access_expires_at).getTime() <= Date.now()) {
+    const error = new Error('El acceso de pasajero ya venció.');
+    error.statusCode = 403;
+    throw error;
+  }
+}
+
+function publicInvite(row, token = null) {
+  const createdAt = new Date(row.created_at).getTime();
+  const expiresAt = new Date(row.expires_at).getTime();
+  const invite = {
+    id: row.id,
+    hotelId: row.hotel_id,
+    hotelName: row.hotel_name,
+    hotelAddress: row.hotel_address,
+    createdAt,
+    expiresAt,
+    maxUses: row.max_uses,
+    uses: row.uses,
+    status: row.status,
+    createdBy: row.created_by,
+    lastUsedAt: row.last_used_at ? new Date(row.last_used_at).getTime() : 0,
+  };
+  if (token) {
+    invite.token = token;
+    invite.qrValue = `apl-passenger://access?token=${encodeURIComponent(token)}`;
+  }
+  return invite;
+}
+
 async function savePublicConfig(user, key, value) {
   requireRole(user, ['dashboard']);
   if (!PUBLIC_CONFIG_KEYS.has(key)) {
@@ -145,6 +197,120 @@ async function removePlace(user, id) {
     throw error;
   }
   return { id };
+}
+
+async function managePassengerInvites(user, body) {
+  requireRole(user, ['dashboard']);
+  const action = requiredString(body.action, 'action', { max: 20 });
+  if (action === 'list') {
+    const result = await pool.query('SELECT * FROM passenger_invites ORDER BY created_at DESC');
+    return { invites: result.rows.map((row) => publicInvite(row)) };
+  }
+  if (action === 'create') {
+    const hotelId = requiredString(body.hotelId, 'hotelId', { max: 120 });
+    const placeResult = await pool.query(
+      `SELECT id, name, address, latitude, longitude FROM places
+       WHERE id = $1 AND category = 'hotels'`,
+      [hotelId],
+    );
+    const place = placeResult.rows[0];
+    if (!place) {
+      const error = new Error('Selecciona un hotel válido.');
+      error.statusCode = 400;
+      throw error;
+    }
+    const durationHours = Math.trunc(Math.min(720, Math.max(1, Number(body.durationHours ?? 24))));
+    const maxUses = Math.trunc(Math.min(100, Math.max(1, Number(body.maxUses ?? 1))));
+    if (!Number.isFinite(durationHours) || !Number.isFinite(maxUses)) {
+      const error = new Error('Duración o cantidad de usos inválida.');
+      error.statusCode = 400;
+      throw error;
+    }
+    const token = randomBytes(16).toString('hex');
+    const id = inviteTokenHash(token);
+    const result = await pool.query(
+      `INSERT INTO passenger_invites
+       (id, hotel_id, hotel_name, hotel_address, hotel_lat, hotel_lng, created_by, expires_at, max_uses)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, now() + ($8 * interval '1 hour'), $9)
+       RETURNING *`,
+      [id, place.id, place.name, place.address, place.latitude, place.longitude, user.id || user.email || 'dashboard', durationHours, maxUses],
+    );
+    return { invite: publicInvite(result.rows[0], token) };
+  }
+  if (action === 'revoke') {
+    const inviteId = requiredString(body.inviteId, 'inviteId', { max: 128 }).toLowerCase();
+    const result = await withTransaction(async (client) => {
+      const inviteResult = await client.query('SELECT * FROM passenger_invites WHERE id = $1 FOR UPDATE', [inviteId]);
+      const invite = inviteResult.rows[0];
+      if (!invite) {
+        const error = new Error('La invitación no existe.');
+        error.statusCode = 404;
+        throw error;
+      }
+      await client.query(`UPDATE passenger_invites SET status = 'revoked' WHERE id = $1`, [inviteId]);
+      const revoked = await client.query(
+        `UPDATE users SET passenger_access_status = 'revoked', updated_at = now()
+         WHERE passenger_access_invite_id = $1 AND passenger_access_status = 'authorized'`,
+        [inviteId],
+      );
+      return { revokedAccesses: revoked.rowCount || 0 };
+    });
+    return { ok: true, ...result };
+  }
+  const error = new Error('Acción inválida.');
+  error.statusCode = 400;
+  throw error;
+}
+
+async function redeemPassengerInvite(body) {
+  const token = normalizeInviteToken(body.code ?? body.token);
+  if (!token) {
+    const error = new Error('Código QR inválido.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const inviteId = inviteTokenHash(token);
+  const result = await withTransaction(async (client) => {
+    const inviteResult = await client.query('SELECT * FROM passenger_invites WHERE id = $1 FOR UPDATE', [inviteId]);
+    const invite = inviteResult.rows[0];
+    if (!invite || invite.status === 'revoked' || new Date(invite.expires_at).getTime() <= Date.now() || invite.uses >= invite.max_uses) {
+      const error = new Error('El código QR está vencido, revocado o ya fue utilizado.');
+      error.statusCode = 409;
+      throw error;
+    }
+    const guestId = randomUUID();
+    const guestEmail = `guest-${guestId}@guest.apl.invalid`;
+    const passwordHash = await hashPassword(randomBytes(24).toString('hex'));
+    const usedBy = invite.used_by && typeof invite.used_by === 'object' ? invite.used_by : {};
+    usedBy[guestId] = Date.now();
+    const uses = invite.uses + 1;
+    await client.query(
+      `UPDATE passenger_invites SET uses = $1, last_used_at = now(),
+       status = CASE WHEN $1 >= max_uses THEN 'used' ELSE 'active' END, used_by = $2::jsonb
+       WHERE id = $3`,
+      [uses, JSON.stringify(usedBy), inviteId],
+    );
+    const userResult = await client.query(
+      `INSERT INTO users (id, role, email, password_hash, display_name,
+         passenger_access_invite_id, passenger_access_status, passenger_access_expires_at)
+       VALUES ($1, 'passenger', $2, $3, $4, $5, 'authorized', $6)
+       RETURNING id, role, email, display_name, status`,
+      [guestId, guestEmail, passwordHash, invite.hotel_name, inviteId, invite.expires_at],
+    );
+    return { user: userResult.rows[0], invite };
+  });
+  return {
+    token: signUser(result.user),
+    user: publicUser(result.user),
+    access: {
+      status: 'authorized',
+      legacy: false,
+      inviteHash: inviteId,
+      hotelName: result.invite.hotel_name,
+      hotelAddress: result.invite.hotel_address,
+      expiresAt: new Date(result.invite.expires_at).getTime(),
+    },
+  };
 }
 
 async function register(body) {
@@ -303,7 +469,7 @@ async function assignAvailableDriver(client, tripId, passengerCount) {
 }
 
 async function createTrip(user, body) {
-  requireRole(user, ['passenger']);
+  assertPassengerAccess(user);
   const pickupAddress = requiredString(body.pickupAddress ?? body.originAddress, 'pickupAddress', { max: 255 });
   const destinationAddress = requiredString(body.destinationAddress, 'destinationAddress', { max: 255 });
   const pickupLat = parseCoordinate(body.pickupLat ?? body.originLat, 'pickupLat', -90, 90);
@@ -355,6 +521,7 @@ function canReadTrip(user, trip) {
 
 async function listTrips(user, url) {
   requireRole(user, ['passenger', 'driver', 'dashboard']);
+  if (user.role === 'passenger') assertPassengerAccess(user);
   const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? 50), 1), 100);
   const conditions = [];
   const values = [];
@@ -507,7 +674,7 @@ async function getDriverMe(user) {
 }
 
 async function getTripDriverLocation(user, tripId) {
-  requireRole(user, ['passenger']);
+  assertPassengerAccess(user);
   const trip = await findTrip(tripId);
   if (!trip || trip.passenger_id !== user.id || !trip.driver_id) {
     const error = new Error('Viaje no encontrado.');
@@ -596,7 +763,8 @@ async function advanceDriverTrip(user, tripId, body) {
 }
 
 async function cancelTrip(user, tripId, body) {
-  requireRole(user, ['passenger', 'dashboard']);
+  if (user?.role === 'passenger') assertPassengerAccess(user);
+  else requireRole(user, ['dashboard']);
   const reason = body.reason === undefined ? null : requiredString(body.reason, 'reason', { max: 255 });
   const trip = await withTransaction(async (client) => {
     const result = await client.query(`${tripSelect} WHERE id = $1 FOR UPDATE`, [tripId]);
@@ -638,7 +806,7 @@ async function cancelTrip(user, tripId, body) {
 }
 
 async function retryTrip(user, tripId) {
-  requireRole(user, ['passenger']);
+  assertPassengerAccess(user);
   return withTransaction(async (client) => {
     const result = await client.query(`${tripSelect} WHERE id = $1 FOR UPDATE`, [tripId]);
     const trip = result.rows[0];
@@ -658,7 +826,7 @@ async function retryTrip(user, tripId) {
 }
 
 async function submitFeedback(user, tripId, body) {
-  requireRole(user, ['passenger']);
+  assertPassengerAccess(user);
   const rating = Number(body.rating);
   if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
     const error = new Error('rating debe estar entre 1 y 5.');
@@ -842,6 +1010,15 @@ export function createApp({ health = databaseHealth } = {}) {
       if (req.method === 'DELETE' && placeDeleteMatch) {
         const user = await authenticate(req);
         return json(res, 200, await removePlace(user, decodeURIComponent(placeDeleteMatch[1])));
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/v1/dashboard/passenger-invites') {
+        const user = await authenticate(req);
+        return json(res, 200, await managePassengerInvites(user, await readJson(req)));
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/v1/passenger-invites/redeem') {
+        return json(res, 200, await redeemPassengerInvite(await readJson(req)));
       }
 
       if (req.method === 'POST' && url.pathname === '/api/v1/auth/register') {

@@ -276,6 +276,13 @@ function renderDashboardSettings() {
 
 async function passengerInvitesRequest(payload) {
   const token = await auth.currentUser.getIdToken();
+  if (window.vpsApiBaseUrl) {
+    return window.vpsConfigApi.request('/api/v1/dashboard/passenger-invites', {
+      token,
+      method: 'POST',
+      body: payload,
+    });
+  }
   const response = await fetch(
     'https://us-central1-rastreoflota-53052.cloudfunctions.net/managePassengerInvites',
     { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(15000) },

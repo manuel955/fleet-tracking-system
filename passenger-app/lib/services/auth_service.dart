@@ -137,6 +137,23 @@ class AuthService {
     return _persistFirebaseUser(user);
   }
 
+  /// Adopta la sesión temporal creada al canjear un QR del VPS. Se mantiene
+  /// separado del login por correo para que el flujo de recepción no cree una
+  /// cuenta Firebase ni requiera contraseña.
+  static Future<void> adoptVpsSession({
+    required String uid,
+    required String token,
+    String? email,
+    String? displayName,
+  }) async {
+    await _persistVpsUser(
+      uid: uid,
+      token: token,
+      email: email ?? 'guest-$uid@guest.apl.invalid',
+      displayName: displayName,
+    );
+  }
+
   static Future<void> sendPasswordResetEmail(String email) async {
     if (AppConfig.useVpsBackend) {
       throw Exception(
