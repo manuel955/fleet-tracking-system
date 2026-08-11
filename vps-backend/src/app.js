@@ -632,7 +632,7 @@ async function notifyVpsDevices(userIds, type, data = {}) {
  * cambiar de estado, por lo que dos instancias no despachan el mismo viaje.
  */
 export async function dispatchScheduledTrips({ now = new Date() } = {}) {
-  return withTransaction(async (client) => {
+  const dispatchedTrips = await withTransaction(async (client) => {
     const due = await client.query(
       `${tripSelect}
         WHERE status = 'scheduled' AND scheduled_pickup_at <= $1
@@ -640,17 +640,30 @@ export async function dispatchScheduledTrips({ now = new Date() } = {}) {
         FOR UPDATE SKIP LOCKED`,
       [now],
     );
-    let dispatched = 0;
+    const dispatched = [];
     for (const trip of due.rows) {
       await client.query(
         `UPDATE trips SET status = 'searching', updated_at = now() WHERE id = $1`,
         [trip.id],
       );
-      await assignAvailableDriver(client, trip.id, trip.passenger_count ?? 1);
-      dispatched += 1;
+      const driverId = await assignAvailableDriver(client, trip.id, trip.passenger_count ?? 1);
+      if (driverId) {
+        const updated = await client.query(`${tripSelect} WHERE id = $1`, [trip.id]);
+        dispatched.push({ trip: publicTrip(updated.rows[0]), driverId });
+      }
     }
     return dispatched;
   });
+  await Promise.all(dispatchedTrips.map(({ trip, driverId }) => notifyVpsDevices([driverId], 'trip_assigned', {
+    tripId: trip.id,
+    status: trip.status,
+    pickupAddress: trip.pickupAddress,
+    destinationAddress: trip.destinationAddress,
+    scheduledPickupAt: trip.scheduledPickupAt,
+    route: 'active-trip',
+    deepLink: `driver://trip/${trip.id}`,
+  })));
+  return dispatchedTrips.length;
 }
 
 export function createApp({ health = databaseHealth } = {}) {
