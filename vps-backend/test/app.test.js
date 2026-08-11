@@ -43,7 +43,7 @@ test('meta identifies the VPS core with Firebase retained for identity and push'
   const response = await request(server, '/api/v1/meta');
   server.close();
   assert.equal(response.status, 200);
-  assert.equal(response.body.migration, 'vps-core-firebase-auth-fcm');
+  assert.equal(response.body.migration, 'vps-core-config-firebase-auth-fcm');
   assert.equal(response.body.realtime, 'dashboard-polling');
 });
 

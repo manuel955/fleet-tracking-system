@@ -64,12 +64,12 @@ function applyDashboardName(name) {
 
 // El nombre del dashboard es publico para que tambien se muestre antes de
 // iniciar sesion, pero solo una cuenta de administrador puede modificarlo.
-db.ref('config/dashboardName').on('value', (snapshot) => {
+if (!window.vpsApiBaseUrl) db.ref('config/dashboardName').on('value', (snapshot) => {
   currentDashboardName = snapshot.val() || 'APL Logistic';
   applyDashboardName(currentDashboardName);
   if (settingsSubscribed) renderSettings();
 });
-db.ref('config/dashboardLogoUrl').on('value', (snapshot) => {
+if (!window.vpsApiBaseUrl) db.ref('config/dashboardLogoUrl').on('value', (snapshot) => {
   currentDashboardLogoUrl = snapshot.val() || '';
   applyDashboardLogo(currentDashboardLogoUrl);
   if (settingsSubscribed) renderSettings();
@@ -87,6 +87,10 @@ function applyDashboardLogo(url) {
 function startSettings() {
   if (settingsSubscribed) return;
   settingsSubscribed = true;
+  if (window.vpsApiBaseUrl) {
+    refreshSettingsFromVps();
+    return;
+  }
   db.ref('config/supportPhone').on('value', (snapshot) => {
     const raw = snapshot.val() || '';
     currentSupportPhone = normalizeSupportPhone(raw);
@@ -110,6 +114,29 @@ function startSettings() {
     if (settingsSection === 'users') renderDashboardUsers();
   }));
   loadAppDownloadUrls();
+}
+
+async function refreshSettingsFromVps() {
+  try {
+    const snapshot = await window.vpsConfigApi.publicConfig();
+    currentSupportPhone = normalizeSupportPhone(snapshot.supportPhone || '');
+    currentBuilds.driverAppBuild = snapshot.driverAppBuild;
+    currentBuilds.passengerAppBuild = snapshot.passengerAppBuild;
+    currentAppBranding = snapshot.appBranding || {};
+    currentDashboardName = snapshot.dashboardName || 'APL Logistic';
+    currentDashboardLogoUrl = snapshot.dashboardLogoUrl || '';
+    appDownloadUrls.driver = snapshot.driverApkUrl || '';
+    appDownloadUrls.passenger = snapshot.passengerApkUrl || '';
+    for (const key of ['hotels', 'sportVenues']) {
+      const rows = Array.isArray(snapshot?.places?.[key]) ? snapshot.places[key] : [];
+      dashboardPlacesCache[key] = Object.fromEntries(rows.map((place) => [place.id || place.name, place]));
+    }
+    applyDashboardName(currentDashboardName);
+    applyDashboardLogo(currentDashboardLogoUrl);
+    renderSettings();
+  } catch (error) {
+    settingsViewEl.innerHTML = `<p class="settings-feedback error">No se pudo cargar la configuración del VPS: ${escapeHtml(error.message || error)}</p>`;
+  }
 }
 
 async function loadAppDownloadUrls() {
@@ -411,7 +438,17 @@ async function saveDashboardLogo(file) {
   try {
     const ref = storage.ref('dashboard_branding/logo');
     await ref.put(file, { contentType: file.type });
-    await db.ref('config/dashboardLogoUrl').set(await ref.getDownloadURL());
+    const downloadUrl = await ref.getDownloadURL();
+    if (window.vpsApiBaseUrl) {
+      const token = await auth.currentUser.getIdToken();
+      await window.vpsConfigApi.request('/api/v1/dashboard/config/dashboardLogoUrl', {
+        token, method: 'PUT', body: { value: downloadUrl },
+      });
+      currentDashboardLogoUrl = downloadUrl;
+      applyDashboardLogo(downloadUrl);
+    } else {
+      await db.ref('config/dashboardLogoUrl').set(downloadUrl);
+    }
     feedback.textContent = 'Logo actualizado.';
     feedback.className = 'settings-feedback success';
   } catch (error) { feedback.textContent = error.message || error; feedback.className = 'settings-feedback error'; }
@@ -590,8 +627,12 @@ function saveDashboardName(name) {
   const feedback = document.getElementById('dashboard-name-feedback');
   feedback.textContent = 'Guardando…';
   feedback.className = 'settings-feedback';
-  db.ref('config/dashboardName')
-    .set(name)
+  const save = window.vpsApiBaseUrl
+    ? auth.currentUser.getIdToken().then((token) => window.vpsConfigApi.request('/api/v1/dashboard/config/dashboardName', {
+      token, method: 'PUT', body: { value: name },
+    }))
+    : db.ref('config/dashboardName').set(name);
+  save
     .then(() => {
       feedback.textContent = 'Nombre actualizado.';
       feedback.className = 'settings-feedback success';
@@ -787,8 +828,12 @@ function saveSupportPhone(value) {
   feedback.textContent = 'Guardando...';
   feedback.className = 'settings-feedback';
 
-  db.ref('config/supportPhone')
-    .set(value)
+  const save = window.vpsApiBaseUrl
+    ? auth.currentUser.getIdToken().then((token) => window.vpsConfigApi.request('/api/v1/dashboard/config/supportPhone', {
+      token, method: 'PUT', body: { value },
+    }))
+    : db.ref('config/supportPhone').set(value);
+  save
     .then(() => {
       feedback.textContent = 'Guardado. Los cambios se reflejan de inmediato en ambas apps.';
       feedback.className = 'settings-feedback success';
@@ -821,8 +866,20 @@ function publishAppUpdate(app, file, build) {
       // El build solo se publica (y dispara el aviso de actualizacion en las
       // apps) despues de que el archivo termino de subir, para que nunca
       // quede un numero de version apuntando a un APK incompleto.
-      db.ref(`config/${app.buildField}`)
-        .set(build)
+      const publish = uploadTask.snapshot.ref.getDownloadURL().then((downloadUrl) => {
+        appDownloadUrls[app.key] = downloadUrl;
+        if (window.vpsApiBaseUrl) {
+          return auth.currentUser.getIdToken().then(async (token) => {
+            await window.vpsConfigApi.request(`/api/v1/dashboard/config/${app.buildField}`, {
+              token, method: 'PUT', body: { value: build },
+            });
+            await window.vpsConfigApi.request(`/api/v1/dashboard/config/${app.key}ApkUrl`, {
+              token, method: 'PUT', body: { value: downloadUrl },
+            });
+          });
+        }
+        return db.ref(`config/${app.buildField}`).set(build);
+      })
         .then(() => {
           feedback.textContent = `Publicado: ${app.label} build ${build}.`;
           feedback.className = 'settings-feedback success';

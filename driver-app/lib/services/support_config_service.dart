@@ -10,6 +10,16 @@ import '../config.dart';
 class SupportConfigService {
   static Future<String> fetchSupportPhone() async {
     try {
+      if (AppConfig.useVpsBackend) {
+        final vpsResponse = await http
+            .get(Uri.parse('${AppConfig.vpsApiBaseUrl}/api/v1/public/config'))
+            .timeout(const Duration(seconds: 5));
+        if (vpsResponse.statusCode == 200) {
+          final payload = jsonDecode(vpsResponse.body);
+          final value = payload is Map ? payload['supportPhone'] : null;
+          if (value is String && value.isNotEmpty) return value;
+        }
+      }
       final uri =
           Uri.parse('${AppConfig.firebaseDbUrl}/config/supportPhone.json');
       final response = await http.get(uri).timeout(const Duration(seconds: 5));

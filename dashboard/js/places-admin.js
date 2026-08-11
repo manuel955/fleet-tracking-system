@@ -22,6 +22,10 @@ function startPlaces() {
   // conserva los lugares ya existentes durante la migración al VPS.
   placesLoadError = '';
   renderPlaces();
+  if (window.vpsApiBaseUrl) {
+    refreshPlacesFromVps();
+    return;
+  }
   PLACE_LISTS.forEach((list) => {
     db.ref(`config/${list.key}`).on(
       'value',
@@ -37,6 +41,20 @@ function startPlaces() {
     );
   });
   refreshPlacesFromRest();
+}
+
+async function refreshPlacesFromVps() {
+  try {
+    const snapshot = await window.vpsConfigApi.publicConfig();
+    PLACE_LISTS.forEach((list) => {
+      const rows = Array.isArray(snapshot?.places?.[list.key]) ? snapshot.places[list.key] : [];
+      placesCache[list.key] = Object.fromEntries(rows.map((place) => [place.id || place.name, place]));
+    });
+    placesLoadError = '';
+  } catch (error) {
+    placesLoadError = error?.message || 'No se pudieron cargar los lugares del VPS.';
+  }
+  renderPlaces();
 }
 
 async function refreshPlacesFromRest() {
@@ -75,7 +93,15 @@ function renderPlaces() {
   placesViewEl.querySelectorAll('[data-delete-place]').forEach((button) => {
     button.addEventListener('click', () => {
       const [key, id] = button.getAttribute('data-delete-place').split('|');
-      if (confirm('Eliminar este lugar?')) db.ref(`config/${key}/${id}`).remove();
+      if (!confirm('Eliminar este lugar?')) return;
+      if (window.vpsApiBaseUrl) {
+        auth.currentUser.getIdToken()
+          .then((token) => window.vpsConfigApi.request(`/api/v1/dashboard/places/${encodeURIComponent(id)}`, { token, method: 'DELETE' }))
+          .then(() => refreshPlacesFromVps())
+          .catch((error) => { placesLoadError = error.message || 'No se pudo eliminar.'; renderPlaces(); });
+      } else {
+        db.ref(`config/${key}/${id}`).remove();
+      }
     });
   });
 }
@@ -125,12 +151,23 @@ async function addPlace(key) {
       throw new Error('El mapa todavia no esta listo');
     }
     const location = await map.geocodeAddress(address);
-    await db.ref(`config/${key}`).push({
+    const place = {
       name,
       address,
       lat: location.lat,
       lng: location.lng,
-    });
+    };
+    if (window.vpsApiBaseUrl) {
+      const token = await auth.currentUser.getIdToken();
+      await window.vpsConfigApi.request('/api/v1/dashboard/places', {
+        token,
+        method: 'POST',
+        body: { category: key, ...place },
+      });
+      await refreshPlacesFromVps();
+    } else {
+      await db.ref(`config/${key}`).push(place);
+    }
     nameInput.value = '';
     addressInput.value = '';
     feedback.textContent = 'Agregado.';

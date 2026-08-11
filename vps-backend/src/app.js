@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { config } from './config.js';
 import { databaseHealth, pool, withTransaction } from './db.js';
 import { authenticate, hashPassword, publicUser, signUser, verifyPassword } from './auth.js';
@@ -24,7 +25,7 @@ function applyCors(req, res) {
   if (!origin || !DASHBOARD_ORIGINS.has(origin)) return false;
   res.setHeader('access-control-allow-origin', origin);
   res.setHeader('access-control-allow-credentials', 'true');
-  res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
+  res.setHeader('access-control-allow-methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('access-control-allow-headers', 'Authorization, Content-Type');
   res.setHeader('access-control-max-age', '600');
   res.setHeader('vary', 'Origin');
@@ -64,6 +65,86 @@ function requireRole(user, roles) {
     error.statusCode = 403;
     throw error;
   }
+}
+
+async function readPublicConfig() {
+  if (!pool) throw new Error('Database is not configured');
+  const [configResult, placesResult] = await Promise.all([
+    pool.query('SELECT key, value FROM app_config ORDER BY key'),
+    pool.query(`SELECT id, category, name, address, latitude, longitude
+                  FROM places ORDER BY category, name`),
+  ]);
+  const configValues = Object.fromEntries(
+    configResult.rows.map((row) => [row.key, row.value]),
+  );
+  const places = { hotels: [], sportVenues: [] };
+  for (const row of placesResult.rows) {
+    if (!places[row.category]) continue;
+    places[row.category].push({
+      id: row.id,
+      name: row.name,
+      address: row.address,
+      lat: Number(row.latitude),
+      lng: Number(row.longitude),
+    });
+  }
+  return { ...configValues, places };
+}
+
+const PUBLIC_CONFIG_KEYS = new Set([
+  'supportPhone', 'driverAppBuild', 'passengerAppBuild',
+  'dashboardName', 'dashboardLogoUrl', 'appBranding',
+  'driverApkUrl', 'passengerApkUrl',
+]);
+
+async function savePublicConfig(user, key, value) {
+  requireRole(user, ['dashboard']);
+  if (!PUBLIC_CONFIG_KEYS.has(key)) {
+    const error = new Error('Clave de configuración no permitida.');
+    error.statusCode = 400;
+    throw error;
+  }
+  await pool.query(
+    `INSERT INTO app_config (key, value, updated_at) VALUES ($1, $2::jsonb, now())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+    [key, JSON.stringify(value)],
+  );
+  return { key, value };
+}
+
+async function savePlace(user, body) {
+  requireRole(user, ['dashboard']);
+  const category = requiredString(body.category, 'category', { max: 20 });
+  if (!['hotels', 'sportVenues'].includes(category)) {
+    const error = new Error('Categoría de lugar inválida.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const name = requiredString(body.name, 'name', { max: 160 });
+  const address = requiredString(body.address ?? '', 'address', { min: 0, max: 255 });
+  const latitude = parseCoordinate(body.lat ?? body.latitude, 'lat', -90, 90);
+  const longitude = parseCoordinate(body.lng ?? body.longitude, 'lng', -180, 180);
+  const id = requiredString(body.id ?? randomUUID(), 'id', { max: 120 });
+  await pool.query(
+    `INSERT INTO places (id, category, name, address, latitude, longitude, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, now())
+     ON CONFLICT (id) DO UPDATE SET category=EXCLUDED.category, name=EXCLUDED.name,
+       address=EXCLUDED.address, latitude=EXCLUDED.latitude, longitude=EXCLUDED.longitude,
+       updated_at=now()`,
+    [id, category, name, address, latitude, longitude],
+  );
+  return { id, category, name, address, lat: latitude, lng: longitude };
+}
+
+async function removePlace(user, id) {
+  requireRole(user, ['dashboard']);
+  const result = await pool.query('DELETE FROM places WHERE id = $1 RETURNING id', [id]);
+  if (!result.rowCount) {
+    const error = new Error('Lugar no encontrado.');
+    error.statusCode = 404;
+    throw error;
+  }
+  return { id };
 }
 
 async function register(body) {
@@ -726,10 +807,41 @@ export function createApp({ health = databaseHealth } = {}) {
       if (req.method === 'GET' && url.pathname === '/api/v1/meta') {
         return json(res, 200, {
           apiVersion: 'v1',
-          migration: 'vps-core-firebase-auth-fcm',
+          migration: 'vps-core-config-firebase-auth-fcm',
           realtime: 'dashboard-polling',
           storage: config.s3Bucket ? 's3-compatible' : 'unconfigured',
         });
+      }
+
+      // Public, cache-free configuration for the mobile apps. Operational
+      // data (trips/GPS) never comes from this endpoint; it is only the small
+      // set of places, support and update values formerly kept in RTDB.
+      if (req.method === 'GET' && url.pathname === '/api/v1/public/config') {
+        return json(res, 200, await readPublicConfig());
+      }
+
+      const publicPlacesMatch = url.pathname.match(/^\/api\/v1\/public\/places\/(hotels|sportVenues)$/);
+      if (req.method === 'GET' && publicPlacesMatch) {
+        const configSnapshot = await readPublicConfig();
+        return json(res, 200, { places: configSnapshot.places[publicPlacesMatch[1]] || [] });
+      }
+
+      const configWriteMatch = url.pathname.match(/^\/api\/v1\/dashboard\/config\/([A-Za-z0-9_-]+)$/);
+      if (req.method === 'PUT' && configWriteMatch) {
+        const user = await authenticate(req);
+        const body = await readJson(req);
+        return json(res, 200, await savePublicConfig(user, configWriteMatch[1], body.value));
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/v1/dashboard/places') {
+        const user = await authenticate(req);
+        return json(res, 200, { place: await savePlace(user, await readJson(req)) });
+      }
+
+      const placeDeleteMatch = url.pathname.match(/^\/api\/v1\/dashboard\/places\/([^/]+)$/);
+      if (req.method === 'DELETE' && placeDeleteMatch) {
+        const user = await authenticate(req);
+        return json(res, 200, await removePlace(user, decodeURIComponent(placeDeleteMatch[1])));
       }
 
       if (req.method === 'POST' && url.pathname === '/api/v1/auth/register') {

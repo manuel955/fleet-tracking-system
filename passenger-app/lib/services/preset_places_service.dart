@@ -21,17 +21,24 @@ class PresetPlace {
 /// database/firebase-rules.json y dashboard/js/places-admin.js.
 class PresetPlacesService {
   static Future<List<PresetPlace>> fetch(String configKey) async {
-    final uri = Uri.parse('${AppConfig.firebaseDbUrl}/config/$configKey.json');
+    final uri = AppConfig.useVpsBackend
+        ? Uri.parse('${AppConfig.vpsApiBaseUrl}/api/v1/public/places/$configKey')
+        : Uri.parse('${AppConfig.firebaseDbUrl}/config/$configKey.json');
     final response = await http.get(uri).timeout(const Duration(seconds: 10));
     if (response.statusCode != 200) {
       throw Exception(
-        'Firebase rechazo la consulta (${response.statusCode}): ${response.body}',
+        '${AppConfig.useVpsBackend ? 'API VPS' : 'Firebase'} rechazo la consulta (${response.statusCode}): ${response.body}',
       );
     }
-    final data = jsonDecode(response.body);
+    final decoded = jsonDecode(response.body);
+    final data = AppConfig.useVpsBackend && decoded is Map
+        ? decoded['places']
+        : decoded;
     if (data == null) return [];
-    final map = Map<String, dynamic>.from(data);
-    return map.values
+    final values = AppConfig.useVpsBackend && data is List
+        ? data
+        : Map<String, dynamic>.from(data).values;
+    return values
         .map((v) {
           final place = Map<String, dynamic>.from(v as Map);
           return PresetPlace(

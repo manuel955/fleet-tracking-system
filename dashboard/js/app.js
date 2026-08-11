@@ -244,7 +244,9 @@ function tryStartDashboard() {
     subscribed = true;
     if (VPS_API_BASE_URL) {
       refreshVpsDashboard();
+      refreshVpsPublicConfig();
       vpsPollTimer = setInterval(refreshVpsDashboard, 5000);
+      setInterval(refreshVpsPublicConfig, 60000);
       setInterval(() => {
         if (!map) return;
         Object.entries(driversCache).forEach(([driverId, d]) => updateMarkerForDriver(driverId, d));
@@ -267,6 +269,26 @@ function tryStartDashboard() {
       Object.entries(driversCache).forEach(([driverId, d]) => updateMarkerForDriver(driverId, d));
       scheduleSidebarRender();
     }, GPS_RENDER_INTERVAL_MS);
+  }
+}
+
+async function refreshVpsPublicConfig() {
+  if (!VPS_API_BASE_URL || !window.vpsConfigApi) return;
+  try {
+    const snapshot = await window.vpsConfigApi.publicConfig();
+    const lists = snapshot?.places || {};
+    for (const key of ['hotels', 'sportVenues']) {
+      const entries = Array.isArray(lists[key]) ? lists[key] : [];
+      mapPlacesCache[key] = Object.fromEntries(entries.map((place) => [place.id || place.name, place]));
+    }
+    if (snapshot?.dashboardName) {
+      document.querySelectorAll('[data-dashboard-name]').forEach((element) => {
+        element.textContent = snapshot.dashboardName;
+      });
+    }
+    scheduleSidebarRender();
+  } catch (_) {
+    // The last good place list remains usable during a brief VPS outage.
   }
 }
 
