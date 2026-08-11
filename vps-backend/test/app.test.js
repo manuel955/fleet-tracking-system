@@ -25,12 +25,13 @@ test('health reports a configured dependency-free local service', async () => {
   assert.equal(response.body.status, 'ok');
 });
 
-test('meta identifies the parallel migration without changing Firebase clients', async () => {
+test('meta identifies the VPS core with Firebase retained for identity and push', async () => {
   const server = createApp({ health: async () => ({ configured: false, reachable: false }) });
   const response = await request(server, '/api/v1/meta');
   server.close();
   assert.equal(response.status, 200);
-  assert.equal(response.body.migration, 'firebase-parallel');
+  assert.equal(response.body.migration, 'vps-core-firebase-auth-fcm');
+  assert.equal(response.body.realtime, 'dashboard-polling');
 });
 
 test('unknown routes are JSON 404s', async () => {

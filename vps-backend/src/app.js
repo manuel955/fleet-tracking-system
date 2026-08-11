@@ -614,8 +614,8 @@ export function createApp({ health = databaseHealth } = {}) {
       if (req.method === 'GET' && url.pathname === '/api/v1/meta') {
         return json(res, 200, {
           apiVersion: 'v1',
-          migration: 'firebase-parallel',
-          realtime: 'websocket-pending',
+          migration: 'vps-core-firebase-auth-fcm',
+          realtime: 'dashboard-polling',
           storage: config.s3Bucket ? 's3-compatible' : 'unconfigured',
         });
       }
