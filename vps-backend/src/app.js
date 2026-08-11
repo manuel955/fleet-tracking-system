@@ -622,10 +622,11 @@ async function notifyVpsDevices(userIds, type, data = {}) {
   if (!config.fcmWebhookUrl || !config.fcmWebhookSecret || !pool || !userIds?.length) return;
   try {
     const result = await pool.query(
-      'SELECT token FROM device_tokens WHERE user_id = ANY($1::uuid[])',
+      'SELECT id, token FROM device_tokens WHERE user_id = ANY($1::uuid[])',
       [userIds],
     );
-    const tokens = result.rows.map((row) => row.token).filter(Boolean);
+    const tokenRows = result.rows.filter((row) => row.token);
+    const tokens = tokenRows.map((row) => row.token);
     if (!tokens.length) return;
     const response = await fetch(config.fcmWebhookUrl, {
       method: 'POST',
@@ -636,7 +637,25 @@ async function notifyVpsDevices(userIds, type, data = {}) {
       body: JSON.stringify({ tokens, type, data }),
       signal: AbortSignal.timeout(8000),
     });
-    if (!response.ok) console.error(`FCM webhook returned ${response.status}`);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error(`FCM webhook returned ${response.status}`);
+      return;
+    }
+    const staleCodes = new Set([
+      'messaging/registration-token-not-registered',
+      'messaging/invalid-registration-token',
+    ]);
+    const staleIds = (Array.isArray(payload.failures) ? payload.failures : [])
+      .filter((failure) => staleCodes.has(failure?.code))
+      .map((failure) => tokenRows[Number(failure.index)]?.id)
+      .filter(Boolean);
+    if (staleIds.length) {
+      await pool.query('DELETE FROM device_tokens WHERE id = ANY($1::bigint[])', [staleIds]);
+    }
+    if (Number(payload.failed || 0) > 0) {
+      console.error(`FCM webhook delivered ${payload.sent || 0}, failed ${payload.failed}`);
+    }
   } catch (error) {
     // A push outage must never roll back a committed trip transition.
     console.error(`FCM webhook failed: ${error?.message || error}`);

@@ -40,6 +40,17 @@ test('un conductor con GPS reciente y estado online aparece disponible', () => {
   assert.equal(freshnessStatus(now - 5_000, now), 'online');
 });
 
+test('un snapshot del VPS con availabilityStatus online aparece disponible', () => {
+  const state = driverState({
+    availabilityStatus: 'online',
+    lat: -12.1,
+    lng: -77.0,
+    lastUpdate: now - 5_000,
+  }, {}, now);
+
+  assert.equal(state, 'available');
+});
+
 test('un conductor que terminó turno sigue apareciendo como desconectado', () => {
   const state = driverState({
     status: null,

@@ -99,7 +99,23 @@ exports.sendVpsPush = functions.https.onRequest(async (req, res) => {
       data,
       android: { priority: 'high', ttl: 120000, directBootOk: true },
     });
-    return res.status(200).json({ sent: result.successCount, failed: result.failureCount });
+    const failures = result.responses
+      .map((entry, index) => ({
+        index,
+        code: entry.success ? null : entry.error?.code || 'unknown',
+        message: entry.success ? null : entry.error?.message || 'unknown',
+      }))
+      .filter((entry) => entry.code);
+    if (failures.length) {
+      // Keep the token itself out of logs. The index lets the VPS correlate a
+      // failed token with its request and remove stale registrations safely.
+      console.error(`VPS FCM bridge fallos: ${JSON.stringify(failures)}`);
+    }
+    return res.status(200).json({
+      sent: result.successCount,
+      failed: result.failureCount,
+      failures,
+    });
   } catch (error) {
     console.error(`VPS FCM bridge fallo: ${error.message || error}`);
     return res.status(502).json({ error: 'fcm_unavailable' });

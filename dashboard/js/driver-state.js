@@ -18,7 +18,15 @@
 
   function driverState(driver, activeTripsCache = {}, now = Date.now()) {
     const d = driver || {};
-    const operational = d.turno_activo === true || CONNECTED_STATUSES.has(d.status);
+    // The VPS snapshot exposes `availabilityStatus`, while the legacy
+    // Firebase snapshot exposes `status`/`turno_activo`.  Treat both as the
+    // same operational signal; otherwise every VPS driver is painted
+    // disconnected even while its GPS heartbeat is fresh.
+    const operationalStatus = String(
+      d.status ?? d.availabilityStatus ?? '',
+    ).toLowerCase();
+    const operational = d.turno_activo === true ||
+      CONNECTED_STATUSES.has(operationalStatus);
     const signalExpired = freshnessStatus(d.lastUpdate, now) === 'offline';
     const hasCoordinates = typeof d.lat === 'number' && typeof d.lng === 'number';
     const sessionStartedAt = Number(d.gpsSessionStartedAt || 0);
@@ -39,13 +47,13 @@
       // cubre una ventana breve de desincronizacion mientras el backend
       // limpia currentTripId.
       if (trip && (trip.status === 'cancelled' || trip.status === 'completed')) {
-        return CONNECTED_STATUSES.has(d.status) ? 'available' : 'offline';
+      return CONNECTED_STATUSES.has(operationalStatus) ? 'available' : 'offline';
       }
       if (trip && trip.status === 'in_progress') return 'on_trip';
       return 'to_pickup';
     }
 
-    return CONNECTED_STATUSES.has(d.status) ? 'available' : 'offline';
+    return CONNECTED_STATUSES.has(operationalStatus) ? 'available' : 'offline';
   }
 
   const api = Object.freeze({ freshnessStatus, driverState });
