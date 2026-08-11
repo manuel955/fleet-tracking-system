@@ -31,11 +31,11 @@ Invoke-WebRequest http://127.0.0.1:8080/health
 5. Publicar únicamente el API mediante Nginx/Caddy con HTTPS.
 6. Activar backups de PostgreSQL y MinIO antes de migrar usuarios reales.
 
-En el VPS actual el API queda aislado en `127.0.0.1:8080` y se publica por
-HTTPS únicamente bajo `https://apl.tucomprass.com/api/v1/*`. La configuración
-versionada de Caddy está en `deploy/Caddyfile.contabo`; el override
-`deploy/docker-compose.caddy-host-gateway.yml` conecta Caddy a la red privada
-del API sin abrir el puerto 8080 a Internet.
+En el VPS actual el API queda aislado en `127.0.0.1:8080` y no se mezcla con
+el Caddy ni con la red Docker del POS. El POS usa su propia configuración y
+no debe reutilizarse para publicar este API. Antes de exponerlo habrá que
+provisionar un dominio/proxy independiente, con una ventana de mantenimiento
+y una prueba de recuperación del POS.
 
 ## Contrato disponible
 
