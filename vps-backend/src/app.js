@@ -139,9 +139,16 @@ export function createApp({ health = databaseHealth } = {}) {
 
       return json(res, 404, { error: 'not_found' });
     } catch (error) {
-      return json(res, error.statusCode ?? 503, {
-        error: 'service_unavailable',
-        message: config.nodeEnv === 'production' ? 'Service unavailable' : error.message,
+      console.error('request failed', req.method, req.url, error?.code ?? '', error?.message ?? error);
+      const statusCode = error.statusCode ?? (error.code === '23505' ? 409 : 503);
+      return json(res, statusCode, {
+        error: statusCode === 401 ? 'unauthorized' :
+          statusCode === 403 ? 'forbidden' :
+            statusCode === 409 ? 'conflict' :
+              statusCode === 400 ? 'bad_request' : 'service_unavailable',
+        message: statusCode < 500 || config.nodeEnv !== 'production'
+          ? error.message
+          : 'Service unavailable',
       });
     }
   });
