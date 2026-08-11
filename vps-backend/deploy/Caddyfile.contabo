@@ -1,0 +1,46 @@
+http://{$DOMAIN:86.48.19.189} {
+  encode zstd gzip
+
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    -Server
+  }
+
+  handle_path /updates/* {
+    root * /srv/updates
+    file_server
+  }
+
+  handle_path /api/* {
+    reverse_proxy backend:3000
+  }
+
+  handle {
+    reverse_proxy dashboard:3001
+  }
+}
+
+# Fleet dashboard and VPS API share the existing HTTPS hostname.
+apl.tucomprass.com {
+  route {
+    handle /api/v1/* {
+      reverse_proxy api:8080
+    }
+
+    root * /srv/fleet-dashboard
+    try_files {path} /index.html
+    encode zstd gzip
+    header {
+      X-Content-Type-Options nosniff
+      X-Frame-Options DENY
+      Referrer-Policy no-referrer
+      Strict-Transport-Security "max-age=31536000; includeSubDomains"
+      Permissions-Policy "camera=(), microphone=(), geolocation=()"
+      Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' https://www.gstatic.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://api.mapbox.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://api.mapbox.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https://firebasestorage.googleapis.com https://api.mapbox.com https://*.tiles.mapbox.com; connect-src 'self' https://apl.tucomprass.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com https://*.cloudfunctions.net https://api.mapbox.com https://events.mapbox.com https://*.tiles.mapbox.com; frame-src https://rastreoflota-53052.firebaseapp.com; worker-src 'self' blob: https://cdnjs.cloudflare.com"
+    }
+    file_server
+  }
+}
