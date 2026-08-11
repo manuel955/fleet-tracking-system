@@ -1,0 +1,115 @@
+name: Build signed APK for device QA
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: App to build
+        required: true
+        type: choice
+        options: [driver, passenger]
+      build_number:
+        description: Android version code
+        required: true
+        type: string
+      version_name:
+        description: Android version name
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      APP_KIND: ${{ inputs.app }}
+      BUILD_NUMBER: ${{ inputs.build_number }}
+      VERSION_NAME: ${{ inputs.version_name }}
+      ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+      ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+      ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+      ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+      ANDROID_RELEASE_CERT_SHA256: ${{ secrets.ANDROID_RELEASE_CERT_SHA256 }}
+      ANDROID_DRIVER_UPLOAD_CERT_SHA1: 70:F3:02:09:6D:1F:87:43:A2:15:B2:EB:B8:F4:30:41:EE:55:D5:A7
+      FLEET_KEYSTORE_PATH: /home/runner/.android/fleet-signing.keystore
+      GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+      PASSENGER_GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.PASSENGER_GOOGLE_SERVICES_JSON_BASE64 }}
+      MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
+      MAPBOX_STYLE_URI: ${{ secrets.MAPBOX_STYLE_URI }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore Android signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ANDROID_RELEASE_KEYSTORE_BASE64"
+          test -n "$ANDROID_RELEASE_KEYSTORE_PASSWORD"
+          test -n "$ANDROID_RELEASE_KEY_ALIAS"
+          test -n "$ANDROID_RELEASE_KEY_PASSWORD"
+          printf 'FLEET_KEYSTORE_PASSWORD=%s\n' "$ANDROID_RELEASE_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          printf 'FLEET_KEY_ALIAS=%s\n' "$ANDROID_RELEASE_KEY_ALIAS" >> "$GITHUB_ENV"
+          printf 'FLEET_KEY_PASSWORD=%s\n' "$ANDROID_RELEASE_KEY_PASSWORD" >> "$GITHUB_ENV"
+          mkdir -p "$(dirname "$FLEET_KEYSTORE_PATH")"
+          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$FLEET_KEYSTORE_PATH"
+
+      - name: Verify signing certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEYTOOL_OUTPUT=$(keytool -list -v -keystore "$FLEET_KEYSTORE_PATH" \
+            -storepass "$FLEET_KEYSTORE_PASSWORD" -alias "$FLEET_KEY_ALIAS")
+          ACTUAL_SHA256=$(printf '%s\n' "$KEYTOOL_OUTPUT" | sed -n 's/.*SHA256: //p' | head -n 1 | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+          EXPECTED_SHA256=$(printf '%s' "$ANDROID_RELEASE_CERT_SHA256" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+          test -n "$ACTUAL_SHA256" && test "$ACTUAL_SHA256" = "$EXPECTED_SHA256"
+          if [ "$APP_KIND" = "driver" ]; then
+            ACTUAL_SHA1=$(printf '%s\n' "$KEYTOOL_OUTPUT" | sed -n 's/.*SHA1: //p' | head -n 1 | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+            EXPECTED_SHA1=$(printf '%s' "$ANDROID_DRIVER_UPLOAD_CERT_SHA1" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+            test "$ACTUAL_SHA1" = "$EXPECTED_SHA1"
+          fi
+          echo "Certificado release verificado para $APP_KIND."
+
+      - name: Restore Firebase Android configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$APP_KIND" = "passenger" ]; then
+            FIREBASE_JSON="$PASSENGER_GOOGLE_SERVICES_JSON_BASE64"
+          else
+            FIREBASE_JSON="$GOOGLE_SERVICES_JSON_BASE64"
+          fi
+          test -n "$FIREBASE_JSON"
+          printf '%s' "$FIREBASE_JSON" | base64 --decode > "$APP_KIND-app/android/app/google-services.json"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Prepare Flutter dependencies
+        working-directory: ${{ inputs.app == 'driver' && 'driver-app' || 'passenger-app' }}
+        run: flutter pub get
+
+      - name: Build signed release APK
+        working-directory: ${{ inputs.app == 'driver' && 'driver-app' || 'passenger-app' }}
+        env:
+          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false
+        run: |
+          set -euo pipefail
+          test -n "$MAPBOX_ACCESS_TOKEN"
+          flutter build apk --release --no-pub \
+            --build-name "$VERSION_NAME" \
+            --build-number "$BUILD_NUMBER" \
+            --dart-define=MAPBOX_ACCESS_TOKEN="$MAPBOX_ACCESS_TOKEN" \
+            --dart-define=MAPBOX_STYLE_URI="${MAPBOX_STYLE_URI:-mapbox://styles/mapbox/standard}"
+          test -s build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Upload signed APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apl-${{ inputs.app }}-${{ inputs.version_name }}-${{ inputs.build_number }}-signed-apk
+          path: ${{ inputs.app }}-app/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
