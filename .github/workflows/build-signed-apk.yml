@@ -89,6 +89,20 @@ jobs:
         with:
           channel: stable
 
+      - name: Cache Flutter and Android build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ${{ inputs.app }}-app/.dart_tool
+            ${{ inputs.app }}-app/build
+          key: ${{ runner.os }}-${{ inputs.app }}-signed-apk-${{ hashFiles(format('{0}-app/pubspec.lock', inputs.app), format('{0}-app/android/**', inputs.app)) }}
+          restore-keys: |
+            ${{ runner.os }}-${{ inputs.app }}-signed-apk-
+            ${{ runner.os }}-${{ inputs.app }}-flutter-
+
       - name: Prepare Flutter dependencies
         working-directory: ${{ inputs.app == 'driver' && 'driver-app' || 'passenger-app' }}
         run: flutter pub get
