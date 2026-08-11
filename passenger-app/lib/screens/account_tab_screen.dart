@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../config.dart';
 import '../services/auth_service.dart';
 import '../services/passenger_service.dart';
+import 'email_auth_screen.dart';
 import 'email_link_screen.dart';
 import '../theme/app_theme.dart';
 
@@ -58,6 +59,22 @@ class _AccountTabScreenState extends State<AccountTabScreen> {
       MaterialPageRoute(
         builder: (_) =>
             EmailLinkScreen(onAuthenticated: widget.onEmailAuthenticated),
+      ),
+    );
+    if (mounted) {
+      setState(() {
+        _hasEmailSession = AuthService.hasEmailSession;
+        _accountEmail = AuthService.currentEmail;
+      });
+    }
+  }
+
+  Future<void> _loginExistingEmail() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => EmailAuthScreen(
+          onAuthenticated: widget.onEmailAuthenticated,
+        ),
       ),
     );
     if (mounted) {
@@ -252,6 +269,16 @@ class _AccountTabScreenState extends State<AccountTabScreen> {
             ),
             onTap: _hasEmailSession ? null : _linkEmail,
           ),
+          if (!_hasEmailSession)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.login_outlined),
+              title: const Text('Ingresar a una cuenta existente'),
+              subtitle: const Text(
+                'Usa el correo y la contraseÃ±a de otra cuenta de pasajero.',
+              ),
+              onTap: _loginExistingEmail,
+            ),
           const SizedBox(height: 8),
           ListTile(
             contentPadding: EdgeInsets.zero,
