@@ -111,7 +111,9 @@ try {
     "sed -i '/^#BEGIN_APL_FLEET_DASHBOARD$/,/^#END_APL_FLEET_DASHBOARD$/d' $caddyRemoto",
     "echo $caddyBase64 | base64 -d >> $caddyRemoto",
     "docker compose --env-file $envRemoto -f $composeRemoto -f $overrideRemoto -f /opt/sistema-pos/docker-compose.fleet-api.yml config >/dev/null",
-    "docker compose --env-file $envRemoto -f $composeRemoto -f $overrideRemoto -f /opt/sistema-pos/docker-compose.fleet-api.yml up -d caddy",
+    # Caddyfile se reemplaza con sed -i; forzar solo Caddy remonta el nuevo
+    # inode sin reiniciar backend, base de datos ni los contenedores del POS.
+    "docker compose --env-file $envRemoto -f $composeRemoto -f $overrideRemoto -f /opt/sistema-pos/docker-compose.fleet-api.yml up -d --force-recreate --no-deps caddy",
     "docker compose --env-file $envRemoto -f $composeRemoto -f $overrideRemoto -f /opt/sistema-pos/docker-compose.fleet-api.yml exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile",
     "curl -fsS --resolve ${Dominio}:80:127.0.0.1 http://${Dominio}/ >/dev/null"
   ) -join '; '
