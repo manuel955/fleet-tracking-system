@@ -13,6 +13,7 @@ import 'screens/passenger_access_screen.dart';
 import 'screens/registration_screen.dart';
 import 'screens/searching_screen.dart';
 import 'services/notification_service.dart';
+import 'services/auth_service.dart';
 import 'services/passenger_service.dart';
 import 'services/push_service.dart';
 import 'services/trip_service.dart';
@@ -21,6 +22,7 @@ import 'theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await AuthService.initialize();
 
   if (!kIsWeb && AppConfig.mapboxAccessToken.isNotEmpty) {
     MapboxOptions.setAccessToken(AppConfig.mapboxAccessToken);
@@ -398,8 +400,10 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted) return;
         setState(() => _tabIndex = 1);
-        await _activityKey.currentState
-            ?.openFeedbackForTrip(completedTripId!, completedTripToRate!);
+        await _activityKey.currentState?.openFeedbackForTrip(
+          completedTripId!,
+          completedTripToRate!,
+        );
       });
     }
   }
@@ -494,11 +498,7 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'El viaje fue cancelado.',
-            ),
-          ),
+          const SnackBar(content: Text('El viaje fue cancelado.')),
         );
       });
     }

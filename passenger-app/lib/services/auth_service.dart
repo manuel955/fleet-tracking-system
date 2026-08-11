@@ -13,6 +13,16 @@ class AuthService {
   static FirebaseAuth get _firebaseAuth => FirebaseAuth.instance;
   static String? _vpsEmail;
 
+  static Future<void> initialize() async {
+    if (!AppConfig.useVpsBackend) return;
+    final prefs = await SharedPreferences.getInstance();
+    final session = await SecureSessionStore.read();
+    final expiresAt = session['expiresAt'] as int? ?? 0;
+    if (DateTime.now().millisecondsSinceEpoch < expiresAt) {
+      _vpsEmail = prefs.getString('vps_email');
+    }
+  }
+
   static Future<Map<String, dynamic>> signInAnonymously() async {
     if (AppConfig.useVpsBackend) {
       final session = await SecureSessionStore.read();

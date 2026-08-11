@@ -104,6 +104,18 @@ class VpsApiClient {
   static Future<Map<String, dynamic>> me(String token) =>
       _request('GET', '/api/v1/auth/me', token: token);
 
+  static Future<Map<String, dynamic>> registerDeviceToken({
+    required String token,
+    required String deviceToken,
+    required String platform,
+  }) =>
+      _request(
+        'POST',
+        '/api/v1/device-tokens',
+        token: token,
+        body: {'token': deviceToken, 'platform': platform},
+      );
+
   static Future<List<Map<String, dynamic>>> listTrips({
     required String token,
     int limit = 50,
