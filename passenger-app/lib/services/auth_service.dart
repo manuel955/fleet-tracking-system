@@ -137,6 +137,20 @@ class AuthService {
     return _persistFirebaseUser(user);
   }
 
+  /// Devuelve la sesión persistida sin crear una cuenta nueva. En VPS se usa
+  /// para operaciones autenticadas de perfil y documentos.
+  static Future<Map<String, dynamic>> currentSession() async {
+    final session = await SecureSessionStore.read();
+    final uid = session['uid'] as String?;
+    final token = session['idToken'] as String?;
+    final expiresAt = session['expiresAt'] as int? ?? 0;
+    if (uid != null && token != null &&
+        DateTime.now().millisecondsSinceEpoch < expiresAt) {
+      return {'uid': uid, 'idToken': token};
+    }
+    return signInAnonymously();
+  }
+
   /// Adopta la sesión temporal creada al canjear un QR del VPS. Se mantiene
   /// separado del login por correo para que el flujo de recepción no cree una
   /// cuenta Firebase ni requiera contraseña.

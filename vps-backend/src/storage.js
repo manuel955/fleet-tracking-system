@@ -24,6 +24,10 @@ export function publicStorageUrl(key) {
   return `${config.publicApiBaseUrl}/api/v1/storage/public/${encodeURIComponent(key)}`;
 }
 
+export function privateStorageUrl(key) {
+  return `${config.publicApiBaseUrl}/api/v1/storage/download/${encodeURIComponent(key)}`;
+}
+
 function storageError(message, statusCode = 400) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -86,7 +90,14 @@ export async function uploadStorageObject(user, body) {
       [key, user.id, key.split('/')[0], contentType, data.length, sha256],
     );
   }
-  return { key, size: data.length, sha256, contentType, url: publicStorageUrl(key), public: isPrefix(key, PUBLIC_PREFIXES) };
+  return {
+    key,
+    size: data.length,
+    sha256,
+    contentType,
+    url: isPrefix(key, PUBLIC_PREFIXES) ? publicStorageUrl(key) : privateStorageUrl(key),
+    public: isPrefix(key, PUBLIC_PREFIXES),
+  };
 }
 
 export async function getStorageObject(key) {

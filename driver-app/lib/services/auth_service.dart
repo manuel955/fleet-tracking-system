@@ -14,11 +14,38 @@ class AuthService {
   static Future<Map<String, dynamic>> registerOrResumeWithEmail({
     required String email,
     required String password,
+    String? name,
+    String? phone,
+    String? plate,
+    String? vehicleType,
+    int? vehicleSeats,
   }) async {
     if (AppConfig.useVpsBackend) {
-      throw Exception(
-        'El alta de conductores en VPS requiere completar placa y telefono; usa el registro Firebase mientras terminamos esa pantalla.',
-      );
+      try {
+        final data = await VpsApiClient.register(
+          email: email,
+          password: password,
+          displayName: name ?? 'Conductor',
+          role: 'driver',
+          phone: phone,
+          plate: plate,
+          vehicleType: vehicleType,
+          vehicleSeats: vehicleSeats,
+        );
+        final user = data['user'];
+        final token = data['token']?.toString();
+        final uid = user is Map ? user['id']?.toString() : null;
+        if (token == null || token.isEmpty || uid == null || uid.isEmpty) {
+          throw Exception('El API VPS no devolvio una sesion valida.');
+        }
+        await _persistVps(uid: uid, token: token);
+        return {'uid': uid, 'idToken': token};
+      } on VpsApiException catch (error) {
+        if (error.statusCode == 409) {
+          return signInWithEmail(email: email, password: password);
+        }
+        rethrow;
+      }
     }
     final uri = Uri.parse(
       'https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${AppConfig.firebaseApiKey}',

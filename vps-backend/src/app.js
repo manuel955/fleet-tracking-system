@@ -475,7 +475,9 @@ async function register(body) {
   const displayName = requiredString(body.displayName ?? body.name ?? '', 'displayName', { max: 120 });
   const passwordHash = await hashPassword(password);
 
-  const user = await withTransaction(async (client) => {
+  let user;
+  try {
+    user = await withTransaction(async (client) => {
     const inserted = await client.query(
       `INSERT INTO users (role, email, password_hash, display_name)
        VALUES ($1, $2, $3, $4)
@@ -498,7 +500,16 @@ async function register(body) {
       );
     }
     return created;
-  });
+    });
+  } catch (error) {
+    if (error?.code === '23505') {
+      error.statusCode = 409;
+      error.message = error.constraint === 'drivers_plate_key'
+        ? 'Ya existe un conductor con esa placa.'
+        : 'Ya existe una cuenta con ese correo.';
+    }
+    throw error;
+  }
   return { token: signUser(user), user: publicUser(user) };
 }
 
@@ -539,6 +550,89 @@ function parsePassengerCount(value) {
     throw error;
   }
   return count;
+}
+
+function ownedPrivateStorageUrl(value, prefix) {
+  const raw = String(value ?? '').trim();
+  return raw.startsWith(`${config.publicApiBaseUrl}/api/v1/storage/download/${encodeURIComponent(prefix)}`);
+}
+
+async function savePassengerProfile(user, body) {
+  requireRole(user, ['passenger']);
+  assertPassengerAccess(user);
+  const name = requiredString(body.name ?? '', 'name', { max: 120 });
+  const phone = requiredString(body.phone ?? '', 'phone', { max: 40 });
+  const credentialPhotoUrl = body.credentialPhotoUrl ? requiredString(body.credentialPhotoUrl, 'credentialPhotoUrl', { max: 600 }) : null;
+  if (credentialPhotoUrl && !ownedPrivateStorageUrl(credentialPhotoUrl, `passenger_credentials/${user.id}/`)) {
+    throw Object.assign(new Error('La foto de credencial no pertenece a esta cuenta.'), { statusCode: 400 });
+  }
+  await withTransaction(async (client) => {
+    await client.query('UPDATE users SET display_name=$1, updated_at=now() WHERE id=$2', [name, user.id]);
+    await client.query(
+      `INSERT INTO passenger_profiles (user_id, phone, credential_photo_url, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (user_id) DO UPDATE SET phone=EXCLUDED.phone,
+         credential_photo_url=COALESCE(EXCLUDED.credential_photo_url, passenger_profiles.credential_photo_url), updated_at=now()`,
+      [user.id, phone, credentialPhotoUrl],
+    );
+  });
+  return { name, phone, ...(credentialPhotoUrl ? { photoUrl: credentialPhotoUrl } : {}) };
+}
+
+async function getPassengerProfile(user) {
+  requireRole(user, ['passenger']);
+  assertPassengerAccess(user);
+  const result = await pool.query(
+    `SELECT u.display_name, p.phone, p.credential_photo_url
+       FROM users u LEFT JOIN passenger_profiles p ON p.user_id=u.id WHERE u.id=$1`,
+    [user.id],
+  );
+  const row = result.rows[0];
+  if (!row) throw Object.assign(new Error('Perfil de pasajero no encontrado.'), { statusCode: 404 });
+  return { name: row.display_name || '', phone: row.phone || '', ...(row.credential_photo_url ? { photoUrl: row.credential_photo_url } : {}) };
+}
+
+async function submitDriverApplication(user, body) {
+  requireRole(user, ['driver']);
+  const currentResult = await pool.query('SELECT * FROM drivers WHERE id=$1', [user.id]);
+  const current = currentResult.rows[0] ?? {};
+  const valueOrCurrent = (value, column) => value === undefined || value === null || value === '' ? current[column] : value;
+  const name = requiredString(body.name ?? user.display_name ?? '', 'name', { max: 120 });
+  const phone = requiredString(valueOrCurrent(body.phone, 'phone') ?? '', 'phone', { max: 30 });
+  const dni = requiredString(valueOrCurrent(body.dni, 'dni') ?? '', 'dni', { max: 30 });
+  const plate = requiredString(valueOrCurrent(body.plate, 'plate') ?? '', 'plate', { max: 20 }).toUpperCase();
+  const vehicleBrand = requiredString(valueOrCurrent(body.vehicleBrand, 'vehicle_brand') ?? '', 'vehicleBrand', { max: 80 });
+  const vehicleType = requiredString(valueOrCurrent(body.vehicleType, 'vehicle_type') ?? 'Auto', 'vehicleType', { max: 40 });
+  const vehicleColor = requiredString(valueOrCurrent(body.vehicleColor, 'vehicle_color') ?? '', 'vehicleColor', { max: 60 });
+  const vehicleSeats = Number(valueOrCurrent(body.vehicleSeats, 'vehicle_seats') ?? 4);
+  if (!Number.isInteger(vehicleSeats) || vehicleSeats < 1 || vehicleSeats > 45) throw Object.assign(new Error('vehicleSeats invÃ¡lido.'), { statusCode: 400 });
+  const docFields = ['profilePhotoUrl', 'dniDocUrl', 'dniFrontDocUrl', 'dniBackDocUrl', 'licenseDocUrl', 'soatDocUrl', 'circulationCardDocUrl', 'technicalReviewDocUrl', 'criminalRecordDocUrl', 'workCertificateDocUrl'];
+  const docColumns = Object.fromEntries(docFields.map((field) => [field, field.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)]));
+  const docs = {};
+  for (const field of docFields) {
+    if ((field === 'dniDocUrl' || field === 'dniFrontDocUrl' || field === 'dniBackDocUrl') && !body[field] && !current[docColumns[field]]) continue;
+    const value = requiredString(valueOrCurrent(body[field], docColumns[field]) ?? '', field, { max: 600 });
+    if (!ownedPrivateStorageUrl(value, `driver_documents/${user.id}/`)) throw Object.assign(new Error(`Documento invÃ¡lido: ${field}`), { statusCode: 400 });
+    docs[docColumns[field]] = value;
+  }
+  if (!docs.dni_doc_url && !(docs.dni_front_doc_url && docs.dni_back_doc_url)) {
+    throw Object.assign(new Error('Falta el DNI (PDF o anverso y reverso).'), { statusCode: 400 });
+  }
+  const expiry = {
+    license_expires_at: Number(valueOrCurrent(body.licenseExpiresAt, 'license_expires_at') ?? 0),
+    soat_expires_at: Number(valueOrCurrent(body.soatExpiresAt, 'soat_expires_at') ?? 0),
+    technical_review_expires_at: Number(valueOrCurrent(body.technicalReviewExpiresAt, 'technical_review_expires_at') ?? 0),
+  };
+  for (const value of Object.values(expiry)) if (!Number.isFinite(value) || value <= Date.now()) throw Object.assign(new Error('Hay documentos vencidos o sin fecha.'), { statusCode: 400 });
+  const age = body.age === undefined ? (current.age == null ? null : Number(current.age)) : Number(body.age);
+  await withTransaction(async (client) => {
+    await client.query('UPDATE users SET display_name=$1, updated_at=now() WHERE id=$2', [name, user.id]);
+    const columns = ['phone', 'plate', 'vehicle_brand', 'vehicle_type', 'vehicle_color', 'vehicle_seats', 'dni', 'age', ...Object.keys(docs), ...Object.keys(expiry)];
+    const values = [phone, plate, vehicleBrand, vehicleType, vehicleColor, vehicleSeats, dni, age, ...Object.values(docs), ...Object.values(expiry), user.id];
+    const assignments = columns.map((column, index) => `${column}=$${index + 1}`).join(', ');
+    await client.query(`UPDATE drivers SET ${assignments}, approval_status='pending_review', application_submitted_at=now(), updated_at=now() WHERE id=$${values.length}`, values);
+  });
+  return { id: user.id, approvalStatus: 'pending_review' };
 }
 
 function parseScheduledPickup(value) {
@@ -1180,6 +1274,21 @@ export function createApp({ health = databaseHealth } = {}) {
       // set of places, support and update values formerly kept in RTDB.
       if (req.method === 'GET' && url.pathname === '/api/v1/public/config') {
         return json(res, 200, await readPublicConfig());
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/v1/drivers/application') {
+        const user = await authenticate(req);
+        return json(res, 200, await submitDriverApplication(user, await readJson(req)));
+      }
+
+      if (req.method === 'GET' && url.pathname === '/api/v1/passengers/me/profile') {
+        const user = await authenticate(req);
+        return json(res, 200, { profile: await getPassengerProfile(user) });
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/v1/passengers/me/profile') {
+        const user = await authenticate(req);
+        return json(res, 200, { profile: await savePassengerProfile(user, await readJson(req)) });
       }
 
       const publicPlacesMatch = url.pathname.match(/^\/api\/v1\/public\/places\/(hotels|sportVenues)$/);

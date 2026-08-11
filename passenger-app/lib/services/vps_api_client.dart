@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -100,6 +101,55 @@ class VpsApiClient {
       'role': role,
     },
   );
+
+  static Future<Map<String, dynamic>> uploadStorage({
+    required String token,
+    required String key,
+    required String contentType,
+    required Uint8List bytes,
+  }) => _request(
+    'POST',
+    '/api/v1/storage/upload',
+    token: token,
+    body: {
+      'key': key,
+      'contentType': contentType,
+      'dataBase64': base64Encode(bytes),
+    },
+  );
+
+  static Future<Map<String, dynamic>> getPassengerProfile({
+    required String token,
+  }) async {
+    final result = await _request(
+      'GET',
+      '/api/v1/passengers/me/profile',
+      token: token,
+    );
+    final profile = result['profile'];
+    return profile is Map ? Map<String, dynamic>.from(profile) : result;
+  }
+
+  static Future<Map<String, dynamic>> savePassengerProfile({
+    required String token,
+    required String name,
+    required String phone,
+    String? credentialPhotoUrl,
+  }) async {
+    final result = await _request(
+      'POST',
+      '/api/v1/passengers/me/profile',
+      token: token,
+      body: {
+        'name': name,
+        'phone': phone,
+        if (credentialPhotoUrl != null && credentialPhotoUrl.isNotEmpty)
+          'credentialPhotoUrl': credentialPhotoUrl,
+      },
+    );
+    final profile = result['profile'];
+    return profile is Map ? Map<String, dynamic>.from(profile) : result;
+  }
 
   static Future<Map<String, dynamic>> redeemPassengerInvite(String code) =>
       _request(

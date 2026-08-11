@@ -116,11 +116,38 @@ class DriverProfileService {
     final auth = await AuthService.registerOrResumeWithEmail(
       email: email,
       password: password,
+      name: name,
+      phone: phone,
+      plate: plate,
+      vehicleType: vehicleType,
+      vehicleSeats: vehicleSeats,
     );
     final uid = auth['uid'] as String;
     final idToken = auth['idToken'] as String;
 
     final docUrls = await _uploadAll(uid, idToken, documents);
+    final applicationBody = <String, dynamic>{
+      'name': name,
+      'age': age,
+      'phone': phone,
+      'dni': dni,
+      'plate': plate,
+      'vehicleBrand': vehicleBrand,
+      'vehicleType': vehicleType,
+      'vehicleColor': vehicleColor,
+      'vehicleSeats': vehicleSeats,
+      ...docUrls,
+      'licenseExpiresAt': documentExpiries['license'],
+      'soatExpiresAt': documentExpiries['soat'],
+      'technicalReviewExpiresAt': documentExpiries['technicalReview'],
+    };
+    if (AppConfig.useVpsBackend) {
+      await VpsApiClient.submitDriverApplication(
+        token: idToken,
+        body: applicationBody,
+      );
+      return;
+    }
     final response = await http
         .post(
           Uri.parse(
@@ -129,21 +156,7 @@ class DriverProfileService {
             'Authorization': 'Bearer $idToken',
             'Content-Type': 'application/json',
           },
-          body: jsonEncode({
-            'name': name,
-            'age': age,
-            'phone': phone,
-            'dni': dni,
-            'plate': plate,
-            'vehicleBrand': vehicleBrand,
-            'vehicleType': vehicleType,
-            'vehicleColor': vehicleColor,
-            'vehicleSeats': vehicleSeats,
-            ...docUrls,
-            'licenseExpiresAt': documentExpiries['license'],
-            'soatExpiresAt': documentExpiries['soat'],
-            'technicalReviewExpiresAt': documentExpiries['technicalReview'],
-          }),
+          body: jsonEncode(applicationBody),
         )
         .timeout(_networkTimeout);
 
@@ -188,6 +201,17 @@ class DriverProfileService {
       expiryFields[entry.value] = expiresAt;
     }
 
+    if (AppConfig.useVpsBackend) {
+      await VpsApiClient.submitDriverApplication(
+        token: idToken,
+        body: {
+          ...profileChanges,
+          ...docUrls,
+          ...expiryFields,
+        },
+      );
+      return;
+    }
     final response = await http
         .post(
           Uri.parse(
@@ -309,6 +333,19 @@ class DriverProfileService {
     PickedDocument file,
   ) async {
     final path = 'driver_documents/$uid/$docKey.${file.extension}';
+    if (AppConfig.useVpsBackend) {
+      final result = await VpsApiClient.uploadStorage(
+        token: idToken,
+        key: path,
+        contentType: file.contentType,
+        bytes: file.bytes,
+      );
+      final url = result['url']?.toString();
+      if (url == null || url.isEmpty) {
+        throw Exception('El API VPS no devolvio la URL del documento.');
+      }
+      return url;
+    }
     final encodedPath = Uri.encodeComponent(path);
     final uploadUri = Uri.parse(
       'https://firebasestorage.googleapis.com/v0/b/${AppConfig.firebaseStorageBucket}/o'

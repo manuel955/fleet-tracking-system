@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -84,13 +85,41 @@ class VpsApiClient {
     required String password,
     required String displayName,
     String role = 'driver',
+    String? phone,
+    String? plate,
+    String? vehicleType,
+    int? vehicleSeats,
   }) =>
       _request('POST', '/api/v1/auth/register', body: {
         'email': email.trim().toLowerCase(),
         'password': password,
         'displayName': displayName.trim(),
         'role': role,
+        if (phone != null) 'phone': phone,
+        if (plate != null) 'plate': plate,
+        if (vehicleType != null) 'vehicleType': vehicleType,
+        if (vehicleSeats != null) 'vehicleSeats': vehicleSeats,
       });
+
+  static Future<Map<String, dynamic>> submitDriverApplication({
+    required String token,
+    required Map<String, dynamic> body,
+  }) =>
+      _request('POST', '/api/v1/drivers/application', token: token, body: body);
+
+  static Future<Map<String, dynamic>> uploadStorage({
+    required String token,
+    required String key,
+    required String contentType,
+    required Uint8List bytes,
+  }) async {
+    final encoded = base64Encode(bytes);
+    return _request('POST', '/api/v1/storage/upload', token: token, body: {
+      'key': key,
+      'contentType': contentType,
+      'dataBase64': encoded,
+    });
+  }
 
   static Future<Map<String, dynamic>> me(String token) =>
       _request('GET', '/api/v1/auth/me', token: token);

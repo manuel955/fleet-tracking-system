@@ -156,14 +156,36 @@ class PassengerService {
   static Future<Map<String, String>?> loadProfile() async {
     if (AppConfig.useVpsBackend && AuthService.hasEmailSession) {
       final prefs = await SharedPreferences.getInstance();
-      final name = AuthService.currentDisplayName?.trim().isNotEmpty == true
-          ? AuthService.currentDisplayName!.trim()
-          : 'Pasajero';
-      final phone = prefs.getString('passenger_phone') ?? '';
-      await prefs.setBool('registered', true);
-      await prefs.setString('passenger_name', name);
-      await prefs.setString('passenger_phone', phone);
-      return {'name': name, 'phone': phone};
+      try {
+        final auth = await AuthService.currentSession();
+        final profile = await VpsApiClient.getPassengerProfile(
+          token: auth['idToken'].toString(),
+        );
+        final name = profile['name']?.toString().trim().isNotEmpty == true
+            ? profile['name'].toString().trim()
+            : (AuthService.currentDisplayName?.trim().isNotEmpty == true
+                  ? AuthService.currentDisplayName!.trim()
+                  : 'Pasajero');
+        final phone = profile['phone']?.toString() ?? '';
+        final photoUrl = profile['photoUrl']?.toString() ?? '';
+        await prefs.setBool('registered', true);
+        await prefs.setString('passenger_name', name);
+        await prefs.setString('passenger_phone', phone);
+        if (photoUrl.isNotEmpty) {
+          await prefs.setString('passenger_photo_url', photoUrl);
+        }
+        return {
+          'name': name,
+          'phone': phone,
+          if (photoUrl.isNotEmpty) 'photoUrl': photoUrl,
+        };
+      } catch (_) {
+        final name = AuthService.currentDisplayName?.trim().isNotEmpty == true
+            ? AuthService.currentDisplayName!.trim()
+            : 'Pasajero';
+        final phone = prefs.getString('passenger_phone') ?? '';
+        return {'name': name, 'phone': phone};
+      }
     }
     final cached = await cachedProfile();
     try {
@@ -208,12 +230,28 @@ class PassengerService {
     required String phone,
     required Uint8List photoBytes,
   }) async {
-    final auth = await AuthService.signInAnonymously();
+    final auth = AppConfig.useVpsBackend
+        ? await AuthService.currentSession()
+        : await AuthService.signInAnonymously();
     final uid = auth['uid'] as String;
     final idToken = auth['idToken'] as String;
 
     final photoUrl = await _uploadCredentialPhoto(uid, idToken, photoBytes);
 
+    if (AppConfig.useVpsBackend) {
+      final profile = await VpsApiClient.savePassengerProfile(
+        token: idToken,
+        name: name,
+        phone: phone,
+        credentialPhotoUrl: photoUrl,
+      );
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('registered', true);
+      await prefs.setString('passenger_name', profile['name']?.toString() ?? name);
+      await prefs.setString('passenger_phone', profile['phone']?.toString() ?? phone);
+      await prefs.setString('passenger_photo_url', profile['photoUrl']?.toString() ?? photoUrl);
+      return;
+    }
     final response = await http
         .post(
           Uri.parse(
@@ -288,6 +326,19 @@ class PassengerService {
     Uint8List photoBytes,
   ) async {
     final path = 'passenger_credentials/$uid/credential.jpg';
+    if (AppConfig.useVpsBackend) {
+      final result = await VpsApiClient.uploadStorage(
+        token: idToken,
+        key: path,
+        contentType: 'image/jpeg',
+        bytes: photoBytes,
+      );
+      final url = result['url']?.toString();
+      if (url == null || url.isEmpty) {
+        throw Exception('El API VPS no devolvio la URL de la credencial.');
+      }
+      return url;
+    }
     final encodedPath = Uri.encodeComponent(path);
     final uploadUri = Uri.parse(
       'https://firebasestorage.googleapis.com/v0/b/${AppConfig.firebaseStorageBucket}/o'
