@@ -1,0 +1,10 @@
+services:
+  caddy:
+    networks:
+      default: {}
+      fleet_api: {}
+
+networks:
+  fleet_api:
+    external: true
+    name: apl-fleet-vps_default

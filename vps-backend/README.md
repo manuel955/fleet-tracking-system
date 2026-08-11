@@ -80,3 +80,12 @@ pendientes de contrato antes de activar esta bandera para usuarios reales.
 No se debe usar `http://86.48.19.189` en una APK de produccion: el API actual
 escucha solo en `127.0.0.1:8080`. Primero hay que publicar un dominio HTTPS
 independiente del POS y probarlo con una APK de laboratorio.
+
+### Proxy HTTPS habilitado
+
+`api.tucomprass.com` termina en el Caddy existente, que conserva sus rutas del
+POS y se conecta tambien a la red externa `apl-fleet-vps_default`. El bloque de
+Caddy y el override de Compose usados para esa conexion estan en
+`deploy/pos-caddy-fleet-api.caddyfile` y
+`deploy/pos-caddy-fleet-api.override.yml`. El API interno sigue escuchando
+solo en `127.0.0.1:8080`; no se publican PostgreSQL, Redis ni MinIO.
