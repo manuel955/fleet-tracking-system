@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
 import 'auth_service.dart';
 import 'notification_service.dart';
+import 'vps_api_client.dart';
 
 const String _notificationChannelId = 'fleet_tracking_channel';
 const int _notificationId = 888;
@@ -139,6 +140,16 @@ class LocationService {
       final token = auth['idToken'];
       if (token is! String || token.isEmpty) {
         return null;
+      }
+
+      if (AppConfig.useVpsBackend) {
+        await VpsApiClient.updateLocation(
+          token: token,
+          latitude: position.latitude,
+          longitude: position.longitude,
+          accuracyM: position.accuracy,
+        );
+        return position;
       }
 
       final heading = position.heading.isFinite ? position.heading : 0.0;
@@ -446,6 +457,23 @@ Future<void> _sendPosition(ServiceInstance service, Position position) async {
     final token = auth['idToken'];
     if (token is! String || token.isEmpty) {
       _log(service, 'Sesion sin token; no se publica la ubicacion.');
+      return;
+    }
+
+    if (AppConfig.useVpsBackend) {
+      await VpsApiClient.updateLocation(
+        token: token,
+        latitude: position.latitude,
+        longitude: position.longitude,
+        accuracyM: position.accuracy,
+      );
+      _log(service, 'Enviado al backend VPS correctamente.');
+      service.invoke('location_update', {
+        'lat': position.latitude,
+        'lng': position.longitude,
+        'heading': position.heading.isFinite ? position.heading : 0.0,
+        'time': DateTime.now().toIso8601String(),
+      });
       return;
     }
 

@@ -52,7 +52,12 @@ class VpsApiClient {
 
     Map<String, dynamic> decoded = <String, dynamic>{};
     if (response.body.trim().isNotEmpty) {
-      final value = jsonDecode(response.body);
+      late final dynamic value;
+      try {
+        value = jsonDecode(response.body);
+      } catch (_) {
+        throw const VpsApiException(502, 'Respuesta invalida del API VPS.');
+      }
       if (value is Map) decoded = Map<String, dynamic>.from(value);
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -89,4 +94,62 @@ class VpsApiClient {
 
   static Future<Map<String, dynamic>> me(String token) =>
       _request('GET', '/api/v1/auth/me', token: token);
+
+  static Future<Map<String, dynamic>> driverMe(String token) =>
+      _request('GET', '/api/v1/drivers/me', token: token);
+
+  static Map<String, dynamic> normalizeTrip(Map<String, dynamic> trip) {
+    final normalized = Map<String, dynamic>.from(trip);
+    normalized['scheduledPickupLabel'] ??=
+        normalized['scheduledPickupAt']?.toString();
+    return normalized;
+  }
+
+  static Future<Map<String, dynamic>> setAvailability({
+    required String token,
+    required bool online,
+  }) =>
+      _request(
+        'POST',
+        '/api/v1/drivers/availability',
+        token: token,
+        body: {'online': online},
+      );
+
+  static Future<Map<String, dynamic>> updateLocation({
+    required String token,
+    required double latitude,
+    required double longitude,
+    double? accuracyM,
+  }) =>
+      _request(
+        'POST',
+        '/api/v1/drivers/location',
+        token: token,
+        body: {
+          'latitude': latitude,
+          'longitude': longitude,
+          if (accuracyM != null) 'accuracyM': accuracyM,
+        },
+      );
+
+  static Future<Map<String, dynamic>> getTrip({
+    required String token,
+    required String tripId,
+  }) async {
+    final result = await _request('GET', '/api/v1/trips/$tripId', token: token);
+    return normalizeTrip(result);
+  }
+
+  static Future<Map<String, dynamic>> advanceTrip({
+    required String token,
+    required String tripId,
+    required String action,
+  }) =>
+      _request(
+        'POST',
+        '/api/v1/trips/$tripId/action',
+        token: token,
+        body: {'action': action},
+      );
 }

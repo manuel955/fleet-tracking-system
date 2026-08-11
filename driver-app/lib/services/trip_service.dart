@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../config.dart';
 import 'auth_service.dart';
+import 'vps_api_client.dart';
 
 class TripStateConflictException implements Exception {
   final String message;
@@ -32,6 +33,10 @@ class TripService {
   static const _networkTimeout = Duration(seconds: 15);
 
   static Future<Map<String, dynamic>?> getMyDriverNode(String uid) async {
+    if (AppConfig.useVpsBackend) {
+      final auth = await AuthService.currentSession();
+      return VpsApiClient.driverMe(auth['idToken'].toString());
+    }
     final auth = await AuthService.currentSession();
     final uri = Uri.parse(
       '${AppConfig.firebaseDbUrl}/drivers/$uid.json?auth=${auth['idToken']}',
@@ -46,6 +51,18 @@ class TripService {
   }
 
   static Future<Map<String, dynamic>?> getTrip(String tripId) async {
+    if (AppConfig.useVpsBackend) {
+      final auth = await AuthService.currentSession();
+      try {
+        return await VpsApiClient.getTrip(
+          token: auth['idToken'].toString(),
+          tripId: tripId,
+        );
+      } on VpsApiException catch (error) {
+        if (error.statusCode == 404) return null;
+        rethrow;
+      }
+    }
     final auth = await AuthService.currentSession();
     final uri = Uri.parse(
       '${AppConfig.firebaseDbUrl}/trips/$tripId.json?auth=${auth['idToken']}',
@@ -60,6 +77,28 @@ class TripService {
   }
 
   static Future<void> advanceTrip(String tripId, String newStatus) async {
+    if (AppConfig.useVpsBackend) {
+      final auth = await AuthService.currentSession();
+      final action = switch (newStatus) {
+        'arrived_at_pickup' => 'arrive',
+        'in_progress' => 'start',
+        'completed' => 'complete',
+        _ => newStatus,
+      };
+      try {
+        await VpsApiClient.advanceTrip(
+          token: auth['idToken'].toString(),
+          tripId: tripId,
+          action: action,
+        );
+        return;
+      } on VpsApiException catch (error) {
+        if (error.statusCode == 409) {
+          throw TripStateConflictException(error.message);
+        }
+        rethrow;
+      }
+    }
     final auth = await AuthService.currentSession();
     final uri = Uri.parse(
       '${AppConfig.cloudFunctionsBaseUrl}/advanceDriverTrip',
@@ -104,6 +143,13 @@ class TripService {
       {required bool online}) async {
     final auth =
         await AuthService.currentSession().timeout(const Duration(seconds: 10));
+    if (AppConfig.useVpsBackend) {
+      await VpsApiClient.setAvailability(
+        token: auth['idToken'].toString(),
+        online: online,
+      );
+      return;
+    }
     final uri = Uri.parse(
       '${AppConfig.cloudFunctionsBaseUrl}/setDriverAvailability',
     );

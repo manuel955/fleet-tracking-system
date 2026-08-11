@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
 import 'auth_service.dart';
+import 'vps_api_client.dart';
 
 /// Pide viajes y consulta su estado. El emparejamiento con el conductor
 /// mas cercano lo hace Cloud Functions en el servidor apenas se crea el
@@ -63,6 +64,39 @@ class TripService {
         'passengerCount',
         'Debe estar entre 1 y 45 pasajeros.',
       );
+    }
+    if (AppConfig.useVpsBackend) {
+      if (destinationLat == null ||
+          destinationLng == null ||
+          destinationAddress == null ||
+          destinationAddress.trim().isEmpty) {
+        throw ArgumentError('El backend VPS requiere un destino completo.');
+      }
+      final auth = await AuthService.signInAnonymously();
+      final trip = await VpsApiClient.createTrip(
+        token: auth['idToken'].toString(),
+        pickupLat: pickupLat,
+        pickupLng: pickupLng,
+        pickupAddress: pickupAddress?.trim().isNotEmpty == true
+            ? pickupAddress!.trim()
+            : 'Mi ubicacion actual',
+        destinationLat: destinationLat,
+        destinationLng: destinationLng,
+        destinationAddress: destinationAddress,
+        passengerCount: passengerCount,
+        scheduledPickupAt: scheduledPickupAt,
+      );
+      final tripId = trip['id']?.toString();
+      if (tripId == null || tripId.isEmpty) {
+        throw Exception('El API VPS no devolvio el identificador del viaje.');
+      }
+      final prefs = await SharedPreferences.getInstance();
+      final key = trip['status'] == 'scheduled'
+          ? 'scheduled_trip_id'
+          : 'active_trip_id';
+      await prefs.setString(key, tripId);
+      await prefs.setString('$_tripCachePrefix$tripId', jsonEncode(trip));
+      return tripId;
     }
     final auth = await AuthService.signInAnonymously();
     final prefs = await SharedPreferences.getInstance();
@@ -133,6 +167,20 @@ class TripService {
   }
 
   static Future<Map<String, dynamic>?> getTrip(String tripId) async {
+    if (AppConfig.useVpsBackend) {
+      final auth = await AuthService.signInAnonymously();
+      final trip = await VpsApiClient.getTrip(
+        token: auth['idToken'].toString(),
+        tripId: tripId,
+      );
+      final prefs = await SharedPreferences.getInstance();
+      if (trip == null) {
+        await prefs.remove('$_tripCachePrefix$tripId');
+      } else {
+        await prefs.setString('$_tripCachePrefix$tripId', jsonEncode(trip));
+      }
+      return trip;
+    }
     final auth = await AuthService.signInAnonymously();
     final uri = Uri.parse(
       '${AppConfig.firebaseDbUrl}/trips/$tripId.json?auth=${auth['idToken']}',
@@ -172,6 +220,10 @@ class TripService {
   static Future<Map<String, dynamic>?> getDriverLocation(
     String driverId,
   ) async {
+    if (AppConfig.useVpsBackend) {
+      // El contrato VPS aun no expone la posicion del conductor al pasajero.
+      return null;
+    }
     final auth = await AuthService.signInAnonymously();
     final uri = Uri.parse(
       '${AppConfig.firebaseDbUrl}/driverLocations/$driverId.json?auth=${auth['idToken']}',
@@ -190,6 +242,16 @@ class TripService {
   }
 
   static Future<void> cancelTrip(String tripId, {String? reason}) async {
+    if (AppConfig.useVpsBackend) {
+      final auth = await AuthService.signInAnonymously();
+      await VpsApiClient.cancelTrip(
+        token: auth['idToken'].toString(),
+        tripId: tripId,
+        reason: reason,
+      );
+      await _clearIfMatches(tripId);
+      return;
+    }
     final auth = await AuthService.signInAnonymously();
     final uri = Uri.parse(
       '${AppConfig.firebaseDbUrl}/trips/$tripId.json?auth=${auth['idToken']}',
@@ -235,6 +297,9 @@ class TripService {
     required double destinationLng,
     required String destinationAddress,
   }) async {
+    if (AppConfig.useVpsBackend) {
+      throw UnsupportedError('Cambiar destino aun no esta disponible en VPS.');
+    }
     final auth = await AuthService.signInAnonymously();
     final uri = Uri.parse(
       '${AppConfig.firebaseDbUrl}/trips/$tripId.json?auth=${auth['idToken']}',
@@ -258,8 +323,20 @@ class TripService {
   }
 
   static Future<void> retrySearch(String tripId) async {
+    if (AppConfig.useVpsBackend) {
+      final auth = await AuthService.signInAnonymously();
+      final trip = await VpsApiClient.retryTrip(
+        token: auth['idToken'].toString(),
+        tripId: tripId,
+      );
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('$_tripCachePrefix$tripId', jsonEncode(trip));
+      return;
+    }
     final auth = await AuthService.signInAnonymously();
-    final uri = Uri.parse('${AppConfig.cloudFunctionsBaseUrl}/retryPassengerTrip');
+    final uri = Uri.parse(
+      '${AppConfig.cloudFunctionsBaseUrl}/retryPassengerTrip',
+    );
     final response = await http
         .post(
           uri,
@@ -294,6 +371,21 @@ class TripService {
   static Future<List<MapEntry<String, Map<String, dynamic>>>> getMyTrips({
     bool last7Days = true,
   }) async {
+    if (AppConfig.useVpsBackend) {
+      final auth = await AuthService.signInAnonymously();
+      final trips = await VpsApiClient.listTrips(
+        token: auth['idToken'].toString(),
+      );
+      final entries = trips
+          .map((trip) => MapEntry(trip['id']!.toString(), trip))
+          .toList();
+      entries.sort(
+        (a, b) => ((b.value['requestedAt'] as num?)?.toInt() ?? 0).compareTo(
+          (a.value['requestedAt'] as num?)?.toInt() ?? 0,
+        ),
+      );
+      return entries;
+    }
     final auth = await AuthService.signInAnonymously();
     final uri = Uri.parse(
       '${AppConfig.cloudFunctionsBaseUrl}/getMyTrips'
@@ -333,6 +425,16 @@ class TripService {
     String incidentCategory = 'none',
     String incidentDetails = '',
   }) async {
+    if (AppConfig.useVpsBackend) {
+      final auth = await AuthService.signInAnonymously();
+      final feedback = await VpsApiClient.submitFeedback(
+        token: auth['idToken'].toString(),
+        tripId: tripId,
+        rating: rating ?? 0,
+        comment: comment,
+      );
+      return feedback;
+    }
     final auth = await AuthService.signInAnonymously();
     final response = await http
         .post(
