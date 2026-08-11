@@ -46,8 +46,10 @@ D=WOMDqpodQEc0qvvVbCpMChVRFZ82   # UID del conductor de prueba (Auto CYV627, 4 a
 | **F** Cancelación admin | ✅ | Desde dashboard "Cancelar viaje" + prompt de motivo → `status=cancelled`, `cancelledBy="dashboard"`, `cancelReason` registrado, conductor liberado |
 | **Notif segundo plano — conductor** | ✅ | Voz de asignación **con pantalla apagada/dozing** (ver §3) |
 | **Notif segundo plano — pasajero** | ✅ | `driver_arrived` **con pantalla apagada/asleep** (ver §3) |
+| **Notif con app CERRADA (killed)** | ❌ | Con la app del conductor forzada a detener (`stopped=true`, sin proceso), el viaje sí pasó a `accepted` y quedó asignado, pero no hubo FCM/TTS ni notificación visible. Al reabrir la app, el viaje apareció asignado y se completó correctamente. |
 | **I** Coordinador (crear/detalle/cancelar) | ✅ | `createCoordinatorTrip` (Solicitud creada, asignó a Ever/CYV627 con voz) → `getCoordinatorTripDetail` (modal seguimiento EN VIVO, ID `-OzijToEeWAhah4Uc5_L`) → `cancelCoordinatorTrip` (`cancelled`, `cancelledBy="coordinator"`, conductor liberado). Coordinador "irma", sede Westin Lima. |
 | **E — lado admin** (`manageTripFeedback`) | ✅ | Admin → Conductores → **Incidencias**: la incidencia "Objeto perdido" (gabi plaza/Ever) → **Marcar resuelta** (Resuelta, "0 abiertas") → **Reabrir** (Abierta, "1 abierta"). Ciclo OK. |
+| **H** Auto-despacho de viaje programado | ✅ | Viaje programado para las 22:39; `dispatchScheduledTrips` lo pasó de `scheduled` a `accepted` a las 22:29:04 (10 min antes), asignó a Ever/CYV627, y se completó el flujo `arrived_at_pickup` → `in_progress` → `completed`. Para validar la geocerca se movió el destino al punto actual del conductor; conductor liberado y pasajero lo ve en Actividad. |
 
 ---
 
@@ -55,10 +57,8 @@ D=WOMDqpodQEc0qvvVbCpMChVRFZ82   # UID del conductor de prueba (Auto CYV627, 4 a
 
 | Caso | Qué falta | Requisito |
 |---|---|---|
-| **H** Auto-despacho | Re-agendar un viaje ~12–15 min y confirmar que `dispatchScheduledTrips` lo pasa a `accepted` ~10 min antes. La 1ª vez Renzo lo canceló (decía "no hay drivers" y "Reintentar" no funcionaba; probablemente por ubicación de respaldo lejana antes de activar GPS). | GPS real activo + **Huawei (pasajero) reconectado a adb** |
 | **AS3** Multi-driver (asientos/cercanía) | Auto vs SUV dentro/fuera de anillos; ver reglas en el plan §3. | 1–2 teléfonos más con conductores de distinta capacidad |
 | **J** Registro conductor | Registro con documentos → `pending_review` → aprobar/rechazar+motivo/reenviar. Gestión en admin → **Conductores** (pestañas Aprobado/Pendiente/Rechazado/Suspendido). | Otro equipo |
-| **Notif con app CERRADA (killed)** | Solo se probó minimizada + pantalla apagada (dozing/asleep). Falta con la app del conductor **cerrada por completo**. | — |
 
 > **Coordinador:** la ruta de despacho es la misma `apl.tucomprass.com` logueado con un
 > usuario **coordinador** (p. ej. "irma", sede Westin Lima); el admin y el coordinador
@@ -80,6 +80,14 @@ D=WOMDqpodQEc0qvvVbCpMChVRFZ82   # UID del conductor de prueba (Auto CYV627, 4 a
   18:20:14 `NotificationService enqueue pkg=apl.tucomprass.pasajero channel=passenger_driver_arrival_silent importance=4`,
   **vibró** (`setHwVibrator on`) y **despertó la pantalla**; en lockscreen: "APL Pasajero · 1 notificación".
 - **Detalle:** canal `..._silent` → `hasValidSound=false` (vibra, sin sonido). Ver hallazgo §4.6.
+
+**Conductor — aplicación forzada a detener (killed):**
+- Se limpió Logcat y se ejecutó `am force-stop apl.tucompras.com`; el paquete quedó
+  `stopped=true` y `pidof apl.tucompras.com` vacío.
+- El backend asignó el viaje (`accepted`, `driverId=$D`), pero no apareció ningún registro
+  nuevo de FCM/`NotificationManager`, no sonó TTS y no hubo notificación visible.
+- Al abrir de nuevo la app, recuperó el viaje asignado y el flujo se completó; el conductor
+  volvió a `online`.
 
 ---
 
@@ -113,6 +121,13 @@ D=WOMDqpodQEc0qvvVbCpMChVRFZ82   # UID del conductor de prueba (Auto CYV627, 4 a
    patrón para todas las notificaciones (dashboard y apps).
 9. **(Mejora) Clic en una incidencia debe abrir su detalle** con info completa de
    **pasajero + conductor + viaje** (hoy es solo una fila con acción resolver/reabrir).
+10. **Voz de viaje programado:** al asignarse un viaje del mismo día, el conductor
+    escucha la fecha numérica (por ejemplo, "diez octavos"). Debe decir **"Hoy a las
+    [hora]"**; para otra fecha, usar una frase natural con día y mes.
+11. **FCM con app del conductor forzada a detener:** Android no entrega el aviso/voz cuando
+    el paquete está `stopped=true`; el viaje se asigna en backend, pero el conductor no se
+    entera hasta abrir la app. Revisar el canal de notificación y la estrategia de entrega
+    para este estado del sistema.
 
 > Estos hallazgos también están en la memoria de Claude
 > (`~/.claude/projects/.../memory/`), archivos `bug_*` / `feature_*`. Para Codex, esta
