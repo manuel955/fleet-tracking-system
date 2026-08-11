@@ -6,14 +6,21 @@ import 'package:url_launcher/url_launcher.dart';
 import '../config.dart';
 import '../services/passenger_service.dart';
 import '../theme/app_theme.dart';
+import 'email_auth_screen.dart';
 
 /// Registro del pasajero (una sola vez): nombre, telefono y foto de la
 /// credencial (DNI/carnet). Sin validacion biometrica -- la foto solo
 /// queda guardada como referencia.
 class RegistrationScreen extends StatefulWidget {
   final VoidCallback onDone;
+  final Future<void> Function(Map<String, dynamic> session)?
+  onEmailAuthenticated;
 
-  const RegistrationScreen({super.key, required this.onDone});
+  const RegistrationScreen({
+    super.key,
+    required this.onDone,
+    this.onEmailAuthenticated,
+  });
 
   @override
   State<RegistrationScreen> createState() => _RegistrationScreenState();
@@ -107,6 +114,16 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     );
   }
 
+  Future<void> _loginExistingEmail() async {
+    final callback = widget.onEmailAuthenticated;
+    if (callback == null || !mounted) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => EmailAuthScreen(onAuthenticated: callback),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -152,6 +169,17 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                 'Solo lo pedimos una vez, para poder asignarte un conductor.',
                 style: TextStyle(fontSize: 14.5, color: Colors.black54),
               ),
+              if (widget.onEmailAuthenticated != null) ...[
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: _busy ? null : _loginExistingEmail,
+                    icon: const Icon(Icons.login_outlined),
+                    label: const Text('Ya tengo una cuenta: ingresar'),
+                  ),
+                ),
+              ],
               const SizedBox(height: 28),
               TextFormField(
                 controller: _nameCtrl,

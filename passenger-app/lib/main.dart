@@ -554,7 +554,10 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
     }
 
     if (!_registered) {
-      return RegistrationScreen(onDone: _onRegistered);
+      return RegistrationScreen(
+        onDone: _onRegistered,
+        onEmailAuthenticated: _onEmailAuthenticated,
+      );
     }
 
     final tabs = [
