@@ -9,6 +9,14 @@ class AppConfig {
   static const String cloudFunctionsBaseUrl =
       'https://us-central1-rastreoflota-53052.cloudfunctions.net';
 
+  // Migracion gradual al API del VPS. Vacio mantiene Firebase sin cambios.
+  // Para una build de prueba: --dart-define=VPS_API_BASE_URL=https://api.tu-dominio
+  static const String vpsApiBaseUrl = String.fromEnvironment(
+    'VPS_API_BASE_URL',
+    defaultValue: '',
+  );
+  static bool get useVpsBackend => vpsApiBaseUrl.trim().isNotEmpty;
+
   // Codigo de pais por defecto para el telefono del pasajero (Peru).
   static const String defaultPhoneCountryCode = '+51';
 

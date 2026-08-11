@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../config.dart';
 import 'secure_session_store.dart';
+import 'vps_api_client.dart';
 
 /// Autenticacion con correo/contraseña contra Firebase Auth via REST (mismo
 /// estilo REST-manual que el resto de la app: RTDB y Storage tampoco usan
@@ -14,6 +15,11 @@ class AuthService {
     required String email,
     required String password,
   }) async {
+    if (AppConfig.useVpsBackend) {
+      throw Exception(
+        'El alta de conductores en VPS requiere completar placa y telefono; usa el registro Firebase mientras terminamos esa pantalla.',
+      );
+    }
     final uri = Uri.parse(
       'https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${AppConfig.firebaseApiKey}',
     );
@@ -46,6 +52,17 @@ class AuthService {
     required String email,
     required String password,
   }) async {
+    if (AppConfig.useVpsBackend) {
+      final data = await VpsApiClient.login(email: email, password: password);
+      final user = data['user'];
+      final token = data['token']?.toString();
+      final uid = user is Map ? user['id']?.toString() : null;
+      if (token == null || token.isEmpty || uid == null || uid.isEmpty) {
+        throw Exception('El API VPS no devolvio una sesion valida.');
+      }
+      await _persistVps(uid: uid, token: token);
+      return {'uid': uid, 'idToken': token};
+    }
     final uri = Uri.parse(
       'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${AppConfig.firebaseApiKey}',
     );
@@ -71,10 +88,18 @@ class AuthService {
 
   static Future<bool> isLoggedIn() async {
     final session = await SecureSessionStore.read();
-    return session['uid'] != null && session['refreshToken'] != null;
+    final expiresAt = session['expiresAt'] as int? ?? 0;
+    return session['uid'] != null &&
+        session['idToken'] != null &&
+        DateTime.now().millisecondsSinceEpoch < expiresAt;
   }
 
   static Future<void> sendPasswordResetEmail(String email) async {
+    if (AppConfig.useVpsBackend) {
+      throw Exception(
+        'El recupero de contrasena del VPS aun no esta habilitado; usa Firebase en esta version.',
+      );
+    }
     final normalizedEmail = email.trim();
     if (normalizedEmail.isEmpty || !normalizedEmail.contains('@')) {
       throw Exception('Escribe un correo valido.');
@@ -125,6 +150,9 @@ class AuthService {
   }
 
   static Future<void> deleteCurrentAccount() async {
+    if (AppConfig.useVpsBackend) {
+      throw Exception('La eliminacion de cuentas VPS aun no esta habilitada.');
+    }
     final session = await currentSession();
     final response = await http.post(
       Uri.parse('${AppConfig.cloudFunctionsBaseUrl}/deleteMyAccount'),
@@ -174,6 +202,18 @@ class AuthService {
       expiresAt: DateTime.now().millisecondsSinceEpoch +
           (int.parse(data['expiresIn']) * 1000) -
           60000,
+    );
+  }
+
+  static Future<void> _persistVps({
+    required String uid,
+    required String token,
+  }) async {
+    await SecureSessionStore.write(
+      uid: uid,
+      idToken: token,
+      expiresAt:
+          DateTime.now().millisecondsSinceEpoch + 6 * 24 * 60 * 60 * 1000,
     );
   }
 
