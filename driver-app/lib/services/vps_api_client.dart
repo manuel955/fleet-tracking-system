@@ -63,7 +63,7 @@ class VpsApiClient {
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw VpsApiException(
         response.statusCode,
-        (decoded['error'] ?? decoded['message'] ?? 'Error del API VPS')
+        (decoded['message'] ?? decoded['error'] ?? 'Error del API VPS')
             .toString(),
       );
     }
