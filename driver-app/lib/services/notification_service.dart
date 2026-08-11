@@ -66,7 +66,44 @@ class NotificationService {
 
   static Future<void> acknowledgeTripAssigned(String tripId) async {
     final prefs = await SharedPreferences.getInstance();
+    // El servicio GPS corre en otro isolate y SharedPreferences mantiene una
+    // cache por isolate. Recargar antes de escribir evita que una lectura
+    // antigua vuelva a sobrescribir el acuse.
+    await prefs.reload();
     await prefs.setBool('notification_ack:assigned:$tripId', true);
+    await initialize();
+    await _plugin.cancel(_notificationId('assigned:$tripId'));
+    try {
+      await _tts.stop();
+    } catch (_) {
+      // No hay voz activa que detener.
+    }
+  }
+
+  /// Al abrir la app se reconocen también asignaciones antiguas que quedaron
+  /// visibles por una entrega repetida de FCM o por el proceso en segundo
+  /// plano. Solo cancela ids de viajes asignados, nunca el aviso persistente
+  /// del servicio GPS.
+  static Future<void> acknowledgeAllAssigned() async {
+    final prefs = await SharedPreferences.getInstance();
+    // Incluye avisos creados por el isolate de segundo plano desde que la UI
+    // obtuvo su instancia de SharedPreferences.
+    await prefs.reload();
+    final keys = prefs.getKeys().where(
+      (key) => key.startsWith('notification_last_shown:assigned:'),
+    );
+    await initialize();
+    for (final key in keys) {
+      final tripId = key.substring('notification_last_shown:assigned:'.length);
+      if (tripId.isEmpty) continue;
+      await prefs.setBool('notification_ack:assigned:$tripId', true);
+      await _plugin.cancel(_notificationId('assigned:$tripId'));
+    }
+    try {
+      await _tts.stop();
+    } catch (_) {
+      // No hay voz activa que detener.
+    }
   }
 
   static Future<void> _acknowledgeNotificationPayload(String payload) async {
@@ -182,6 +219,10 @@ class NotificationService {
     final eventKey =
         'assigned:${tripId ?? DateTime.now().millisecondsSinceEpoch}';
     final prefs = await SharedPreferences.getInstance();
+    // El polling del servicio GPS puede ejecutarse en otro isolate. Sin esta
+    // recarga, ese isolate conserva un acuse antiguo y vuelve a alertar cada
+    // 30 segundos aunque el conductor ya haya abierto el viaje.
+    await prefs.reload();
     if (prefs.getBool('notification_ack:$eventKey') == true) return;
     final lastShownAt = prefs.getInt('notification_last_shown:$eventKey');
     final now = DateTime.now().millisecondsSinceEpoch;

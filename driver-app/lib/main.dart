@@ -237,6 +237,9 @@ class _DriverHomePageState extends State<DriverHomePage>
     if (!_supportsMobileServices) return;
 
     if (state == AppLifecycleState.resumed) {
+      // Reconoce avisos antiguos al volver a la app. El servicio GPS tiene
+      // otra notificacion y no se cancela aqui.
+      unawaited(NotificationService.acknowledgeAllAssigned());
       if (_tracking) {
         unawaited(_setScreenAwake(true));
         unawaited(_resumeTrackingAfterLifecycle());
@@ -808,7 +811,7 @@ class _DriverHomePageState extends State<DriverHomePage>
         });
         // Showing the active-trip screen acknowledges the repeating alert;
         // until this point the foreground service keeps reminding the driver.
-        unawaited(NotificationService.acknowledgeTripAssigned(tripId));
+        await NotificationService.acknowledgeTripAssigned(tripId);
       }
     } catch (_) {
       // Fallo de red puntual: se reintenta en el siguiente tick del timer.
