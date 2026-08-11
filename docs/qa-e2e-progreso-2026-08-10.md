@@ -46,6 +46,8 @@ D=WOMDqpodQEc0qvvVbCpMChVRFZ82   # UID del conductor de prueba (Auto CYV627, 4 a
 | **F** Cancelación admin | ✅ | Desde dashboard "Cancelar viaje" + prompt de motivo → `status=cancelled`, `cancelledBy="dashboard"`, `cancelReason` registrado, conductor liberado |
 | **Notif segundo plano — conductor** | ✅ | Voz de asignación **con pantalla apagada/dozing** (ver §3) |
 | **Notif segundo plano — pasajero** | ✅ | `driver_arrived` **con pantalla apagada/asleep** (ver §3) |
+| **I** Coordinador (crear/detalle/cancelar) | ✅ | `createCoordinatorTrip` (Solicitud creada, asignó a Ever/CYV627 con voz) → `getCoordinatorTripDetail` (modal seguimiento EN VIVO, ID `-OzijToEeWAhah4Uc5_L`) → `cancelCoordinatorTrip` (`cancelled`, `cancelledBy="coordinator"`, conductor liberado). Coordinador "irma", sede Westin Lima. |
+| **E — lado admin** (`manageTripFeedback`) | ✅ | Admin → Conductores → **Incidencias**: la incidencia "Objeto perdido" (gabi plaza/Ever) → **Marcar resuelta** (Resuelta, "0 abiertas") → **Reabrir** (Abierta, "1 abierta"). Ciclo OK. |
 
 ---
 
@@ -53,12 +55,15 @@ D=WOMDqpodQEc0qvvVbCpMChVRFZ82   # UID del conductor de prueba (Auto CYV627, 4 a
 
 | Caso | Qué falta | Requisito |
 |---|---|---|
-| **I** Coordinador (crear/cancelar) | Crear viaje de coordinador (`createCoordinatorTrip`) desde la ruta de despacho y probar `cancelCoordinatorTrip`. Se estaba por navegar a la ruta de dispatch cuando se pausó. Ruta según plan: `dashboard/coordinator-dashboard/dispatch` (confirmar URL real en `apl.tucomprass.com`). | Chrome PC logueado |
-| **E — lado admin** | Resolver/reabrir la incidencia "Objeto perdido" recién creada (`manageTripFeedback`) desde el dashboard. | Chrome PC logueado |
-| **H** Auto-despacho | Re-agendar un viaje ~12–15 min y confirmar que `dispatchScheduledTrips` lo pasa a `accepted` ~10 min antes. La 1ª vez Renzo lo canceló (decía "no hay drivers" y "Reintentar" no funcionaba; probablemente por ubicación de respaldo lejana antes de activar GPS). | GPS real activo |
+| **H** Auto-despacho | Re-agendar un viaje ~12–15 min y confirmar que `dispatchScheduledTrips` lo pasa a `accepted` ~10 min antes. La 1ª vez Renzo lo canceló (decía "no hay drivers" y "Reintentar" no funcionaba; probablemente por ubicación de respaldo lejana antes de activar GPS). | GPS real activo + **Huawei (pasajero) reconectado a adb** |
 | **AS3** Multi-driver (asientos/cercanía) | Auto vs SUV dentro/fuera de anillos; ver reglas en el plan §3. | 1–2 teléfonos más con conductores de distinta capacidad |
-| **J** Registro conductor | Registro con documentos → `pending_review` → aprobar/rechazar+motivo/reenviar. | Otro equipo |
+| **J** Registro conductor | Registro con documentos → `pending_review` → aprobar/rechazar+motivo/reenviar. Gestión en admin → **Conductores** (pestañas Aprobado/Pendiente/Rechazado/Suspendido). | Otro equipo |
 | **Notif con app CERRADA (killed)** | Solo se probó minimizada + pantalla apagada (dozing/asleep). Falta con la app del conductor **cerrada por completo**. | — |
+
+> **Coordinador:** la ruta de despacho es la misma `apl.tucomprass.com` logueado con un
+> usuario **coordinador** (p. ej. "irma", sede Westin Lima); el admin y el coordinador
+> son logins distintos sobre el mismo hosting (la UI cambia según el rol).
+> **Incidencias/feedback (E-admin):** admin → **Conductores** → pestaña **Incidencias**.
 
 ---
 
@@ -103,6 +108,11 @@ D=WOMDqpodQEc0qvvVbCpMChVRFZ82   # UID del conductor de prueba (Auto CYV627, 4 a
    muestra "el viaje finalizó, puedes calificarlo en Actividad" — **incorrecto** (fue
    *cancelado*, no finalizado) y **se queda pegado** un buen rato. → push de cancelación
    + mensaje "viaje cancelado" y limpiar el estado (volver a "Pedir un viaje").
+8. **(Mejora) Toda notificación debe avisar y guiar a dónde está**, como la de "nueva
+   solicitud de conductor" (alerta + deep-link a la vista relevante). Estandarizar ese
+   patrón para todas las notificaciones (dashboard y apps).
+9. **(Mejora) Clic en una incidencia debe abrir su detalle** con info completa de
+   **pasajero + conductor + viaje** (hoy es solo una fila con acción resolver/reabrir).
 
 > Estos hallazgos también están en la memoria de Claude
 > (`~/.claude/projects/.../memory/`), archivos `bug_*` / `feature_*`. Para Codex, esta
