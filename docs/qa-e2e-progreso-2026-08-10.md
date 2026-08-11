@@ -136,12 +136,16 @@ D=WOMDqpodQEc0qvvVbCpMChVRFZ82   # UID del conductor de prueba (Auto CYV627, 4 a
 13. **Mensaje «Señal GPS del conductor temporalmente desactualizada»:** no debe aparecer al
     pasajero como aviso durante un viaje; corregir la condición de refresco o reemplazarlo
     por un estado silencioso que no alarme al usuario mientras el viaje sigue activo.
-14. **GPS del conductor se congela mientras el vehículo avanza:** la app solicita un fix
-    puntual cada 5 segundos, espera solo 4 segundos y reutiliza la última posición hasta
-    30 segundos. En el Samsung se confirmó que cada solicitud activa y apaga el proveedor
-    GPS (`ProviderRequest HIGH_ACCURACY` → `OFF`), por eso el marcador salta media cuadra
-    y se detiene. Solución: usar `getPositionStream` continuo en el foreground service,
-    publicar solo posiciones frescas y no marcar una ubicación antigua como nueva.
+14. **GPS inestable en todos los estados:** mientras el vehículo avanza, el marcador puede
+    congelarse después de saltar media cuadra; cuando está detenido y **Disponible, sin
+    viaje**, la posición deriva y cambia tanto en la app del conductor como en el dashboard.
+    La app solicita un fix puntual cada 5 segundos, espera solo 4 segundos y reutiliza la
+    última posición hasta 30 segundos. En el Samsung se confirmó que cada solicitud activa
+    y apaga el proveedor GPS (`ProviderRequest HIGH_ACCURACY` → `OFF`), y no hay filtro de
+    precisión/deriva: el dashboard pinta cada coordenada recibida. Solución: usar
+    `getPositionStream` continuo en el foreground service, publicar solo posiciones frescas,
+    ignorar puntos con precisión baja y aplicar un filtro de estabilidad cuando el vehículo
+    está detenido para que no parezca que se mueve solo.
 
 > Estos hallazgos también están en la memoria de Claude
 > (`~/.claude/projects/.../memory/`), archivos `bug_*` / `feature_*`. Para Codex, esta
