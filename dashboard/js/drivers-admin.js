@@ -465,11 +465,30 @@ function renderTripIncidents() {
     const trip = adminTripHistory[tripId] || {};
     const resolved = feedback.incidentStatus === 'RESOLVED';
     const action = resolved ? 'reopen' : 'resolve';
+    const detail = `
+      <details class="incident-detail">
+        <summary>Ver detalle completo</summary>
+        <div class="incident-detail-grid">
+          <span>Viaje</span><b>${escapeHtml(tripId)}</b>
+          <span>Estado del viaje</span><b>${escapeHtml(TRIP_STATUS_LABELS[trip.status] || trip.status || feedback.tripStatus || '—')}</b>
+          <span>Origen</span><b>${escapeHtml(trip.pickupAddress || '—')}</b>
+          <span>Destino</span><b>${escapeHtml(trip.destinationAddress || '—')}</b>
+          <span>Pasajero</span><b>${escapeHtml(trip.passengerName || feedback.passengerId || '—')}</b>
+          <span>Teléfono pasajero</span><b>${escapeHtml(trip.passengerPhone || '—')}</b>
+          <span>Conductor</span><b>${escapeHtml(trip.driverName || adminDriversCache[feedback.driverId]?.name || '—')}</b>
+          <span>Placa</span><b>${escapeHtml(trip.driverPlate || adminDriversCache[feedback.driverId]?.plate || '—')}</b>
+          <span>Calificación</span><b>${feedback.rating == null ? 'No registrada' : `${escapeHtml(String(feedback.rating))}/5`}</b>
+          <span>Comentario</span><b>${escapeHtml(feedback.comment || 'Sin comentario')}</b>
+          <span>Detalle reportado</span><b>${escapeHtml(feedback.incidentDetails || 'Sin detalle')}</b>
+          <span>Creada</span><b>${escapeHtml(new Date(Number(feedback.createdAt || 0)).toLocaleString('es-PE'))}</b>
+          <span>Última actualización</span><b>${escapeHtml(new Date(Number(feedback.updatedAt || 0)).toLocaleString('es-PE'))}</b>
+        </div>
+      </details>`;
     return `<tr>
       <td>${new Date(Number(feedback.updatedAt || 0)).toLocaleString('es-PE')}</td>
       <td><strong>${escapeHtml(trip.passengerName || feedback.passengerId || 'Pasajero')}</strong><small>Viaje ${escapeHtml(tripId)}</small></td>
       <td><strong>${escapeHtml(trip.driverName || adminDriversCache[feedback.driverId]?.name || 'Sin conductor')}</strong><small>${escapeHtml(trip.driverPlate || adminDriversCache[feedback.driverId]?.plate || '—')}</small></td>
-      <td><strong>${escapeHtml(TRIP_INCIDENT_LABELS[feedback.incidentCategory] || feedback.incidentCategory)}</strong><small>${escapeHtml(feedback.incidentDetails || 'Sin detalle')}</small></td>
+      <td><strong>${escapeHtml(TRIP_INCIDENT_LABELS[feedback.incidentCategory] || feedback.incidentCategory)}</strong><small>${escapeHtml(feedback.incidentDetails || 'Sin detalle')}</small>${detail}</td>
       <td><span class="trip-history-status ${resolved ? 'completed' : 'cancelled'}">${resolved ? 'Resuelta' : 'Abierta'}</span></td>
       <td><button type="button" class="settings-table-action" data-incident-action="${action}" data-trip-id="${escapeHtml(tripId)}">${resolved ? 'Reabrir' : 'Marcar resuelta'}</button></td>
     </tr>`;

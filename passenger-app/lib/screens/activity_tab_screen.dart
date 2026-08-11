@@ -8,10 +8,10 @@ class ActivityTabScreen extends StatefulWidget {
   const ActivityTabScreen({super.key});
 
   @override
-  State<ActivityTabScreen> createState() => _ActivityTabScreenState();
+  ActivityTabScreenState createState() => ActivityTabScreenState();
 }
 
-class _ActivityTabScreenState extends State<ActivityTabScreen> {
+class ActivityTabScreenState extends State<ActivityTabScreen> {
   late Future<List<MapEntry<String, Map<String, dynamic>>>> _tripsFuture;
 
   @override
@@ -33,6 +33,17 @@ class _ActivityTabScreenState extends State<ActivityTabScreen> {
       builder: (_) => _TripFeedbackSheet(tripId: tripId, trip: trip),
     );
     if (saved == true && mounted) await _refresh();
+  }
+
+  /// Abre el formulario de calificación desde el flujo de finalización del
+  /// viaje. Si el pasajero cierra el formulario, permanece en Actividad y
+  /// puede volver a abrirlo desde el historial.
+  Future<void> openFeedbackForTrip(
+    String tripId,
+    Map<String, dynamic> trip,
+  ) async {
+    if (!mounted) return;
+    await _openFeedback(tripId, trip);
   }
 
   String _statusLabel(String? status) {

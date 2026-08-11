@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -26,6 +27,26 @@ class NotificationService {
   static final FlutterTts _tts = FlutterTts();
   static bool _initialized = false;
   static bool _ttsInitialized = false;
+  static const Duration _repeatAssignedAfter = Duration(seconds: 30);
+
+  /// Converts the backend's localized label (for example
+  /// "10/08, 10:39 p. m.") into natural speech for the driver's locale.
+  /// Same-day assignments are intentionally announced as "Hoy a las ...";
+  /// reading the numeric date aloud caused Android TTS to say "diez octavos".
+  static String scheduledPickupText(String? label, {DateTime? now}) {
+    final value = label?.trim() ?? '';
+    if (value.isEmpty) return value;
+    final match = RegExp(r'^\s*(\d{1,2})\s*[/-]\s*(\d{1,2})').firstMatch(value);
+    if (match == null) return value;
+    final day = int.tryParse(match.group(1)!) ?? -1;
+    final month = int.tryParse(match.group(2)!) ?? -1;
+    final today = now ?? DateTime.now();
+    if (day != today.day || month != today.month) return value;
+
+    var time = value.substring(match.end).trim();
+    if (time.startsWith(',')) time = time.substring(1).trim();
+    return time.isEmpty ? 'Hoy' : 'Hoy a las $time';
+  }
 
   static int _notificationId(String key) {
     var hash = 0;
@@ -41,6 +62,23 @@ class NotificationService {
     if (prefs.getString(marker) == 'shown') return false;
     await prefs.setString(marker, 'shown');
     return true;
+  }
+
+  static Future<void> acknowledgeTripAssigned(String tripId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('notification_ack:assigned:$tripId', true);
+  }
+
+  static Future<void> _acknowledgeNotificationPayload(String payload) async {
+    if (payload.startsWith('assigned:')) {
+      await acknowledgeTripAssigned(payload.substring('assigned:'.length));
+    }
+  }
+
+  static void _onNotificationResponse(NotificationResponse response) {
+    final payload = response.payload;
+    if (payload == null || payload.isEmpty) return;
+    unawaited(_acknowledgeNotificationPayload(payload));
   }
 
   static Future<void> initialize() async {
@@ -71,6 +109,7 @@ class NotificationService {
       const InitializationSettings(
         android: AndroidInitializationSettings('@drawable/notification_icon'),
       ),
+      onDidReceiveNotificationResponse: _onNotificationResponse,
     );
 
     _initialized = true;
@@ -137,17 +176,26 @@ class NotificationService {
     String? tripId,
     String? scheduledPickupLabel,
   }) async {
+    final spokenSchedule = scheduledPickupText(scheduledPickupLabel);
     final hasSchedule =
         scheduledPickupLabel != null && scheduledPickupLabel.isNotEmpty;
     final eventKey =
         'assigned:${tripId ?? DateTime.now().millisecondsSinceEpoch}';
-    if (!await _claimEvent(eventKey)) return;
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool('notification_ack:$eventKey') == true) return;
+    final lastShownAt = prefs.getInt('notification_last_shown:$eventKey');
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (lastShownAt != null &&
+        now - lastShownAt < _repeatAssignedAfter.inMilliseconds) {
+      return;
+    }
+    await prefs.setInt('notification_last_shown:$eventKey', now);
     await initialize();
     await _plugin.show(
       _notificationId(eventKey),
       hasSchedule ? 'Viaje Programado Asignado' : 'Nuevo Servicio Asignado',
       hasSchedule
-          ? 'Viaje programado para las $scheduledPickupLabel. Abre la app para ver los detalles.'
+          ? 'Viaje programado para ${spokenSchedule.isEmpty ? scheduledPickupLabel : spokenSchedule}. Abre la app para ver los detalles.'
           : 'Tienes un viaje nuevo. Abre la app para ver los detalles.',
       NotificationDetails(
         android: AndroidNotificationDetails(
@@ -164,9 +212,12 @@ class NotificationService {
           ticker: 'Nuevo servicio asignado',
         ),
       ),
+      payload: eventKey,
     );
     _speak(hasSchedule
-        ? 'Nuevo servicio programado para las $scheduledPickupLabel'
+        ? (spokenSchedule.isEmpty
+            ? 'Nuevo servicio programado para las $scheduledPickupLabel'
+            : spokenSchedule)
         : 'Nuevo servicio asignado');
   }
 

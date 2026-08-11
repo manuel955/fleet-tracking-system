@@ -654,7 +654,9 @@
     const button = document.getElementById('coordinator-cancel-trip');
     if (button) button.disabled = true;
     try {
-      await coordinatorRequest('cancelCoordinatorTrip', { tripId });
+      const result = await coordinatorRequest('cancelCoordinatorTrip', { tripId });
+      if (result?.trip) trips[tripId] = { ...trips[tripId], ...result.trip, status: 'cancelled' };
+      renderTrips();
       closeModal();
     } catch (error) {
       if (button) button.disabled = false;

@@ -204,6 +204,28 @@ test('passengers can retry an unavailable trip without changing server-owned ass
   assert.match(tripRules['.validate'], /newData\.child\('completedAt'\)\.val\(\) == data\.child\('completedAt'\)\.val\(\)/);
 });
 
+test('reintento autenticado conserva el viaje y despacha mediante transicion server-side', () => {
+  const start = functionsSource.indexOf('exports.retryPassengerTrip');
+  const end = functionsSource.indexOf('exports.createCoordinatorTrip', start);
+  const handler = functionsSource.slice(start, end);
+  assert.match(handler, /requireAuthenticatedUser/);
+  assert.match(handler, /trip\.passengerId !== passenger\.uid/);
+  assert.match(handler, /trip\.status !== 'no_drivers_available'/);
+  assert.match(handler, /status: 'searching'/);
+  assert.match(handler, /putDatabaseIfUnchanged/);
+});
+
+test('viajes cerrados envian deep-link de calificacion y cancelaciones incluyen estado', () => {
+  const start = functionsSource.indexOf('exports.handleTripStatusChange');
+  const end = functionsSource.indexOf('exports.recordDriverConnection', start);
+  const handler = functionsSource.slice(start, end);
+  assert.match(handler, /'trip_completed'/);
+  assert.match(handler, /'rate-trip'/);
+  assert.match(handler, /'trip_cancelled'/);
+  assert.match(handler, /status: 'cancelled'/);
+  assert.match(handler, /deepLink/);
+});
+
 test('passenger trip creation is idempotent and serialized on the server', () => {
   const start = functionsSource.indexOf('exports.createPassengerTrip');
   const end = functionsSource.indexOf('exports.createCoordinatorTrip', start);

@@ -56,6 +56,9 @@ class _SearchingScreenState extends State<SearchingScreen> {
       'pickupLng',
       'scheduledPickupLabel',
       'scheduledPickupAt',
+      'noDriversReason',
+      'driverId',
+      'driverName',
     ];
     return keys.any((key) => _trip[key] != next[key]);
   }
@@ -78,6 +81,14 @@ class _SearchingScreenState extends State<SearchingScreen> {
     setState(() => _busy = true);
     try {
       await TripService.retrySearch(widget.tripId);
+      // Actualiza el estado de inmediato. Si el backend ya asigno un
+      // conductor, el padre cambia a la pantalla de seguimiento sin esperar
+      // al siguiente tick del temporizador.
+      final trip = await TripService.getTrip(widget.tripId);
+      if (trip != null && mounted) {
+        setState(() => _trip = trip);
+        widget.onStatusChanged(trip);
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(

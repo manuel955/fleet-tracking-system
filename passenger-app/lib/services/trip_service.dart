@@ -259,24 +259,20 @@ class TripService {
 
   static Future<void> retrySearch(String tripId) async {
     final auth = await AuthService.signInAnonymously();
-    final uri = Uri.parse(
-      '${AppConfig.firebaseDbUrl}/trips/$tripId.json?auth=${auth['idToken']}',
-    );
+    final uri = Uri.parse('${AppConfig.cloudFunctionsBaseUrl}/retryPassengerTrip');
     final response = await http
-        .patch(
+        .post(
           uri,
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'status': 'searching',
-            'requestedAt': DateTime.now().millisecondsSinceEpoch,
-            'noDriversReason': null,
-            'rejectedDriverIds': <String, dynamic>{},
-          }),
+          headers: {
+            'Authorization': 'Bearer ${auth['idToken']}',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({'tripId': tripId}),
         )
         .timeout(_networkTimeout);
     if (response.statusCode != 200) {
       throw Exception(
-        'Firebase rechazo el reintento (${response.statusCode}): ${response.body}',
+        'El servicio rechazo el reintento (${response.statusCode}): ${response.body}',
       );
     }
   }

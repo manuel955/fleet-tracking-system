@@ -795,7 +795,7 @@ class _DriverHomePageState extends State<DriverHomePage>
       if (!suppressAssignedNotification &&
           _tripId != tripId &&
           WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
-        NotificationService.showTripAssigned(
+        await NotificationService.showTripAssigned(
           tripId: tripId,
           scheduledPickupLabel: trip['scheduledPickupLabel'] as String?,
         );
@@ -806,6 +806,9 @@ class _DriverHomePageState extends State<DriverHomePage>
           _tripId = tripId;
           _tripData = trip;
         });
+        // Showing the active-trip screen acknowledges the repeating alert;
+        // until this point the foreground service keeps reminding the driver.
+        unawaited(NotificationService.acknowledgeTripAssigned(tripId));
       }
     } catch (_) {
       // Fallo de red puntual: se reintenta en el siguiente tick del timer.

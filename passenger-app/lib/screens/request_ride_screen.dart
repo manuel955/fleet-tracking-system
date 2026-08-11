@@ -48,6 +48,7 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
   String? _error;
   bool _showMap = false;
   bool _mapReady = false;
+  bool _pickupIsVerified = false;
   List<LatLng> _routePoints = [];
   DateTime? _scheduledDate;
   TimeOfDay? _scheduledTime;
@@ -61,6 +62,7 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
     if (widget.initialPickup != null) {
       _pickup = widget.initialPickup!;
       _loadingLocation = false;
+      _pickupIsVerified = true;
     } else {
       _locateMe();
     }
@@ -112,16 +114,46 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
 
   Future<void> _locateMe() async {
     try {
-      final permission = await Permission.locationWhenInUse.request();
-      if (permission.isGranted) {
-        final position = await Geolocator.getCurrentPosition();
-        setState(() => _pickup = LatLng(position.latitude, position.longitude));
-        _mapController?.animateCamera(CameraUpdate.newLatLng(_pickup));
+      var permission = await Permission.locationWhenInUse.status;
+      if (permission.isDenied) {
+        permission = await Permission.locationWhenInUse.request();
       }
+      if (permission.isPermanentlyDenied) {
+        if (mounted) {
+          setState(() => _error =
+              'Permiso de ubicación bloqueado. Actívalo en Ajustes o busca el punto de recogida manualmente.');
+        }
+        return;
+      }
+      if (!permission.isGranted) {
+        if (mounted) {
+          setState(() => _error =
+              'Necesitamos tu ubicación para pedir el viaje. También puedes elegir el punto manualmente.');
+        }
+        return;
+      }
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        if (mounted) {
+          setState(() => _error =
+              'Activa el GPS o elige manualmente el punto de recogida.');
+        }
+        return;
+      }
+      final position = await Geolocator.getCurrentPosition();
+      if (!mounted) return;
+      setState(() {
+        _pickup = LatLng(position.latitude, position.longitude);
+        _pickupIsVerified = true;
+        _error = null;
+      });
+      _mapController?.animateCamera(CameraUpdate.newLatLng(_pickup));
     } catch (_) {
-      // Se queda con la posicion por defecto; el usuario puede buscar o arrastrar el pin.
+      if (mounted) {
+        setState(() => _error =
+            'No pudimos obtener tu ubicación. Busca o mueve el punto de recogida manualmente.');
+      }
     } finally {
-      setState(() => _loadingLocation = false);
+      if (mounted) setState(() => _loadingLocation = false);
     }
   }
 
@@ -140,6 +172,7 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
     setState(() {
       _pickup = latLng;
       _pickupLabel = result.description;
+      _pickupIsVerified = true;
     });
     if (_destination != null) {
       _loadRoute();
@@ -286,6 +319,10 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
     final picked = await showTimePicker(
       context: context,
       initialTime: _scheduledTime ?? TimeOfDay.now(),
+      // El modo teclado de algunos Samsung concatena los dígitos (5→"65")
+      // y desplaza el botón OK. El dial evita ambas fallas y sigue permitiendo
+      // cambiar hora y minutos con un toque.
+      initialEntryMode: TimePickerEntryMode.dial,
       // Forzado a 12h AM/PM aunque el telefono este en formato 24h.
       builder: (context, child) => MediaQuery(
         data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
@@ -331,6 +368,11 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
   };
 
   Future<void> _requestRide() async {
+    if (!_pickupIsVerified) {
+      setState(() => _error =
+          'Confirma un punto de recogida real: activa el GPS, busca una dirección o mueve el pin.');
+      return;
+    }
     setState(() {
       _requesting = true;
       _error = null;
@@ -418,6 +460,7 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
                             setState(() {
                               _pickup = latLng;
                               _pickupLabel = 'Punto marcado en el mapa';
+                              _pickupIsVerified = true;
                             });
                             if (_destination != null) _loadRoute();
                           },

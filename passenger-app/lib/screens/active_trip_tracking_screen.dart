@@ -20,7 +20,7 @@ import 'destination_picker_screen.dart';
 class ActiveTripTrackingScreen extends StatefulWidget {
   final String tripId;
   final Map<String, dynamic> trip;
-  final VoidCallback onFinished;
+  final void Function(Map<String, dynamic> trip) onFinished;
 
   const ActiveTripTrackingScreen({
     super.key,
@@ -52,7 +52,6 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
   bool _routeRequestInFlight = false;
   bool _tripPollInFlight = false;
   bool _driverPollInFlight = false;
-  bool _driverLocationStale = false;
   bool _busy = false;
   // La brújula/recentrado no forma parte de la interfaz operativa.
   final bool _showMapRecenterControl = true;
@@ -239,7 +238,7 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
       if (mounted && _tripViewChanged(trip)) setState(() => _trip = trip);
       if (trip['status'] == 'completed' || trip['status'] == 'cancelled') {
         await TripService.clearActiveTrip();
-        widget.onFinished();
+        widget.onFinished(trip);
       }
       // El objetivo de la ruta puede cambiar (de "ir a recoger" a "ir al
       // destino") sin que la posicion del conductor se haya movido; se
@@ -267,12 +266,10 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
         final driverPosition = fresh && lat != null && lng != null
             ? LatLng(lat.toDouble(), lng.toDouble())
             : null;
-        if (_driverViewChanged(driver, driverPosition) ||
-            _driverLocationStale != !fresh) {
+        if (_driverViewChanged(driver, driverPosition)) {
           setState(() {
             _driverProfile = driver;
             _driverLatLng = driverPosition;
-            _driverLocationStale = !fresh;
           });
         }
         if (!fresh || lat == null || lng == null) return;
@@ -418,7 +415,7 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
     setState(() => _busy = true);
     try {
       await TripService.cancelTrip(widget.tripId);
-      widget.onFinished();
+      widget.onFinished({..._trip, 'status': 'cancelled'});
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -698,17 +695,6 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
                             fontWeight: FontWeight.w700,
                           ),
                         ),
-                        if (_driverLocationStale) ...[
-                          const SizedBox(height: 2),
-                          const Text(
-                            'Señal GPS del conductor temporalmente desactualizada.',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: AppColors.amber,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
                         if ((_trip['scheduledPickupLabel'] as String?)
                                 ?.isNotEmpty ==
                             true) ...[

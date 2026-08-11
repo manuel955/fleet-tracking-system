@@ -181,6 +181,26 @@ function buildNoDriversReason(requestedPassengers, stats) {
   return `No encontramos un vehículo disponible cerca para ${requestedPassengers} pasajeros. Puedes reintentar en unos segundos.`;
 }
 
+function buildNoDriversReasonCode(requestedPassengers, stats) {
+  if (!Number.isInteger(requestedPassengers) || requestedPassengers < 1 || requestedPassengers > 45) {
+    return 'INVALID_PASSENGER_COUNT';
+  }
+  if (stats.onlineApproved === 0) return 'NO_APPROVED_DRIVERS_ONLINE';
+  if (stats.freshLocation === 0) return 'NO_FRESH_DRIVER_LOCATION';
+  if (stats.capacity === 0) return 'NO_VEHICLE_CAPACITY';
+  return 'NO_DRIVER_NEARBY';
+}
+
+function noDriversUpdate(requestedPassengers, stats) {
+  return {
+    status: 'no_drivers_available',
+    noDriversReason: buildNoDriversReason(requestedPassengers, stats),
+    noDriversReasonCode: buildNoDriversReasonCode(requestedPassengers, stats),
+    noDriversCheckedAt: Date.now(),
+    retryAvailable: true,
+  };
+}
+
 // Busca al conductor disponible mas cercano y lo reclama de forma atomica
 // antes de asignarlo al viaje. Si dos viajes intentan reclamar al mismo
 // conductor casi al mismo tiempo, solo uno gana el "if-match"; el otro
@@ -192,15 +212,13 @@ async function attemptAssignment(
   excludeMap,
   scheduledPickupLabel,
   passengerCount = 1,
+  scheduledPickupSpeech = null,
 ) {
   const db = admin.database();
   const requestedPassengers = Number(passengerCount);
   const stats = { onlineApproved: 0, freshLocation: 0, capacity: 0 };
   if (!Number.isInteger(requestedPassengers) || requestedPassengers < 1 || requestedPassengers > 45) {
-    await updateTripWhileDispatchable(tripId, () => ({
-      status: 'no_drivers_available',
-      noDriversReason: buildNoDriversReason(requestedPassengers, stats),
-    }));
+    await updateTripWhileDispatchable(tripId, () => noDriversUpdate(requestedPassengers, stats));
     return;
   }
   const snap = await db
@@ -276,7 +294,21 @@ async function attemptAssignment(
         await sendPush(
           c.driver.fcmToken,
           'trip_assigned',
-          scheduledPickupLabel ? { tripId, scheduledPickupLabel } : { tripId }
+          scheduledPickupLabel
+            ? {
+              tripId,
+              status: 'accepted',
+              scheduledPickupLabel,
+              scheduledPickupSpeech: scheduledPickupSpeech || scheduledPickupLabel,
+              route: 'active-trip',
+              deepLink: `driver://trip/${tripId}`,
+            }
+            : {
+              tripId,
+              status: 'accepted',
+              route: 'active-trip',
+              deepLink: `driver://trip/${tripId}`,
+            }
         );
         return;
       }
@@ -285,10 +317,7 @@ async function attemptAssignment(
     }
   }
 
-  await updateTripWhileDispatchable(tripId, () => ({
-    status: 'no_drivers_available',
-    noDriversReason: buildNoDriversReason(requestedPassengers, stats),
-  }));
+  await updateTripWhileDispatchable(tripId, () => noDriversUpdate(requestedPassengers, stats));
 }
 
 // Libera al conductor (vuelve a 'online') solo si sigue ligado a este
@@ -336,6 +365,8 @@ module.exports = {
   releaseDriverWithToken,
   categoryIndexForDriver,
   buildNoDriversReason,
+  buildNoDriversReasonCode,
+  noDriversUpdate,
   rankCandidates,
   rankedCandidatesByRadius,
   selectCandidate,

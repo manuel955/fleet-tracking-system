@@ -5,7 +5,10 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 /// hace falta un canal separado con sonido fuerte/TTS para "nuevo viaje".
 class NotificationService {
   static const String _channelId = 'passenger_alert_channel';
-  static const String _arrivalChannelId = 'passenger_driver_arrival_silent';
+  // Android fija el sonido la primera vez que crea un canal. El sufijo v2
+  // garantiza que los teléfonos que ya tenían el canal silencioso reciban
+  // un canal nuevo con tono audible.
+  static const String _arrivalChannelId = 'passenger_driver_arrival_sound_v2';
   static final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
   static bool _initialized = false;
@@ -23,9 +26,9 @@ class NotificationService {
     const arrivalChannel = AndroidNotificationChannel(
       _arrivalChannelId,
       'Llegada del conductor',
-      description: 'Aviso visual y silencioso cuando el conductor llega.',
+      description: 'Aviso con sonido y vibración cuando el conductor llega.',
       importance: Importance.high,
-      playSound: false,
+      playSound: true,
       enableVibration: true,
     );
 
@@ -85,10 +88,10 @@ class NotificationService {
           _arrivalChannelId,
           'Llegada del conductor',
           channelDescription:
-              'Aviso visual y silencioso cuando el conductor llega.',
+              'Aviso con sonido y vibración cuando el conductor llega.',
           importance: Importance.high,
           priority: Priority.high,
-          playSound: false,
+          playSound: true,
           enableVibration: true,
         ),
       ),

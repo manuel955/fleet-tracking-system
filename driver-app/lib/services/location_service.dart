@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'dart:ui';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -12,9 +13,17 @@ import 'notification_service.dart';
 
 const String _notificationChannelId = 'fleet_tracking_channel';
 const int _notificationId = 888;
-const Duration _gpsFixTimeout = Duration(seconds: 4);
+const Duration _uiGpsFixTimeout = Duration(seconds: 4);
 const Duration _networkTimeout = Duration(seconds: 8);
-const Duration _maxAcceptedLastKnownAge = Duration(seconds: 30);
+const Duration _maxStreamPositionAge = Duration(seconds: 15);
+const double _maxAcceptedAccuracyMeters = 80;
+const double _stationarySpeedMetersPerSecond = 1.5;
+// A phone reporting ~50-60m horizontal accuracy can drift a whole block
+// while parked. A slow vehicle (speed <=1.5m/s) is still allowed to move
+// once it clears this envelope or reports a real speed.
+const double _stationaryJitterMeters = 60;
+const int _locationDistanceFilterMeters = 5;
+const Duration _locationUpdateInterval = Duration(seconds: 2);
 
 /// Clave persistida que indica si el usuario pidio explicitamente el
 /// rastreo. Android puede reiniciar el servicio en segundo plano por su
@@ -105,19 +114,13 @@ class LocationService {
     try {
       final position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
-        timeLimit: _gpsFixTimeout,
+        timeLimit: _uiGpsFixTimeout,
       );
-      return isUsableCoordinates(position.latitude, position.longitude)
-          ? position
-          : null;
+      return shouldPublishPosition(position, null) ? position : null;
     } catch (_) {
-      final last = await Geolocator.getLastKnownPosition();
-      if (last == null ||
-          !isUsableCoordinates(last.latitude, last.longitude) ||
-          !_isRecentPosition(last)) {
-        return null;
-      }
-      return last;
+      // A lastKnownPosition is not a fresh heartbeat. The map can simply
+      // retain its previous marker when the provider has no new fix.
+      return null;
     }
   }
 
@@ -165,7 +168,36 @@ class LocationService {
   static bool _isRecentPosition(Position position, {DateTime? now}) {
     final reference = now ?? DateTime.now();
     return reference.difference(position.timestamp).abs() <=
-        _maxAcceptedLastKnownAge;
+        _maxStreamPositionAge;
+  }
+
+  /// Filters stale, imprecise and stationary GPS jitter before it reaches
+  /// Firebase. A parked phone can report small movements around its real
+  /// location; those must not make the driver marker wander on the map.
+  static bool shouldPublishPosition(Position position, Position? previous,
+      {DateTime? now}) {
+    if (!isUsableCoordinates(position.latitude, position.longitude)) {
+      return false;
+    }
+    if (!position.accuracy.isFinite ||
+        position.accuracy > _maxAcceptedAccuracyMeters) {
+      return false;
+    }
+    if (!_isRecentPosition(position, now: now)) return false;
+    if (previous == null) return true;
+
+    final distance = Geolocator.distanceBetween(
+      previous.latitude,
+      previous.longitude,
+      position.latitude,
+      position.longitude,
+    );
+    final speed = position.speed.isFinite ? position.speed : 0.0;
+    if (speed <= _stationarySpeedMetersPerSecond &&
+        distance < _stationaryJitterMeters) {
+      return false;
+    }
+    return true;
   }
 
   static bool isUsableCoordinates(double latitude, double longitude) {
@@ -206,8 +238,11 @@ void onServiceStart(ServiceInstance service) async {
     service.setAsForegroundService();
   }
 
-  Timer? timer;
+  StreamSubscription<Position>? positionSubscription;
+  Timer? alertTimer;
   var sendInFlight = false;
+  Position? pendingPosition;
+  Position? lastAcceptedPosition;
   var alertCheckInFlight = false;
 
   Future<void> checkTripAlerts() async {
@@ -221,40 +256,73 @@ void onServiceStart(ServiceInstance service) async {
   }
 
   service.on('stopService').listen((event) {
-    timer?.cancel();
+    alertTimer?.cancel();
+    positionSubscription?.cancel();
     service.stopSelf();
   });
 
   _log(service,
-      'Servicio iniciado. Enviando cada ${AppConfig.locationIntervalSeconds}s.');
+      'Servicio iniciado. GPS continuo cada ${_locationUpdateInterval.inSeconds}s.');
 
-  // El timer se crea antes del primer GPS. Obtener un fix puede tardar varios
-  // segundos y no debe bloquear el resto del ciclo del servicio.
-  timer = Timer.periodic(
-    AppConfig.locationInterval,
-    (_) {
-      // No superponer lecturas GPS/red: si un ciclo tarda mas de 5s, el
-      // siguiente espera al siguiente intervalo. Asi no se multiplican las
-      // escrituras ni los heartbeats por una mala cobertura.
-      if (sendInFlight) return;
-      sendInFlight = true;
-      unawaited(_sendCurrentLocation(service).whenComplete(() {
-        sendInFlight = false;
-      }));
-      // FCM es inmediato cuando llega, pero Huawei puede retrasar el
-      // despertar de ese isolate con la pantalla apagada. Este chequeo corre
-      // dentro del foreground service que ya mantiene vivo el GPS y cubre
-      // asignaciones, cancelaciones y cambios de destino aunque no llegue el
-      // push.
-      unawaited(checkTripAlerts());
+  Future<void> drainLocationQueue() async {
+    if (sendInFlight) return;
+    sendInFlight = true;
+    try {
+      while (pendingPosition != null) {
+        final position = pendingPosition;
+        pendingPosition = null;
+        if (position == null || !LocationService._isRecentPosition(position)) {
+          continue;
+        }
+        await _sendPosition(service, position);
+      }
+    } finally {
+      sendInFlight = false;
+      // A stream callback can arrive between the final queue check and this
+      // flag reset. Kick the drain again so that sample is never stranded.
+      if (pendingPosition != null) unawaited(drainLocationQueue());
+    }
+  }
+
+  void onPosition(Position position) {
+    if (!LocationService.shouldPublishPosition(
+        position, lastAcceptedPosition)) {
+      _log(service, 'GPS descartado: precisión/deriva insuficiente.');
+      return;
+    }
+    lastAcceptedPosition = position;
+    // Keep only the newest sample while the network request is in flight;
+    // never replay an old coordinate after connectivity returns.
+    pendingPosition = position;
+    unawaited(drainLocationQueue());
+  }
+
+  final LocationSettings locationSettings = Platform.isAndroid
+      ? AndroidSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: _locationDistanceFilterMeters,
+          intervalDuration: _locationUpdateInterval,
+        )
+      : const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: _locationDistanceFilterMeters,
+        );
+  positionSubscription = Geolocator.getPositionStream(
+    locationSettings: locationSettings,
+  ).listen(
+    onPosition,
+    onError: (Object error, StackTrace stack) {
+      _log(service, 'Error en stream GPS: $error');
     },
+    cancelOnError: false,
   );
 
-  // Primer envio inmediato, sin retrasar el arranque del timer.
-  sendInFlight = true;
-  unawaited(_sendCurrentLocation(service).whenComplete(() {
-    sendInFlight = false;
-  }));
+  // El GPS ya no depende de este timer. El chequeo de asignaciones sigue
+  // teniendo polling para complementar FCM cuando Android/Huawei retrasan el
+  // isolate de notificaciones.
+  alertTimer = Timer.periodic(AppConfig.locationInterval, (_) {
+    unawaited(checkTripAlerts());
+  });
   unawaited(checkTripAlerts());
 }
 
@@ -318,12 +386,16 @@ Future<void> _checkTripAlerts() async {
     trip['destinationAddress'],
   ].map((value) => value?.toString() ?? '').join('|');
 
-  if (previousTripId != currentTripId) {
-    await NotificationService.showTripAssigned(
-      tripId: currentTripId,
-      scheduledPickupLabel: trip['scheduledPickupLabel']?.toString(),
-    );
-  } else if (prefs.getString(_alertedDestinationKey) != null &&
+  // The notification service throttles this to once every 30s until the
+  // driver taps it or the active-trip screen acknowledges it. Calling it on
+  // every poll is therefore intentional: it keeps the alert alive when FCM
+  // was delayed or lost while the foreground service is running.
+  await NotificationService.showTripAssigned(
+    tripId: currentTripId,
+    scheduledPickupLabel: trip['scheduledPickupLabel']?.toString(),
+  );
+  if (previousTripId == currentTripId &&
+      prefs.getString(_alertedDestinationKey) != null &&
       prefs.getString(_alertedDestinationKey) != destinationSignature) {
     await NotificationService.showTripUpdated(
       tripId: currentTripId,
@@ -345,40 +417,15 @@ Future<Map<String, dynamic>?> _readTrip(String tripId, String token) async {
   return raw is Map ? Map<String, dynamic>.from(raw) : null;
 }
 
-Future<void> _sendCurrentLocation(ServiceInstance service) async {
+Future<void> _sendPosition(ServiceInstance service, Position position) async {
   try {
-    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      _log(service, 'GPS del teléfono desactivado. Actívalo en ajustes.');
+    if (!LocationService.shouldPublishPosition(position, null)) {
+      _log(service, 'Posicion GPS antigua o imprecisa. Se descarta.');
       return;
     }
-
-    final permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied ||
-        permission == LocationPermission.deniedForever) {
-      _log(service,
-          'Permiso de ubicación no otorgado ("$permission"). Abre la app y concede permiso.');
-      return;
-    }
-
-    _log(service, 'Obteniendo posición GPS...');
-
-    Position position;
-    try {
-      position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: _gpsFixTimeout,
-      );
-    } catch (e) {
-      _log(service,
-          'getCurrentPosition falló ($e), probando última posición conocida...');
-      final last = await Geolocator.getLastKnownPosition();
-      if (last == null || !LocationService._isRecentPosition(last)) {
-        _log(service, 'No hay ninguna posición disponible todavía.');
-        return;
-      }
-      position = last;
-    }
+    // The stream supplies every sample. This method only sends a fresh
+    // sample; it never starts a second getCurrentPosition polling loop or
+    // falls back to lastKnownPosition.
 
     if (!LocationService.isUsableCoordinates(
         position.latitude, position.longitude)) {
@@ -394,6 +441,10 @@ Future<void> _sendCurrentLocation(ServiceInstance service) async {
     // de ubicacion; asi el telefono no necesita escribir el nodo padre RTDB.
     final auth = await AuthService.currentSession();
     final token = auth['idToken'];
+    if (token is! String || token.isEmpty) {
+      _log(service, 'Sesion sin token; no se publica la ubicacion.');
+      return;
+    }
 
     final heading = position.heading.isFinite ? position.heading : 0.0;
     final payload = jsonEncode({

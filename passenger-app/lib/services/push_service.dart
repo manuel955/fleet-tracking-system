@@ -29,6 +29,12 @@ Future<void> pushBackgroundHandler(RemoteMessage message) async {
         message.data['reason']?.toString(),
       );
       break;
+    case 'trip_completed':
+      await NotificationService.showSimple(
+        'Viaje finalizado',
+        'Tu viaje terminó. Abre la app para calificarlo.',
+      );
+      break;
   }
 }
 

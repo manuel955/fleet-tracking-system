@@ -166,6 +166,86 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
     }
   }
 
+  Future<void> _openScheduledTripPreview() async {
+    final trip = widget.scheduledTrip;
+    if (trip == null || !mounted) return;
+    final pickup = trip['pickupAddress']?.toString().trim();
+    final destination = trip['destinationAddress']?.toString().trim();
+    final pickupAt = trip['scheduledPickupAt'];
+    final date = pickupAt is num
+        ? DateTime.fromMillisecondsSinceEpoch(pickupAt.toInt())
+        : null;
+    final dateLabel = date == null
+        ? (trip['scheduledPickupLabel']?.toString() ?? 'Hora por confirmar')
+        : '${date.day.toString().padLeft(2, '0')}/'
+              '${date.month.toString().padLeft(2, '0')}/${date.year} · '
+              '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(24, 4, 24, 28),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Viaje programado',
+                style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Recogida: $dateLabel',
+                style: const TextStyle(color: AppColors.muted),
+              ),
+              const SizedBox(height: 22),
+              _ScheduledRoutePoint(
+                icon: Icons.circle,
+                label: pickup?.isNotEmpty == true
+                    ? pickup!
+                    : 'Punto de partida',
+              ),
+              const Padding(
+                padding: EdgeInsets.only(left: 4),
+                child: SizedBox(
+                  height: 24,
+                  child: VerticalDivider(thickness: 1),
+                ),
+              ),
+              _ScheduledRoutePoint(
+                icon: Icons.square,
+                label: destination?.isNotEmpty == true
+                    ? destination!
+                    : 'Destino por definir',
+              ),
+              if (trip['passengerCount'] != null) ...[
+                const SizedBox(height: 18),
+                Text(
+                  'Pasajeros: ${trip['passengerCount']}',
+                  style: const TextStyle(color: AppColors.muted),
+                ),
+              ],
+              const SizedBox(height: 22),
+              OutlinedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  _cancelScheduledTrip();
+                },
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.red,
+                  side: const BorderSide(color: AppColors.red),
+                  minimumSize: const Size.fromHeight(46),
+                ),
+                child: const Text('Cancelar viaje programado'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Stack(
@@ -343,37 +423,62 @@ class _HomeTabScreenState extends State<HomeTabScreen> {
   Widget _buildScheduledTripCard() {
     final trip = widget.scheduledTrip!;
     final label = trip['scheduledPickupLabel'] as String?;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        color: Colors.white,
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(14),
+      elevation: 3,
+      child: InkWell(
+        onTap: _openScheduledTripPreview,
         borderRadius: BorderRadius.circular(14),
-        boxShadow: const [
-          BoxShadow(
-            color: Colors.black26,
-            blurRadius: 12,
-            offset: Offset(0, 2),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              const Icon(Icons.schedule, color: AppColors.ink),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  label != null
+                      ? 'Viaje programado para las $label'
+                      : 'Tienes un viaje programado',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              const Icon(Icons.chevron_right, color: AppColors.muted),
+            ],
           ),
-        ],
+        ),
       ),
-      child: Row(
-        children: [
-          const Icon(Icons.schedule, color: AppColors.ink),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              label != null
-                  ? 'Viaje programado para las $label'
-                  : 'Tienes un viaje programado',
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-            ),
+    );
+  }
+}
+
+class _ScheduledRoutePoint extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _ScheduledRoutePoint({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 3),
+          child: Icon(icon, size: 9, color: AppColors.ink),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
           ),
-          TextButton(
-            onPressed: _cancelScheduledTrip,
-            child: const Text('Cancelar', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }

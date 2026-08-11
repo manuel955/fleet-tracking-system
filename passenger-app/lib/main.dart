@@ -160,6 +160,7 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
   Timer? _accessValidationTimer;
   StreamSubscription<RemoteMessage>? _foregroundMessageSubscription;
   int _tabIndex = 0;
+  final _activityKey = GlobalKey<ActivityTabScreenState>();
 
   @override
   void initState() {
@@ -300,6 +301,12 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
               message.data['reason']?.toString(),
             );
             break;
+          case 'trip_completed':
+            NotificationService.showSimple(
+              'Viaje finalizado',
+              'Tu viaje terminó. Abre la app para calificarlo.',
+            );
+            break;
         }
       });
     }
@@ -308,12 +315,18 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
     var activeTripId = await TripService.getActiveTripId();
 
     Map<String, dynamic>? trip;
+    Map<String, dynamic>? completedTripToRate;
+    String? completedTripId;
     if (activeTripId != null) {
       try {
         trip = await TripService.getTrip(activeTripId);
-        if (trip == null ||
-            trip['status'] == 'completed' ||
-            trip['status'] == 'cancelled') {
+        if (trip?['status'] == 'completed') {
+          completedTripToRate = trip;
+          completedTripId = activeTripId;
+          await TripService.clearActiveTrip();
+          trip = null;
+          activeTripId = null;
+        } else if (trip == null || trip['status'] == 'cancelled') {
           await TripService.clearActiveTrip();
           trip = null;
           activeTripId = null;
@@ -381,6 +394,14 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
       _scheduledTrip = scheduledTrip;
       _loading = false;
     });
+    if (completedTripToRate != null && completedTripId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        setState(() => _tabIndex = 1);
+        await _activityKey.currentState
+            ?.openFeedbackForTrip(completedTripId!, completedTripToRate!);
+      });
+    }
   }
 
   void _onRegistered() {
@@ -444,13 +465,19 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
   void _onTripStatusChanged(Map<String, dynamic> trip) {
     final status = trip['status'] as String?;
     if (status == 'completed' || status == 'cancelled') {
-      _onTripFinished(showActivity: true);
+      _onTripFinished(finishedTrip: trip, showActivity: true);
       return;
     }
     setState(() => _activeTrip = trip);
   }
 
-  void _onTripFinished({bool showActivity = false}) {
+  void _onTripFinished({
+    Map<String, dynamic>? finishedTrip,
+    bool showActivity = false,
+  }) {
+    final tripId = _activeTripId;
+    final trip = finishedTrip ?? _activeTrip;
+    final completed = trip?['status'] == 'completed';
     TripService.clearActiveTrip();
     setState(() {
       _activeTripId = null;
@@ -458,13 +485,18 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
       if (showActivity) _tabIndex = 1;
     });
     unawaited(_validatePassengerAccess());
-    if (showActivity) {
+    if (completed && tripId != null && trip != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        await _activityKey.currentState?.openFeedbackForTrip(tripId, trip);
+      });
+    } else if (showActivity) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'El viaje finalizó. Puedes calificarlo en Actividad.',
+              'El viaje fue cancelado.',
             ),
           ),
         );
@@ -494,7 +526,8 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
         return ActiveTripTrackingScreen(
           tripId: _activeTripId!,
           trip: _activeTrip!,
-          onFinished: () => _onTripFinished(showActivity: true),
+          onFinished: (finishedTrip) =>
+              _onTripFinished(finishedTrip: finishedTrip, showActivity: true),
         );
       }
       return SearchingScreen(
@@ -531,7 +564,7 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
         scheduledTrip: _scheduledTrip,
         onScheduledTripCancelled: _onScheduledTripCancelled,
       ),
-      const ActivityTabScreen(),
+      ActivityTabScreen(key: _activityKey),
       AccountTabScreen(
         onLoggedOut: _onLoggedOut,
         onEmailAuthenticated: _onEmailAuthenticated,

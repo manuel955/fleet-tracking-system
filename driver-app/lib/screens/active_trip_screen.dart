@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../config.dart';
 import '../services/directions_service.dart';
 import '../services/map_adapter.dart';
+import '../services/notification_service.dart';
 import '../services/trip_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/labeled_icon_button.dart';
@@ -502,7 +503,7 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
                       true) ...[
                     const SizedBox(height: 4),
                     Text(
-                      'Viaje programado para las ${trip['scheduledPickupLabel']}',
+                      'Viaje programado para ${NotificationService.scheduledPickupText(trip['scheduledPickupLabel'] as String?)}',
                       style:
                           const TextStyle(fontSize: 13, color: AppColors.muted),
                     ),

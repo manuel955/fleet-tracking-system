@@ -153,6 +153,22 @@ D=WOMDqpodQEc0qvvVbCpMChVRFZ82   # UID del conductor de prueba (Auto CYV627, 4 a
 
 ---
 
+### Verificación posterior a los arreglos (2026-08-11)
+
+- Los hallazgos **1–10 y 12–14** quedaron implementados en las apps, Functions y dashboard:
+  selector horario en dial, motivo/reintento sin conductores, permiso GPS sin ubicación de
+  respaldo silenciosa, preview de reservas, alerta repetible, sonido de llegada, cancelación
+  sincronizada, rutas/deep-links en payloads, detalle de incidencias, voz "Hoy a las",
+  calificación automática, ocultamiento de GPS desactualizado y stream GPS con filtro de deriva.
+- El hallazgo **11 (paquete forzado a detener)** sigue siendo una limitación de Android:
+  un paquete en estado `force-stop` no recibe FCM, incluso con prioridad alta; no se marca como
+  resuelto falsamente. Al reabrir, el polling recupera la asignación.
+- Regresión automatizada: Functions **90/90** (reglas/emulador **16/16**), dashboard
+  **8/8**, driver **13/13** y pasajero **11/11**; ambos APK debug compilan.
+- La instalación física sobre las dos unidades queda pendiente con APK firmado de producción:
+  el APK debug fue rechazado por `INSTALL_FAILED_UPDATE_INCOMPATIBLE` frente a la firma de
+  Google Play. No se desinstalaron apps ni se borraron datos.
+
 ## 5. Notas técnicas clave
 
 - **`cancelledBy`** desde el dashboard queda como `"dashboard"` (no `"admin"`). El motivo

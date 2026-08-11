@@ -960,6 +960,15 @@ async function cancelTrip(tripId) {
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || 'No se pudo cancelar el viaje.');
+    // Actualiza la vista de inmediato. El trigger libera el conductor y
+    // notifica a las apps de forma asíncrona, pero el operador no debe ver el
+    // viaje pegado en ruta mientras espera ese evento.
+    if (activeTripsCache[tripId]) activeTripsCache[tripId] = { ...activeTripsCache[tripId], ...(result.trip || {}), status: 'cancelled' };
+    if (todayTripsCache[tripId]) todayTripsCache[tripId] = { ...todayTripsCache[tripId], ...(result.trip || {}), status: 'cancelled' };
+    if (expandedDriverId && driversCache[expandedDriverId]?.currentTripId === tripId) {
+      clearRoute();
+    }
+    scheduleSidebarRender();
   } catch (error) {
     alert(error.message || error);
   }

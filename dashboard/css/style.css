@@ -974,6 +974,11 @@ button, input { font-family: inherit; }
 .dashboard-users-table th { color: var(--gray-500); font-weight: 700; background: var(--gray-50); }
 .dashboard-users-table tr:last-child td { border-bottom: 0; }
 .dashboard-users-table td small { color: var(--gray-500); }
+.incident-detail { margin-top: 8px; font-size: 12px; }
+.incident-detail summary { cursor: pointer; color: var(--ink, #081618); font-weight: 700; }
+.incident-detail-grid { display: grid; grid-template-columns: minmax(120px, 0.7fr) minmax(160px, 1.3fr); gap: 5px 10px; margin-top: 8px; padding: 10px; border-radius: 10px; background: var(--gray-50); }
+.incident-detail-grid span { color: var(--gray-500); }
+.incident-detail-grid b { overflow-wrap: anywhere; font-weight: 600; }
 .dashboard-role-select, .dashboard-role-static { min-width: 126px; padding: 8px 10px; border: 1px solid var(--gray-200); border-radius: var(--radius-sm); background: var(--white); font: inherit; }
 .dashboard-role-static { display: inline-block; color: var(--gray-500); background: var(--gray-50); }
 .dashboard-status { display: inline-block; padding: 4px 11px; border-radius: 999px; font-size: 12px; font-weight: 700; }

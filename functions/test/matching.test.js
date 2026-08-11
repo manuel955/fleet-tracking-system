@@ -3,12 +3,24 @@ const assert = require('node:assert/strict');
 
 const {
   claimDriverWithToken,
+  buildNoDriversReasonCode,
+  noDriversUpdate,
   rankCandidates,
   rankedCandidatesByRadius,
   releaseDriverWithToken,
   selectCandidate,
   updateTripWhileDispatchableWithToken,
 } = require('../matching');
+
+test('el despacho conserva una causa accionable y permite reintentar cuando no hay conductor', () => {
+  const stats = { onlineApproved: 1, freshLocation: 0, capacity: 0 };
+  assert.equal(buildNoDriversReasonCode(1, stats), 'NO_FRESH_DRIVER_LOCATION');
+  const update = noDriversUpdate(1, stats);
+  assert.equal(update.status, 'no_drivers_available');
+  assert.equal(update.retryAvailable, true);
+  assert.equal(update.noDriversReasonCode, 'NO_FRESH_DRIVER_LOCATION');
+  assert.ok(Number(update.noDriversCheckedAt) > 0);
+});
 
 function candidate(id, categoryIndex, dist) {
   return { id, categoryIndex, dist };

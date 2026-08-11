@@ -69,6 +69,28 @@ const BRANDING_BUILD_TTL_MS = 3 * 60 * 60 * 1000;
 const OWNER_DASHBOARD_EMAIL = 'anfurex.3351@gmail.com';
 const DATABASE_URL = 'https://rastreoflota-53052-default-rtdb.firebaseio.com';
 const LIMA_TIME_ZONE = 'America/Lima';
+
+function formatScheduledPickupSpeech(timestamp) {
+  const value = Number(timestamp);
+  if (!Number.isFinite(value)) return null;
+  const date = new Date(value);
+  const time = new Intl.DateTimeFormat('es-PE', {
+    timeZone: LIMA_TIME_ZONE,
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(date).replace(/\s+/g, ' ').trim();
+  const dayKey = (input) => new Intl.DateTimeFormat('en-CA', {
+    timeZone: LIMA_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(input);
+  if (dayKey(date) === dayKey(Date.now())) return `Hoy a las ${time}`;
+  const dateLabel = new Intl.DateTimeFormat('es-PE', {
+    timeZone: LIMA_TIME_ZONE,
+    day: 'numeric',
+    month: 'long',
+  }).format(date);
+  return `${dateLabel} a las ${time}`;
+}
 // Es un token publico pk de Mapbox, el mismo proveedor que ya usa el mapa
 // cliente. Puede reemplazarse en Cloud Functions con MAPBOX_ACCESS_TOKEN sin
 // tener que modificar el codigo.
@@ -964,6 +986,8 @@ exports.manageDrivers = functions.https.onRequest(async (req, res) => {
       await sendPush(driver.fcmToken, 'place_assigned', {
         placeName: assignedPlace.name,
         placeType: assignedPlace.type,
+        route: 'home',
+        deepLink: 'driver://home',
       });
       await recordAuditEvent(manager, 'DRIVER_PLACE_ASSIGNED', 'driver', driverId, assignedPlace);
       return res.json({ ok: true });
@@ -1972,6 +1996,9 @@ exports.createPassengerTrip = functions.https.onRequest(async (req, res) => {
         minute: '2-digit',
         hour12: true,
       }).format(new Date(scheduledPickupAt));
+    const scheduledPickupSpeech = scheduledPickupAt == null
+      ? null
+      : formatScheduledPickupSpeech(scheduledPickupAt);
     const trip = {
       passengerId: passenger.uid,
       passengerName: String(profile.name || 'Pasajero').trim().slice(0, 120),
@@ -1985,6 +2012,7 @@ exports.createPassengerTrip = functions.https.onRequest(async (req, res) => {
       destinationLng: destination.lng,
       destinationAddress,
       ...(scheduledPickupAt == null ? {} : { scheduledPickupAt, scheduledPickupLabel }),
+      ...(scheduledPickupSpeech ? { scheduledPickupSpeech } : {}),
       status: scheduledPickupAt == null ? 'searching' : 'scheduled',
       requestedAt: now,
       rejectedDriverIds: {},
@@ -2003,6 +2031,66 @@ exports.createPassengerTrip = functions.https.onRequest(async (req, res) => {
     if (lockRef && lockToken) {
       await lockRef.transaction((current) => current?.token === lockToken ? null : current).catch(() => null);
     }
+  }
+});
+
+// Reintento explícito para un viaje que no encontró conductor. Mantenerlo en
+// una función autenticada evita que el cliente tenga que reconstruir el viaje
+// (y evita perder el motivo visible mientras el despacho vuelve a intentarlo).
+exports.retryPassengerTrip = functions.https.onRequest(async (req, res) => {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo no permitido' });
+  try {
+    const passenger = await requireAuthenticatedUser(req);
+    const tripId = String(req.body?.tripId || '').trim();
+    if (!isValidFirebaseKey(tripId)) return res.status(400).json({ error: 'Viaje invalido.' });
+    const accessToken = await functionsAccessToken();
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const { etag, value: trip } = await readDatabaseWithEtag(`trips/${tripId}`, accessToken);
+      if (!trip || trip.passengerId !== passenger.uid) {
+        return res.status(404).json({ error: 'Viaje no encontrado.' });
+      }
+      if (trip.status !== 'no_drivers_available') {
+        return res.status(409).json({
+          error: trip.status === 'searching'
+            ? 'Este viaje ya está buscando conductor.'
+            : 'Este viaje ya no se puede reintentar.',
+          status: trip.status,
+        });
+      }
+      const now = Date.now();
+      const next = {
+        ...trip,
+        status: 'searching',
+        requestedAt: now,
+        noDriversReason: null,
+        noDriversReasonCode: null,
+        noDriversCheckedAt: null,
+        retryAvailable: null,
+        retryCount: Number(trip.retryCount || 0) + 1,
+        lastRetryAt: now,
+      };
+      const response = await putDatabaseIfUnchanged(`trips/${tripId}`, next, etag, accessToken);
+      if (response.ok) {
+        // El trigger de estado realiza la asignación de forma asíncrona. La
+        // respuesta deja al cliente en una pantalla de búsqueda determinista.
+        return res.json({
+          ok: true,
+          tripId,
+          status: 'searching',
+          message: 'Estamos buscando un conductor nuevamente.',
+          trip: next,
+        });
+      }
+      if (response.status !== 412) throw new Error(`No se pudo reintentar el viaje (${response.status}).`);
+      await new Promise((resolve) => setTimeout(resolve, 80 * (attempt + 1)));
+    }
+    return res.status(409).json({ error: 'El viaje cambió mientras se reintentaba. Actualiza e intenta nuevamente.' });
+  } catch (error) {
+    console.error('retryPassengerTrip', error);
+    return res.status(/No autorizado/.test(String(error.message || '')) ? 403 : 400)
+      .json({ error: error.message || 'No se pudo reintentar el viaje.' });
   }
 });
 
@@ -2114,7 +2202,14 @@ exports.cancelCoordinatorTrip = functions.https.onRequest(async (req, res) => {
         etag,
         accessToken,
       );
-      if (response.ok) return res.json({ ok: true, status: 'cancelled' });
+      if (response.ok) return res.json({
+        ok: true,
+        tripId,
+        status: 'cancelled',
+        cancelledAt: decision.value.cancelledAt,
+        message: 'Viaje cancelado. Se notificó al pasajero y al conductor.',
+        trip: decision.value,
+      });
       if (response.status !== 412) {
         throw new Error(`No se pudo cancelar el viaje (${response.status}).`);
       }
@@ -2150,7 +2245,14 @@ exports.cancelDashboardTrip = functions.https.onRequest(async (req, res) => {
       );
       if (response.ok) {
         await recordAuditEvent(manager, 'TRIP_CANCELLED', 'trip', tripId, { reason });
-        return res.json({ ok: true, status: 'cancelled' });
+        return res.json({
+          ok: true,
+          tripId,
+          status: 'cancelled',
+          cancelledAt: decision.value.cancelledAt,
+          message: 'Viaje cancelado. Se notificó al pasajero y al conductor.',
+          trip: decision.value,
+        });
       }
       if (response.status !== 412) {
         throw new Error(`No se pudo cancelar el viaje (${response.status}).`);
@@ -2197,7 +2299,8 @@ exports.assignDriverOnTripCreate = functions.database
       trip.pickupLng,
       trip.rejectedDriverIds || {},
       trip.scheduledPickupLabel,
-      trip.passengerCount
+      trip.passengerCount,
+      trip.scheduledPickupSpeech
     );
   });
 
@@ -2243,7 +2346,8 @@ exports.dispatchScheduledTrips = functions.pubsub
           trip.pickupLng,
           trip.rejectedDriverIds || {},
           trip.scheduledPickupLabel,
-          trip.passengerCount
+          trip.passengerCount,
+          trip.scheduledPickupSpeech
         );
       }
     }
@@ -2307,8 +2411,26 @@ exports.handleTripStatusChange = functions.database
         trip.pickupLng,
         trip.rejectedDriverIds || {},
         trip.scheduledPickupLabel,
-        trip.passengerCount
+        trip.passengerCount,
+        trip.scheduledPickupSpeech
       );
+    }
+
+    if (after === 'no_drivers_available' && before !== 'no_drivers_available') {
+      const tripSnap = await db.ref(`trips/${tripId}`).once('value');
+      const trip = tripSnap.val();
+      if (!trip?.passengerId) return null;
+      const passenger = (await db.ref(`passengers/${trip.passengerId}`).once('value')).val() || {};
+      await sendPush(passenger.fcmToken, 'no_drivers_available', {
+        tripId,
+        status: 'no_drivers_available',
+        reason: trip.noDriversReason || 'No encontramos un conductor disponible.',
+        reasonCode: trip.noDriversReasonCode || 'NO_DRIVER_NEARBY',
+        retryAvailable: 'true',
+        route: 'active-trip',
+        deepLink: `passenger://trip/${tripId}`,
+      });
+      return null;
     }
 
     if (after === 'completed' || after === 'cancelled') {
@@ -2321,13 +2443,38 @@ exports.handleTripStatusChange = functions.database
         if (trip.driverId) {
           const driverSnap = await db.ref(`drivers/${trip.driverId}`).once('value');
           const driver = driverSnap.val() || {};
-          await sendPush(driver.fcmToken, 'trip_cancelled', { tripId, reason });
+          await sendPush(driver.fcmToken, 'trip_cancelled', {
+            tripId,
+            status: 'cancelled',
+            reason,
+            cancelReason: reason,
+            cancelledBy: trip.cancelledBy || 'system',
+            route: 'active-trip',
+            deepLink: `driver://trip/${tripId}`,
+          });
         }
         if (trip.passengerId && trip.cancelledBy !== 'passenger') {
           const passengerSnap = await db.ref(`passengers/${trip.passengerId}`).once('value');
           const passenger = passengerSnap.val() || {};
-          await sendPush(passenger.fcmToken, 'trip_cancelled', { tripId, reason });
+          await sendPush(passenger.fcmToken, 'trip_cancelled', {
+            tripId,
+            status: 'cancelled',
+            reason,
+            cancelReason: reason,
+            cancelledBy: trip.cancelledBy || 'system',
+            route: 'active-trip',
+            deepLink: `passenger://trip/${tripId}`,
+          });
         }
+      } else if (after === 'completed' && trip.passengerId) {
+        const passenger = (await db.ref(`passengers/${trip.passengerId}`).once('value')).val() || {};
+        await sendPush(passenger.fcmToken, 'trip_completed', {
+          tripId,
+          status: 'completed',
+          ratingRequired: 'true',
+          route: 'rate-trip',
+          deepLink: `passenger://trip/${tripId}/rate`,
+        });
       }
       const historyTrip = await buildTripHistoryRecord(trip);
       const historyWrites = {
@@ -2346,7 +2493,12 @@ exports.handleTripStatusChange = functions.database
       if (!trip) return null;
       const passengerSnap = await db.ref(`passengers/${trip.passengerId}`).once('value');
       const passenger = passengerSnap.val() || {};
-      await sendPush(passenger.fcmToken, 'driver_arrived', { tripId });
+      await sendPush(passenger.fcmToken, 'driver_arrived', {
+        tripId,
+        status: 'arrived_at_pickup',
+        route: 'active-trip',
+        deepLink: `passenger://trip/${tripId}`,
+      });
       return null;
     }
 
@@ -2458,6 +2610,8 @@ exports.notifyTripUpdated = functions.database
     await sendPush(driver.fcmToken, 'trip_updated', {
       tripId,
       destinationAddress: trip.destinationAddress || '',
+      route: 'active-trip',
+      deepLink: `driver://trip/${tripId}`,
     });
     return null;
   });
@@ -2502,6 +2656,8 @@ exports.notifyApprovalStatusChange = functions.database
       rejectionReason: after === 'rejected' ? driver.rejectionReason || '' : '',
       rejectionFieldKeys: after === 'rejected' ? driver.rejectionFieldKeys || '' : '',
       reviewedAt: driver.reviewedAt ? String(driver.reviewedAt) : '',
+      route: after === 'approved' ? 'home' : 'profile',
+      deepLink: after === 'approved' ? 'driver://home' : 'driver://profile',
     });
     return null;
   });

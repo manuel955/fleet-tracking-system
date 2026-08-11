@@ -25,5 +25,9 @@ void main() {
       TripService.hasFreshDriverLocation(<String, dynamic>{}, now: now),
       isFalse,
     );
+    expect(
+      TripService.hasFreshDriverLocation({'lastUpdate': 101000}, now: now),
+      isFalse,
+    );
   });
 }
