@@ -111,9 +111,7 @@ jobs:
         working-directory: ${{ inputs.app == 'driver' && 'driver-app' || 'passenger-app' }}
         env:
           GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false
-          PUB_CACHE: /home/runner/.pub-cache
         run: |
-          set -euo pipefail
           test -n "$MAPBOX_ACCESS_TOKEN"
           APK_PATH="$PWD/build/app/outputs/flutter-apk/app-release.apk"
           BUILD_LOG="$RUNNER_TEMP/${APP_KIND}-signed-apk-build.log"
