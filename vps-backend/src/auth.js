@@ -69,6 +69,10 @@ async function authenticateFirebaseDashboardToken(token) {
     email: claims.email ?? null,
     display_name: claims.name ?? claims.email ?? '',
     status: 'active',
+    dashboard_role: claims.dashboardRole ?? (claims.dashboardAdmin === true ? 'ADMIN' : 'SUPERVISOR'),
+    dashboard_sede_type: claims.sedeType ?? null,
+    dashboard_sede_id: claims.sedeId ?? null,
+    sede_name: claims.sedeName ?? null,
     firebaseClaims: claims,
   };
 }

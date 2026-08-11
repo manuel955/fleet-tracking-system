@@ -18,11 +18,19 @@ const firebaseConfig = {
 window.vpsApiBaseUrl = 'https://api.tucomprass.com';
 
 firebase.initializeApp(firebaseConfig);
+const firebaseAuth = firebase.auth();
 
 function createVpsDashboardAuth() {
   const sessionKey = 'apl_vps_dashboard_session';
   let current = null;
   const listeners = new Set();
+  const makeLegacyUser = (user) => ({
+    uid: user.uid,
+    email: user.email || '',
+    displayName: user.displayName || '',
+    getIdToken: () => user.getIdToken(),
+    getIdTokenResult: (forceRefresh = false) => user.getIdTokenResult(forceRefresh),
+  });
   const readStored = () => {
     try {
       const value = JSON.parse(localStorage.getItem(sessionKey) || 'null');
@@ -59,6 +67,11 @@ function createVpsDashboardAuth() {
   };
   const stored = readStored();
   if (stored) current = makeUser(stored);
+  firebaseAuth.onAuthStateChanged((user) => {
+    if (current || !user) return;
+    current = makeLegacyUser(user);
+    notify();
+  });
   return {
     get currentUser() { return current; },
     onAuthStateChanged(listener) {
@@ -74,6 +87,12 @@ function createVpsDashboardAuth() {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
+        if (response.status === 401) {
+          const legacy = await firebaseAuth.signInWithEmailAndPassword(email, password);
+          current = makeLegacyUser(legacy.user);
+          notify();
+          return { user: current };
+        }
         const error = new Error(payload.message || payload.error || 'Credenciales inválidas.');
         error.code = response.status === 401 ? 'auth/invalid-credential' : 'auth/network-request-failed';
         throw error;
@@ -92,10 +111,10 @@ function createVpsDashboardAuth() {
       error.code = 'auth/password-reset-unavailable';
       throw error;
     },
-    async signOut() { setSession(null); },
+    async signOut() { setSession(null); await firebaseAuth.signOut(); },
   };
 }
 
-const auth = window.vpsApiBaseUrl ? createVpsDashboardAuth() : firebase.auth();
+const auth = window.vpsApiBaseUrl ? createVpsDashboardAuth() : firebaseAuth;
 const db = firebase.database();
 const storage = firebase.storage();

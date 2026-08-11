@@ -231,7 +231,9 @@ function publicDashboardUser(row, currentId) {
 
 async function manageDashboardUsers(user, body) {
   requireRole(user, ['dashboard']);
-  if (String(user.dashboard_role || '').toUpperCase() !== 'ADMIN') {
+  const firebaseAdmin = user.firebaseClaims?.dashboardAdmin === true
+    || String(user.firebaseClaims?.dashboardRole || '').toUpperCase() === 'ADMIN';
+  if (String(user.dashboard_role || '').toUpperCase() !== 'ADMIN' && !firebaseAdmin) {
     const error = new Error('Solo un administrador puede gestionar usuarios.');
     error.statusCode = 403;
     throw error;
