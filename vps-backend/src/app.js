@@ -331,6 +331,33 @@ async function getDriverMe(user) {
   };
 }
 
+async function getTripDriverLocation(user, tripId) {
+  requireRole(user, ['passenger']);
+  const trip = await findTrip(tripId);
+  if (!trip || trip.passenger_id !== user.id || !trip.driver_id) {
+    const error = new Error('Viaje no encontrado.');
+    error.statusCode = 404;
+    throw error;
+  }
+  const result = await pool.query(
+    `SELECT latitude, longitude, accuracy_m, recorded_at
+       FROM driver_locations
+      WHERE driver_id = $1`,
+    [trip.driver_id],
+  );
+  const row = result.rows[0];
+  return {
+    tripId,
+    driverId: trip.driver_id,
+    location: row ? {
+      latitude: Number(row.latitude),
+      longitude: Number(row.longitude),
+      accuracyM: row.accuracy_m === null ? null : Number(row.accuracy_m),
+      recordedAt: new Date(row.recorded_at).getTime(),
+    } : null,
+  };
+}
+
 const driverTransitions = Object.freeze({
   accepted: 'arrived_at_pickup',
   arrived_at_pickup: 'in_progress',
@@ -547,6 +574,13 @@ export function createApp({ health = databaseHealth } = {}) {
       if (req.method === 'POST' && url.pathname === '/api/v1/device-tokens') {
         const user = await authenticate(req);
         return json(res, 200, await registerDeviceToken(user, await readJson(req)));
+      }
+
+      const driverLocationMatch = url.pathname.match(/^\/api\/v1\/trips\/([^/]+)\/driver-location$/);
+      if (req.method === 'GET' && driverLocationMatch) {
+        const user = await authenticate(req);
+        const tripId = decodeURIComponent(driverLocationMatch[1]);
+        return json(res, 200, await getTripDriverLocation(user, tripId));
       }
 
       if (req.method === 'GET' && url.pathname === '/api/v1/trips') {

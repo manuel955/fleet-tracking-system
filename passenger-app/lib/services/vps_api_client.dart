@@ -126,7 +126,9 @@ class VpsApiClient {
         .timeout(_timeout);
     late final dynamic value;
     try {
-      value = response.body.trim().isEmpty ? <dynamic>[] : jsonDecode(response.body);
+      value = response.body.trim().isEmpty
+          ? <dynamic>[]
+          : jsonDecode(response.body);
     } catch (_) {
       throw const VpsApiException(502, 'Respuesta invalida del API VPS.');
     }
@@ -136,10 +138,13 @@ class VpsApiClient {
           : 'Error del API VPS';
       throw VpsApiException(response.statusCode, message.toString());
     }
-    if (value is! List) {
+    final tripsValue = value is Map && value['trips'] is List
+        ? value['trips']
+        : value;
+    if (tripsValue is! List) {
       throw const VpsApiException(502, 'Respuesta invalida del API VPS.');
     }
-    return value
+    return tripsValue
         .whereType<Map>()
         .map((trip) => normalizeTrip(Map<String, dynamic>.from(trip)))
         .toList();
@@ -184,7 +189,17 @@ class VpsApiClient {
       token: token,
       body: body,
     );
-    return normalizeTrip(result);
+    return normalizeTrip(_wrappedMap(result, 'trip'));
+  }
+
+  static Map<String, dynamic> _wrappedMap(
+    Map<String, dynamic> payload,
+    String key,
+  ) {
+    final nested = payload[key];
+    return nested is Map
+        ? Map<String, dynamic>.from(nested)
+        : Map<String, dynamic>.from(payload);
   }
 
   static Future<Map<String, dynamic>?> getTrip({
@@ -193,12 +208,35 @@ class VpsApiClient {
   }) async {
     try {
       return normalizeTrip(
-        await _request('GET', '/api/v1/trips/$tripId', token: token),
+        _wrappedMap(
+          await _request('GET', '/api/v1/trips/$tripId', token: token),
+          'trip',
+        ),
       );
     } on VpsApiException catch (error) {
       if (error.statusCode == 404) return null;
       rethrow;
     }
+  }
+
+  static Future<Map<String, dynamic>?> getDriverLocation({
+    required String token,
+    required String tripId,
+  }) async {
+    final payload = await _request(
+      'GET',
+      '/api/v1/trips/$tripId/driver-location',
+      token: token,
+    );
+    final location = payload['location'];
+    if (location is! Map) return null;
+    final data = Map<String, dynamic>.from(location);
+    return {
+      'lat': data['latitude'],
+      'lng': data['longitude'],
+      'accuracy': data['accuracyM'],
+      'lastUpdate': data['recordedAt'],
+    };
   }
 
   static Future<Map<String, dynamic>> cancelTrip({
@@ -212,7 +250,7 @@ class VpsApiClient {
       token: token,
       body: {if (reason != null && reason.trim().isNotEmpty) 'reason': reason},
     );
-    return normalizeTrip(result);
+    return normalizeTrip(_wrappedMap(result, 'trip'));
   }
 
   static Future<Map<String, dynamic>> retryTrip({
@@ -224,7 +262,7 @@ class VpsApiClient {
       '/api/v1/trips/$tripId/retry',
       token: token,
     );
-    return normalizeTrip(result);
+    return normalizeTrip(_wrappedMap(result, 'trip'));
   }
 
   static Future<Map<String, dynamic>> submitFeedback({
@@ -233,11 +271,12 @@ class VpsApiClient {
     required int rating,
     String comment = '',
   }) async {
-    return _request(
+    final result = await _request(
       'POST',
       '/api/v1/trips/$tripId/feedback',
       token: token,
       body: {'rating': rating, 'comment': comment},
     );
+    return _wrappedMap(result, 'feedback');
   }
 }

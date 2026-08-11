@@ -218,11 +218,16 @@ class TripService {
   }
 
   static Future<Map<String, dynamic>?> getDriverLocation(
-    String driverId,
-  ) async {
+    String driverId, {
+    String? tripId,
+  }) async {
     if (AppConfig.useVpsBackend) {
-      // El contrato VPS aun no expone la posicion del conductor al pasajero.
-      return null;
+      if (tripId == null || tripId.isEmpty) return null;
+      final auth = await AuthService.signInAnonymously();
+      return VpsApiClient.getDriverLocation(
+        token: auth['idToken'].toString(),
+        tripId: tripId,
+      );
     }
     final auth = await AuthService.signInAnonymously();
     final uri = Uri.parse(

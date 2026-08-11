@@ -257,7 +257,10 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
     if (_driverPollInFlight) return;
     _driverPollInFlight = true;
     try {
-      final driver = await TripService.getDriverLocation(driverId);
+      final driver = await TripService.getDriverLocation(
+        driverId,
+        tripId: widget.tripId,
+      );
       if (driver == null) return;
       final lat = driver['lat'] as num?;
       final lng = driver['lng'] as num?;

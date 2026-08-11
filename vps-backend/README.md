@@ -44,6 +44,8 @@ y una prueba de recuperación del POS.
   `POST /api/v1/drivers/location` para conductores aprobados.
 - `POST /api/v1/trips`, `GET /api/v1/trips`, `GET /api/v1/trips/:id`,
   `POST /api/v1/trips/:id/cancel` y `POST /api/v1/trips/:id/retry`.
+- `GET /api/v1/trips/:id/driver-location` devuelve la ultima ubicacion del
+  conductor solo al pasajero propietario de ese viaje.
 - `POST /api/v1/trips/:id/action` para `arrive`, `start` y `complete`, y
   `POST /api/v1/trips/:id/feedback` para la calificación del pasajero.
 - `POST /api/v1/device-tokens` registra el token del dispositivo; el envío

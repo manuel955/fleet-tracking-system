@@ -105,6 +105,16 @@ class VpsApiClient {
     return normalized;
   }
 
+  static Map<String, dynamic> _wrappedMap(
+    Map<String, dynamic> payload,
+    String key,
+  ) {
+    final nested = payload[key];
+    return nested is Map
+        ? Map<String, dynamic>.from(nested)
+        : Map<String, dynamic>.from(payload);
+  }
+
   static Future<Map<String, dynamic>> setAvailability({
     required String token,
     required bool online,
@@ -138,7 +148,7 @@ class VpsApiClient {
     required String tripId,
   }) async {
     final result = await _request('GET', '/api/v1/trips/$tripId', token: token);
-    return normalizeTrip(result);
+    return normalizeTrip(_wrappedMap(result, 'trip'));
   }
 
   static Future<Map<String, dynamic>> advanceTrip({
