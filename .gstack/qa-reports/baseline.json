@@ -1,0 +1,29 @@
+{
+  "date": "2026-08-11",
+  "url": "https://apl.tucomprass.com/",
+  "healthScore": 86,
+  "issues": [
+    {
+      "id": "QA-001",
+      "title": "Prolonged physical driving test remains",
+      "severity": "medium",
+      "category": "functional"
+    },
+    {
+      "id": "QA-002",
+      "title": "Browser automation intermittently retains alert drawer",
+      "severity": "low",
+      "category": "test-harness"
+    }
+  ],
+  "categoryScores": {
+    "console": 100,
+    "links": 100,
+    "visual": 90,
+    "functional": 82,
+    "ux": 88,
+    "performance": 85,
+    "content": 90,
+    "accessibility": 90
+  }
+}
