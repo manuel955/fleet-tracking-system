@@ -221,6 +221,9 @@ auth.onAuthStateChanged(async (user) => {
       window.dashboardIsCoordinator = false;
       syncDashboardRoleNavigation();
       appEl.classList.remove('hidden');
+      // En modo VPS la inicialización Firebase heredada se omite; arranca
+      // igualmente el polling de alertas para que el panel no quede vacío.
+      if (typeof window.startOperationAlerts === 'function') window.startOperationAlerts();
       tryStartDashboard();
       return;
     }

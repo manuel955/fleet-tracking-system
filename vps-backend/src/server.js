@@ -1,4 +1,4 @@
-import { createApp, dispatchScheduledTrips } from './app.js';
+import { createApp, detectStaleDrivers, dispatchScheduledTrips } from './app.js';
 import { closeDatabase } from './db.js';
 import { config } from './config.js';
 
@@ -7,6 +7,8 @@ const dispatchTimer = setInterval(async () => {
   try {
     const dispatched = await dispatchScheduledTrips();
     if (dispatched > 0) console.log(`Scheduled trips dispatched: ${dispatched}`);
+    const disconnected = await detectStaleDrivers();
+    if (disconnected > 0) console.log(`Stale drivers disconnected: ${disconnected}`);
   } catch (error) {
     console.error('scheduled dispatch failed', error?.message ?? error);
   }

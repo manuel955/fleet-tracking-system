@@ -204,6 +204,10 @@ async function refreshDriversAdminFromVps() {
     adminTripHistory = Object.fromEntries(
       (Array.isArray(result.trips) ? result.trips : []).map((trip) => [trip.id, trip]),
     );
+    adminConnectionHistory = result.connectionHistory && typeof result.connectionHistory === 'object'
+      ? result.connectionHistory : {};
+    adminTripFeedback = result.tripFeedback && typeof result.tripFeedback === 'object'
+      ? result.tripFeedback : {};
     driverAdminVpsError = '';
     updatePendingBadge();
     renderDriversAdmin();
@@ -584,14 +588,21 @@ async function manageTripIncident(tripId, action, button) {
   button.disabled = true;
   try {
     const token = await auth.currentUser.getIdToken();
-    const response = await fetch('https://us-central1-rastreoflota-53052.cloudfunctions.net/manageTripFeedback', {
+    const endpoint = DRIVER_ADMIN_VPS_API_BASE_URL
+      ? `${DRIVER_ADMIN_VPS_API_BASE_URL}/api/v1/dashboard/incidents/${encodeURIComponent(tripId)}`
+      : 'https://us-central1-rastreoflota-53052.cloudfunctions.net/manageTripFeedback';
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ tripId, action }),
       signal: AbortSignal.timeout(15000),
     });
     const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || 'No se pudo actualizar la incidencia.');
+    if (!response.ok) throw new Error(result.error || result.message || 'No se pudo actualizar la incidencia.');
+    if (DRIVER_ADMIN_VPS_API_BASE_URL && result.feedback) {
+      adminTripFeedback[tripId] = result.feedback;
+      renderTripIncidents();
+    }
   } catch (error) {
     button.disabled = false;
     alert(error.message || error);

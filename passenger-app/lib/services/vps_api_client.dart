@@ -360,14 +360,22 @@ class VpsApiClient {
   static Future<Map<String, dynamic>> submitFeedback({
     required String token,
     required String tripId,
-    required int rating,
+    int? rating,
     String comment = '',
+    String incidentCategory = 'none',
+    String incidentDetails = '',
   }) async {
+    final body = <String, dynamic>{
+      'rating': rating,
+      'comment': comment,
+      'incidentCategory': incidentCategory,
+      'incidentDetails': incidentDetails,
+    };
     final result = await _request(
       'POST',
       '/api/v1/trips/$tripId/feedback',
       token: token,
-      body: {'rating': rating, 'comment': comment},
+      body: body,
     );
     return _wrappedMap(result, 'feedback');
   }

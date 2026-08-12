@@ -789,6 +789,121 @@ async function listTrips(user, url) {
   return result.rows.map(publicTrip);
 }
 
+function isDashboardAdmin(user) {
+  return String(user?.dashboard_role || '').toUpperCase() === 'ADMIN';
+}
+
+function requireDashboardAdmin(user) {
+  requireRole(user, ['dashboard']);
+  if (!isDashboardAdmin(user)) {
+    const error = new Error('Solo un administrador puede consultar esta vista.');
+    error.statusCode = 403;
+    throw error;
+  }
+}
+
+async function recordDriverConnectionEvent(driverId, status, reason = null, at = new Date()) {
+  const result = await pool.query(
+    `SELECT d.id, d.phone, d.plate, u.display_name,
+            l.latitude, l.longitude, l.accuracy_m
+       FROM drivers d JOIN users u ON u.id=d.id
+       LEFT JOIN driver_locations l ON l.driver_id=d.id
+      WHERE d.id=$1`,
+    [driverId],
+  );
+  const driver = result.rows[0];
+  if (!driver) return null;
+  await pool.query(
+    `INSERT INTO driver_connection_history
+       (driver_id, status, reason, driver_name, driver_plate, event_at)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [driverId, status, reason, driver.display_name || '', driver.plate || '', at],
+  );
+  if (status !== 'offline') return null;
+  const alert = await pool.query(
+    `INSERT INTO operation_alerts
+       (driver_id, driver_name, driver_plate, driver_phone, reason,
+        disconnected_at, final_lat, final_lng, final_accuracy_m)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     ON CONFLICT (driver_id) WHERE status = 'OPEN' DO NOTHING
+     RETURNING id, driver_id, driver_name, driver_plate, driver_phone,
+       reason, status, disconnected_at, final_lat, final_lng, final_accuracy_m,
+       created_at`,
+    [
+      driverId, driver.display_name || '', driver.plate || '', driver.phone || '',
+      reason || 'MANUAL', at, driver.latitude, driver.longitude, driver.accuracy_m,
+    ],
+  );
+  return alert.rows[0] || null;
+}
+
+export async function detectStaleDrivers({ now = new Date(), timeoutMs = 30_000 } = {}) {
+  const cutoff = new Date(now.getTime() - timeoutMs);
+  const result = await pool.query(
+    `SELECT d.id
+       FROM drivers d LEFT JOIN driver_locations l ON l.driver_id=d.id
+      WHERE d.availability_status='online'
+        AND (l.recorded_at IS NULL OR l.recorded_at < $1)
+      ORDER BY d.id`,
+    [cutoff],
+  );
+  let disconnected = 0;
+  for (const row of result.rows) {
+    const updated = await pool.query(
+      `UPDATE drivers SET availability_status='offline', updated_at=now()
+        WHERE id=$1 AND availability_status='online' RETURNING id`,
+      [row.id],
+    );
+    if (!updated.rowCount) continue;
+    await recordDriverConnectionEvent(row.id, 'offline', 'HEARTBEAT', now);
+    disconnected += 1;
+  }
+  return disconnected;
+}
+
+function publicConnectionEvent(row) {
+  return {
+    status: row.status,
+    reason: row.reason,
+    driverName: row.driver_name || '',
+    driverPlate: row.driver_plate || '',
+    at: new Date(row.event_at).getTime(),
+  };
+}
+
+function publicOperationAlert(row) {
+  return {
+    id: row.id,
+    driverId: row.driver_id,
+    driverName: row.driver_name || '',
+    driverPlate: row.driver_plate || '',
+    driverPhone: row.driver_phone || '',
+    reason: row.reason,
+    status: row.status,
+    disconnectedAt: new Date(row.disconnected_at).getTime(),
+    finalLat: row.final_lat === null ? null : Number(row.final_lat),
+    finalLng: row.final_lng === null ? null : Number(row.final_lng),
+    finalAccuracyM: row.final_accuracy_m === null ? null : Number(row.final_accuracy_m),
+    createdAt: new Date(row.created_at).getTime(),
+  };
+}
+
+function publicFeedback(row) {
+  return {
+    tripId: row.trip_id,
+    passengerId: row.passenger_id,
+    driverId: row.driver_id,
+    rating: row.rating === null ? null : Number(row.rating),
+    comment: row.comment || '',
+    incidentCategory: row.incident_category || 'none',
+    incidentDetails: row.incident_details || '',
+    incidentStatus: row.incident_status || 'NONE',
+    createdAt: new Date(row.created_at).getTime(),
+    updatedAt: new Date(row.updated_at).getTime(),
+    ...(row.resolved_at ? { resolvedAt: new Date(row.resolved_at).getTime() } : {}),
+  };
+}
+
 /**
  * Read-only operational snapshot for the VPS-backed dashboard. Firebase
  * remains the login/FCM provider, but this endpoint makes PostgreSQL the
@@ -832,6 +947,46 @@ async function dashboardOverview(user) {
     lastUpdate: row.recorded_at ? new Date(row.recorded_at).getTime() : null,
   }));
 
+  let connectionHistory = {};
+  let operationAlerts = {};
+  let tripFeedback = {};
+  if (isDashboardAdmin(user)) {
+    const tripIds = tripsResult.rows.map((row) => row.id);
+    const [historyResult, alertsResult, feedbackResult, metadataResult] = await Promise.all([
+      pool.query(`SELECT id, driver_id, status, reason, driver_name, driver_plate, event_at
+                    FROM driver_connection_history ORDER BY event_at DESC LIMIT 5000`),
+      pool.query(`SELECT id, driver_id, driver_name, driver_plate, driver_phone, reason, status,
+                         disconnected_at, final_lat, final_lng, final_accuracy_m, created_at
+                    FROM operation_alerts ORDER BY created_at DESC LIMIT 100`),
+      pool.query(`SELECT trip_id, passenger_id, driver_id, rating, comment, incident_category,
+                         incident_details, incident_status, created_at, updated_at, resolved_at
+                    FROM trip_feedback ORDER BY updated_at DESC LIMIT 500`),
+      pool.query(`SELECT t.id, pu.display_name AS passenger_name, pp.phone AS passenger_phone,
+                         du.display_name AS driver_name, d.plate AS driver_plate
+                    FROM trips t
+                    LEFT JOIN users pu ON pu.id=t.passenger_id
+                    LEFT JOIN passenger_profiles pp ON pp.user_id=t.passenger_id
+                    LEFT JOIN drivers d ON d.id=t.driver_id
+                    LEFT JOIN users du ON du.id=d.id
+                   WHERE t.id = ANY($1::uuid[])`, [tripIds]),
+    ]);
+    for (const row of historyResult.rows) {
+      if (!connectionHistory[row.driver_id]) connectionHistory[row.driver_id] = {};
+      connectionHistory[row.driver_id][String(row.id)] = publicConnectionEvent(row);
+    }
+    for (const row of alertsResult.rows) operationAlerts[row.id] = publicOperationAlert(row);
+    for (const row of feedbackResult.rows) tripFeedback[row.trip_id] = publicFeedback(row);
+    const metadata = Object.fromEntries(metadataResult.rows.map((row) => [row.id, row]));
+    trips.forEach((trip) => {
+      const row = metadata[trip.id];
+      if (!row) return;
+      trip.passengerName = row.passenger_name || '';
+      trip.passengerPhone = row.passenger_phone || '';
+      trip.driverName = row.driver_name || '';
+      trip.driverPlate = row.driver_plate || '';
+    });
+  }
+
   const todayTrips = trips.filter((trip) => {
     const timestamp = Number(trip.requestedAt || 0);
     const start = new Date();
@@ -842,6 +997,7 @@ async function dashboardOverview(user) {
     updatedAt: Date.now(),
     drivers,
     trips,
+    ...(isDashboardAdmin(user) ? { connectionHistory, operationAlerts, tripFeedback } : {}),
     stats: {
       vehicles: drivers.filter((driver) => driver.approvalStatus === 'approved').length,
       active: drivers.filter((driver) => driver.approvalStatus === 'approved' && driver.availabilityStatus !== 'offline').length,
@@ -856,6 +1012,15 @@ async function dashboardOverview(user) {
 async function setDriverAvailability(user, body) {
   requireRole(user, ['driver']);
   const online = body.online === true || body.online === 'true';
+  const previous = await pool.query(
+    `SELECT availability_status FROM drivers WHERE id=$1 AND approval_status='approved'`,
+    [user.id],
+  );
+  if (!previous.rows[0]) {
+    const error = new Error('El conductor no esta aprobado para operar.');
+    error.statusCode = 403;
+    throw error;
+  }
   const result = await pool.query(
     `UPDATE drivers
         SET availability_status = $1, updated_at = now()
@@ -867,6 +1032,13 @@ async function setDriverAvailability(user, body) {
     const error = new Error('El conductor no está aprobado para operar.');
     error.statusCode = 403;
     throw error;
+  }
+  if (previous.rows[0].availability_status !== result.rows[0].availability_status) {
+    await recordDriverConnectionEvent(
+      user.id,
+      result.rows[0].availability_status,
+      online ? null : 'MANUAL',
+    );
   }
   return {
     driverId: result.rows[0].id,
@@ -1078,25 +1250,70 @@ async function retryTrip(user, tripId) {
 
 async function submitFeedback(user, tripId, body) {
   assertPassengerAccess(user);
-  const rating = Number(body.rating);
-  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+  const rating = body.rating === null || body.rating === undefined || body.rating === ''
+    ? null : Number(body.rating);
+  if (rating !== null && (!Number.isInteger(rating) || rating < 1 || rating > 5)) {
     const error = new Error('rating debe estar entre 1 y 5.');
     error.statusCode = 400;
     throw error;
   }
   const comment = body.comment === undefined ? '' : requiredString(body.comment, 'comment', { max: 1000 });
+  const allowedIncidents = new Set(['none', 'driver_conduct', 'service_quality', 'safety', 'lost_item', 'other']);
+  const incidentCategory = String(body.incidentCategory || 'none').trim();
+  const incidentDetails = String(body.incidentDetails || '').trim().slice(0, 1000);
+  if (!allowedIncidents.has(incidentCategory)) {
+    const error = new Error('Selecciona un tipo de incidencia valido.');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (incidentCategory !== 'none' && incidentDetails.length < 10) {
+    const error = new Error('Describe la incidencia con al menos 10 caracteres.');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (rating === null && incidentCategory === 'none' && !comment.trim()) {
+    const error = new Error('Agrega una calificacion, comentario o incidencia.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const tripResult = await pool.query(
+    `SELECT id, driver_id FROM trips
+      WHERE id=$1 AND passenger_id=$2 AND status='completed'`,
+    [tripId, user.id],
+  );
+  if (!tripResult.rows[0]) {
+    const error = new Error('No se puede comentar este viaje.');
+    error.statusCode = 404;
+    throw error;
+  }
+  const incidentStatus = incidentCategory === 'none' ? 'NONE' : 'OPEN';
   const result = await pool.query(
-    `UPDATE trips SET rating = $1, feedback_comment = $2, feedback_submitted_at = now(), updated_at = now()
-      WHERE id = $3 AND passenger_id = $4 AND status = 'completed' AND rating IS NULL
+    `UPDATE trips SET rating = COALESCE($1, rating), feedback_comment = $2,
+        feedback_submitted_at = now(), updated_at = now()
+      WHERE id = $3 AND passenger_id = $4 AND status = 'completed'
       RETURNING id, rating, feedback_comment`,
     [rating, comment, tripId, user.id],
   );
-  if (!result.rows[0]) {
-    const error = new Error('No se puede calificar este viaje o ya fue calificado.');
-    error.statusCode = 409;
-    throw error;
-  }
-  return { tripId, rating: result.rows[0].rating, comment: result.rows[0].feedback_comment };
+  await pool.query(
+    `INSERT INTO trip_feedback
+       (trip_id, passenger_id, driver_id, rating, comment, incident_category,
+        incident_details, incident_status, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+     ON CONFLICT (trip_id) DO UPDATE SET rating=COALESCE(EXCLUDED.rating, trip_feedback.rating),
+       comment=EXCLUDED.comment, incident_category=EXCLUDED.incident_category,
+       incident_details=EXCLUDED.incident_details, incident_status=EXCLUDED.incident_status,
+       updated_at=now(), resolved_at=NULL, resolved_by=NULL`,
+    [tripId, user.id, tripResult.rows[0].driver_id, rating, comment,
+      incidentCategory, incidentDetails, incidentStatus],
+  );
+  return {
+    tripId,
+    rating: result.rows[0].rating,
+    comment: result.rows[0].feedback_comment,
+    incidentCategory,
+    incidentDetails,
+    incidentStatus,
+  };
 }
 
 async function registerDeviceToken(user, body) {
@@ -1201,6 +1418,59 @@ export async function dispatchScheduledTrips({ now = new Date() } = {}) {
     deepLink: `driver://trip/${trip.id}`,
   })));
   return dispatchedTrips.length;
+}
+
+async function updateOperationAlert(user, alertId, body) {
+  requireDashboardAdmin(user);
+  const action = requiredString(body.action, 'action', { max: 20 });
+  if (!['acknowledge', 'resolve', 'reopen'].includes(action)) {
+    const error = new Error('Accion de alerta invalida.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const closed = action !== 'reopen';
+  const result = await pool.query(
+    `UPDATE operation_alerts
+        SET status=$1, acknowledged_at=CASE WHEN $2 THEN now() ELSE NULL END,
+            acknowledged_by=CASE WHEN $2 THEN $3::uuid ELSE NULL END
+      WHERE id=$4
+      RETURNING id, driver_id, driver_name, driver_plate, driver_phone, reason,
+        status, disconnected_at, final_lat, final_lng, final_accuracy_m, created_at`,
+    [closed ? 'CLOSED' : 'OPEN', closed, user.id, alertId],
+  );
+  if (!result.rows[0]) {
+    const error = new Error('Alerta no encontrada.');
+    error.statusCode = 404;
+    throw error;
+  }
+  return publicOperationAlert(result.rows[0]);
+}
+
+async function updateTripFeedback(user, tripId, body) {
+  requireDashboardAdmin(user);
+  const action = requiredString(body.action, 'action', { max: 20 });
+  if (!['resolve', 'reopen'].includes(action)) {
+    const error = new Error('Accion de incidencia invalida.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const result = await pool.query(
+    `UPDATE trip_feedback
+        SET incident_status=$1,
+            resolved_at=CASE WHEN $2 THEN now() ELSE NULL END,
+            resolved_by=CASE WHEN $2 THEN $3::uuid ELSE NULL END,
+            updated_at=now()
+      WHERE trip_id=$4 AND incident_category <> 'none'
+      RETURNING trip_id, passenger_id, driver_id, rating, comment, incident_category,
+        incident_details, incident_status, created_at, updated_at, resolved_at`,
+    [action === 'resolve' ? 'RESOLVED' : 'OPEN', action === 'resolve', user.id, tripId],
+  );
+  if (!result.rows[0]) {
+    const error = new Error('Incidencia no encontrada.');
+    error.statusCode = 404;
+    throw error;
+  }
+  return publicFeedback(result.rows[0]);
 }
 
 export function createApp({ health = databaseHealth } = {}) {
@@ -1366,6 +1636,18 @@ export function createApp({ health = databaseHealth } = {}) {
       if (req.method === 'GET' && url.pathname === '/api/v1/dashboard/overview') {
         const user = await authenticate(req);
         return json(res, 200, await dashboardOverview(user));
+      }
+
+      const alertMatch = url.pathname.match(/^\/api\/v1\/dashboard\/alerts\/([^/]+)$/);
+      if (req.method === 'POST' && alertMatch) {
+        const user = await authenticate(req);
+        return json(res, 200, { alert: await updateOperationAlert(user, decodeURIComponent(alertMatch[1]), await readJson(req)) });
+      }
+
+      const incidentMatch = url.pathname.match(/^\/api\/v1\/dashboard\/incidents\/([^/]+)$/);
+      if (req.method === 'POST' && incidentMatch) {
+        const user = await authenticate(req);
+        return json(res, 200, { feedback: await updateTripFeedback(user, decodeURIComponent(incidentMatch[1]), await readJson(req)) });
       }
 
       const driverLocationMatch = url.pathname.match(/^\/api\/v1\/trips\/([^/]+)\/driver-location$/);

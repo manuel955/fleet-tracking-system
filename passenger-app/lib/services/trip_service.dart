@@ -435,8 +435,10 @@ class TripService {
       final feedback = await VpsApiClient.submitFeedback(
         token: auth['idToken'].toString(),
         tripId: tripId,
-        rating: rating ?? 0,
+        rating: rating,
         comment: comment,
+        incidentCategory: incidentCategory,
+        incidentDetails: incidentDetails,
       );
       return feedback;
     }

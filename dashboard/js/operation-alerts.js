@@ -5,6 +5,7 @@
   let initialized = false;
   let subscribed = false;
   let alertsRef = null;
+  let vpsTimer = null;
 
   function escape(value) {
     const div = document.createElement('div');
@@ -126,19 +127,41 @@
     initialized = true;
   }
 
+  async function refreshVpsAlerts() {
+    if (!window.vpsApiBaseUrl || !auth.currentUser) return;
+    try {
+      const token = await auth.currentUser.getIdToken();
+      const response = await fetch(`${String(window.vpsApiBaseUrl).replace(/\/$/, '')}/api/v1/dashboard/overview`, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(12000),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) return;
+      handleSnapshot({ val: () => result.operationAlerts || {} });
+    } catch (_) {
+      // The dashboard keeps the last known alert list during a short outage.
+    }
+  }
+
   async function acknowledgeAlert(alertId, button) {
     if (!alertId || !auth.currentUser) return;
     button.disabled = true;
     try {
       const token = await auth.currentUser.getIdToken();
-      const response = await fetch('https://us-central1-rastreoflota-53052.cloudfunctions.net/manageOperationAlert', {
+      const endpoint = window.vpsApiBaseUrl
+        ? `${String(window.vpsApiBaseUrl).replace(/\/$/, '')}/api/v1/dashboard/alerts/${encodeURIComponent(alertId)}`
+        : 'https://us-central1-rastreoflota-53052.cloudfunctions.net/manageOperationAlert';
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'acknowledge', alertId }),
+        body: JSON.stringify(window.vpsApiBaseUrl
+          ? { action: 'acknowledge' }
+          : { action: 'acknowledge', alertId }),
         signal: AbortSignal.timeout(15000),
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || 'No se pudo reconocer la alerta.');
+      if (!response.ok) throw new Error(result.error || result.message || 'No se pudo reconocer la alerta.');
       alertsCache[alertId] = { ...(alertsCache[alertId] || {}), status: 'CLOSED', acknowledged: true };
       renderPanel();
     } catch (error) {
@@ -149,10 +172,19 @@
 
   function subscribe() {
     if (alertsRef) alertsRef.off();
+    if (vpsTimer) {
+      clearInterval(vpsTimer);
+      vpsTimer = null;
+    }
     alertsCache = {};
     initialized = false;
     if (!window.dashboardIsAdmin) {
       renderPanel();
+      return;
+    }
+    if (window.vpsApiBaseUrl) {
+      refreshVpsAlerts();
+      vpsTimer = setInterval(refreshVpsAlerts, 5000);
       return;
     }
     alertsRef = db.ref('prematureDisconnectAlerts').orderByChild('createdAt').limitToLast(50);
@@ -202,6 +234,8 @@
   auth.onAuthStateChanged((user) => {
     if (!user) {
       if (alertsRef) alertsRef.off();
+      if (vpsTimer) clearInterval(vpsTimer);
+      vpsTimer = null;
       alertsRef = null;
       alertsCache = {};
       renderPanel();
