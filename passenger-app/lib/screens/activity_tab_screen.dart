@@ -35,6 +35,21 @@ class ActivityTabScreenState extends State<ActivityTabScreen> {
     if (saved == true && mounted) await _refresh();
   }
 
+  Map<String, dynamic>? _feedbackForTrip(Map<String, dynamic> trip) {
+    if (trip['feedback'] is Map) {
+      return Map<String, dynamic>.from(trip['feedback'] as Map);
+    }
+    // El API VPS expone rating/comment directamente en el viaje. Normaliza
+    // esa forma para que el historial no vuelva a pedir una calificación ya
+    // guardada.
+    final rating = trip['rating'];
+    final comment = trip['feedbackComment']?.toString() ?? '';
+    if (rating != null || comment.trim().isNotEmpty) {
+      return {'rating': rating, 'comment': comment};
+    }
+    return null;
+  }
+
   /// Abre el formulario de calificación desde el flujo de finalización del
   /// viaje. Si el pasajero cierra el formulario, permanece en Actividad y
   /// puede volver a abrirlo desde el historial.
@@ -142,9 +157,7 @@ class ActivityTabScreenState extends State<ActivityTabScreen> {
                       final status = trip['status']?.toString();
                       final canComment =
                           status == 'completed' || status == 'cancelled';
-                      final feedback = trip['feedback'] is Map
-                          ? Map<String, dynamic>.from(trip['feedback'] as Map)
-                          : null;
+                      final feedback = _feedbackForTrip(trip);
                       final pickup =
                           trip['pickupAddress'] as String? ??
                           'Punto de partida';
@@ -331,7 +344,11 @@ class _TripFeedbackSheetState extends State<_TripFeedbackSheet> {
     super.initState();
     final feedback = widget.trip['feedback'] is Map
         ? Map<String, dynamic>.from(widget.trip['feedback'] as Map)
-        : <String, dynamic>{};
+        : {
+            if (widget.trip['rating'] != null) 'rating': widget.trip['rating'],
+            if (widget.trip['feedbackComment'] != null)
+              'comment': widget.trip['feedbackComment'],
+          };
     _rating = (feedback['rating'] as num?)?.toInt() ?? 0;
     _incidentCategory = feedback['incidentCategory']?.toString() ?? 'none';
     _commentController = TextEditingController(
