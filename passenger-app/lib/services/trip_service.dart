@@ -504,6 +504,23 @@ class TripService {
     return (active: active, scheduled: scheduled);
   }
 
+  /// Recupera el viaje completado más reciente que todavía no tiene
+  /// calificación. Esto cubre el caso normal de Android: el viaje termina
+  /// mientras la app está minimizada o cerrada y el callback de push no puede
+  /// abrir la hoja de calificación en ese instante.
+  static Future<MapEntry<String, Map<String, dynamic>>?>
+  recoverPendingFeedback() async {
+    final trips = await getMyTrips(last7Days: false);
+    for (final entry in trips) {
+      final trip = entry.value;
+      if (trip['status']?.toString() != 'completed') continue;
+      final rating = trip['rating'];
+      final feedbackComment = trip['feedbackComment']?.toString().trim() ?? '';
+      if (rating == null && feedbackComment.isEmpty) return entry;
+    }
+    return null;
+  }
+
   /// Borra TODOS los viajes del pasajero (sin importar la fecha) -- se usa
   /// al cerrar sesion para no dejar historial guardado en Firebase
   /// asociado a una cuenta que ya no se va a volver a usar.

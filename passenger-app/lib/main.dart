@@ -392,6 +392,21 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
       }
     }
 
+    // Si el viaje terminó mientras la app estaba minimizada/cerrada, ya no
+    // existe un active_trip_id que recuperar. Busca el último completado sin
+    // feedback para abrir la calificación automáticamente al volver.
+    if (completedTripToRate == null && trip == null) {
+      try {
+        final pendingFeedback = await TripService.recoverPendingFeedback();
+        if (pendingFeedback != null) {
+          completedTripId = pendingFeedback.key;
+          completedTripToRate = pendingFeedback.value;
+        }
+      } catch (_) {
+        // El historial se reintentará al abrir Actividad; no bloquea el inicio.
+      }
+    }
+
     accessGranted =
         accessGranted || activeTripId != null || scheduledTripId != null;
 

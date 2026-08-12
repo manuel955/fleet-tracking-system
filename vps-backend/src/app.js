@@ -1361,7 +1361,14 @@ async function submitFeedback(user, tripId, body) {
     error.statusCode = 400;
     throw error;
   }
-  const comment = body.comment === undefined ? '' : requiredString(body.comment, 'comment', { max: 1000 });
+  // El comentario es opcional cuando el pasajero solo selecciona estrellas o
+  // una incidencia. `requiredString` tiene mínimo 1 por defecto y rechazaba
+  // el formulario válido que envía comment: ''.
+  const comment = body.comment === undefined || body.comment === null
+    ? ''
+    : typeof body.comment === 'string' && body.comment.trim().length <= 1000
+      ? body.comment.trim()
+      : requiredString(body.comment, 'comment', { max: 1000 });
   const allowedIncidents = new Set(['none', 'driver_conduct', 'service_quality', 'safety', 'lost_item', 'other']);
   const incidentCategory = String(body.incidentCategory || 'none').trim();
   const incidentDetails = String(body.incidentDetails || '').trim().slice(0, 1000);
