@@ -954,8 +954,8 @@ function updateOverviewStats() {
   const cancelled = Object.values(todayTripsCache).filter((trip) => trip.status === 'cancelled');
   const busy = approved.filter((d) => driverState(d) === 'to_pickup' || driverState(d) === 'on_trip');
   const durations = completed
-    .map((trip) => Number(trip.completedAt || 0) - Number(trip.inProgressAt || trip.acceptedAt || 0))
-    .filter((duration) => Number.isFinite(duration) && duration > 0);
+    .map((trip) => window.TripDuration?.tripDurationMs(trip) ?? null)
+    .filter((duration) => duration != null);
   const averageDurationSeconds = durations.length
     ? Math.round(durations.reduce((total, duration) => total + duration, 0) / durations.length / 1000)
     : null;

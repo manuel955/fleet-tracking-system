@@ -348,14 +348,19 @@ Future<void> _checkTripAlerts() async {
     return;
   }
 
-  final driverResponse = await http
-      .get(
-          Uri.parse('${AppConfig.firebaseDbUrl}/drivers/$uid.json?auth=$token'))
-      .timeout(_networkTimeout);
-  if (driverResponse.statusCode != 200) return;
-  final rawDriver = jsonDecode(driverResponse.body);
-  if (rawDriver is! Map) return;
-  final driver = Map<String, dynamic>.from(rawDriver);
+  final Map<String, dynamic>? driver;
+  if (AppConfig.useVpsBackend) {
+    driver = await VpsApiClient.driverMe(token.toString());
+  } else {
+    final driverResponse = await http
+        .get(Uri.parse(
+            '${AppConfig.firebaseDbUrl}/drivers/$uid.json?auth=$token'))
+        .timeout(_networkTimeout);
+    if (driverResponse.statusCode != 200) return;
+    final rawDriver = jsonDecode(driverResponse.body);
+    if (rawDriver is! Map) return;
+    driver = Map<String, dynamic>.from(rawDriver);
+  }
   final currentTripId = driver['currentTripId']?.toString();
   final prefs = await SharedPreferences.getInstance();
   final previousTripId = prefs.getString(_alertedTripIdKey);
@@ -422,6 +427,14 @@ Future<void> _checkTripAlerts() async {
 }
 
 Future<Map<String, dynamic>?> _readTrip(String tripId, String token) async {
+  if (AppConfig.useVpsBackend) {
+    try {
+      return await VpsApiClient.getTrip(token: token, tripId: tripId);
+    } on VpsApiException catch (error) {
+      if (error.statusCode == 404) return null;
+      rethrow;
+    }
+  }
   final response = await http
       .get(Uri.parse(
           '${AppConfig.firebaseDbUrl}/trips/$tripId.json?auth=$token'))

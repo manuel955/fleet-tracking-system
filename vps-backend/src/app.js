@@ -664,6 +664,8 @@ function publicTrip(row) {
     requestedAt: millis(row.created_at),
     updatedAt: millis(row.updated_at),
     completedAt: millis(row.completed_at),
+    acceptedAt: millis(row.accepted_at),
+    inProgressAt: millis(row.in_progress_at),
     cancelledBy: row.cancelled_by,
     cancelReason: row.cancel_reason,
     rating: row.rating,
@@ -676,7 +678,8 @@ const tripSelect = `
     origin_address, origin_lat, origin_lng,
     destination_address, destination_lat, destination_lng,
     passenger_count, scheduled_pickup_at, created_at, updated_at,
-    completed_at, cancelled_by, cancel_reason, rating, feedback_comment
+    completed_at, accepted_at, in_progress_at,
+    cancelled_by, cancel_reason, rating, feedback_comment
   FROM trips`;
 
 async function findTrip(tripId) {
@@ -708,7 +711,7 @@ async function assignAvailableDriver(client, tripId, passengerCount) {
     return null;
   }
   await client.query(
-    `UPDATE trips SET status = 'accepted', driver_id = $1, updated_at = now()
+    `UPDATE trips SET status = 'accepted', driver_id = $1, accepted_at = COALESCE(accepted_at, now()), updated_at = now()
       WHERE id = $2`,
     [driver.id, tripId],
   );
@@ -717,6 +720,47 @@ async function assignAvailableDriver(client, tripId, passengerCount) {
     [tripId, driver.id],
   );
   return driver.id;
+}
+
+// A passenger can request a trip a few seconds before a driver finishes
+// starting the shift. Claim the oldest pending trip when that driver becomes
+// online so the passenger is not forced to press Reintentar manually.
+async function assignPendingTripForDriver(client, preferredDriverId = null) {
+  const pending = await client.query(
+    `SELECT id, passenger_count
+       FROM trips
+      WHERE status IN ('searching', 'no_drivers_available')
+      ORDER BY created_at ASC
+      FOR UPDATE SKIP LOCKED
+      LIMIT 1`,
+  );
+  const trip = pending.rows[0];
+  if (!trip) return null;
+  const driverResult = await client.query(
+    `SELECT d.id
+       FROM drivers d
+      WHERE d.id = COALESCE($1::uuid, d.id)
+        AND d.approval_status = 'approved'
+        AND d.availability_status = 'online'
+        AND d.current_trip_id IS NULL
+        AND d.vehicle_seats >= $2
+      FOR UPDATE SKIP LOCKED
+      LIMIT 1`,
+    [preferredDriverId, trip.passenger_count ?? 1],
+  );
+  const driverId = driverResult.rows[0]?.id;
+  if (!driverId) return null;
+  await client.query(
+    `UPDATE trips SET status = 'accepted', driver_id = $1, accepted_at = COALESCE(accepted_at, now()), updated_at = now() WHERE id = $2`,
+    [driverId, trip.id],
+  );
+  await client.query(
+    `UPDATE drivers SET current_trip_id = $1, updated_at = now() WHERE id = $2`,
+    [trip.id, driverId],
+  );
+  if (!driverId) return null;
+  const updated = await client.query(`${tripSelect} WHERE id = $1`, [trip.id]);
+  return updated.rows[0] ? publicTrip(updated.rows[0]) : null;
 }
 
 async function createTrip(user, body) {
@@ -837,7 +881,12 @@ async function recordDriverConnectionEvent(driverId, status, reason = null, at =
   return alert.rows[0] || null;
 }
 
-export async function detectStaleDrivers({ now = new Date(), timeoutMs = 30_000 } = {}) {
+// Mobile foreground services can miss one or two heartbeats while Android
+// changes networks or obtains a fresh GPS fix.  Thirty seconds was short
+// enough to disconnect a driver who was visibly online. Keep the server-side
+// timeout below the dashboard's three-minute offline window, but allow a
+// short connectivity gap before closing the shift.
+export async function detectStaleDrivers({ now = new Date(), timeoutMs = 90_000 } = {}) {
   const cutoff = new Date(now.getTime() - timeoutMs);
   const result = await pool.query(
     `SELECT d.id
@@ -1040,10 +1089,25 @@ async function setDriverAvailability(user, body) {
       online ? null : 'MANUAL',
     );
   }
+  const assignment = online && !result.rows[0].current_trip_id
+    ? await withTransaction((client) => assignPendingTripForDriver(client, user.id))
+    : null;
+  if (assignment) {
+    await notifyVpsDevices([user.id], 'trip_assigned', {
+      tripId: assignment.id,
+      status: assignment.status,
+      pickupAddress: assignment.pickupAddress,
+      destinationAddress: assignment.destinationAddress,
+      scheduledPickupAt: assignment.scheduledPickupAt,
+      route: 'active-trip',
+      deepLink: `driver://trip/${assignment.id}`,
+    });
+  }
   return {
     driverId: result.rows[0].id,
     online: result.rows[0].availability_status === 'online',
-    currentTripId: result.rows[0].current_trip_id,
+    currentTripId: assignment?.id ?? result.rows[0].current_trip_id,
+    ...(assignment ? { trip: assignment } : {}),
   };
 }
 
@@ -1162,7 +1226,10 @@ async function advanceDriverTrip(user, tripId, body) {
     }
     const completed = requestedStatus === 'completed';
     await client.query(
-      `UPDATE trips SET status = $1, completed_at = CASE WHEN $2 THEN now() ELSE completed_at END,
+      `UPDATE trips SET status = $1,
+         accepted_at = CASE WHEN $1 IN ('arrived_at_pickup', 'in_progress', 'completed') THEN COALESCE(accepted_at, now()) ELSE accepted_at END,
+         in_progress_at = CASE WHEN $1 IN ('in_progress', 'completed') THEN COALESCE(in_progress_at, now()) ELSE in_progress_at END,
+         completed_at = CASE WHEN $2 THEN now() ELSE completed_at END,
          updated_at = now() WHERE id = $3`,
       [requestedStatus, completed, tripId],
     );
@@ -1175,13 +1242,17 @@ async function advanceDriverTrip(user, tripId, body) {
     const updated = await client.query(`${tripSelect} WHERE id = $1`, [tripId]);
     return publicTrip(updated.rows[0]);
   });
-  await notifyVpsDevices([trip.passengerId], 'trip_status', {
+  await notifyVpsDevices(
+    [trip.passengerId],
+    trip.status === 'completed' ? 'trip_completed' : 'trip_status',
+    {
     tripId: trip.id,
     status: trip.status,
     ratingRequired: trip.status === 'completed',
     route: trip.status === 'completed' ? 'rate-trip' : 'active-trip',
     deepLink: trip.status === 'completed' ? `passenger://rate-trip/${trip.id}` : `passenger://trip/${trip.id}`,
-  });
+    },
+  );
   return trip;
 }
 

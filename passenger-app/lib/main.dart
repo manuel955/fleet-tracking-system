@@ -303,6 +303,14 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
               message.data['reason']?.toString(),
             );
             break;
+          case 'trip_status':
+            if (message.data['status']?.toString() == 'completed') {
+              NotificationService.showSimple(
+                'Viaje finalizado',
+                'Abre la app para calificarlo.',
+              );
+            }
+            break;
           case 'trip_completed':
             NotificationService.showSimple(
               'Viaje finalizado',
