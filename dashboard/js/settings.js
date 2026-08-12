@@ -589,6 +589,7 @@ function dashboardUserCardHtml(user) {
   const name = user.name || (user.email ? user.email.split('@')[0] : 'Usuario');
   const state = user.disabled ? 'Inactivo' : 'Activo';
   const sede = user.sedeName || '—';
+  const source = user.source === 'firebase' ? '<small class="dashboard-user-source">Cuenta Firebase (migración)</small>' : '';
   const roleControl = user.isCurrent
     ? '<span class="dashboard-role-static">Administrador</span>'
     : `<select id="dashboard-role-${user.uid}" class="dashboard-role-select">
@@ -600,7 +601,7 @@ function dashboardUserCardHtml(user) {
     ? '<span>—</span>'
     : `<select id="dashboard-sede-${user.uid}" class="dashboard-sede-select${user.role === 'coordinator' ? '' : ' hidden'}">${dashboardPlaceOptions(user.sedeType, user.sedeId)}</select>`;
   return `<tr>
-    <td><b>${escapeHtml(name)}</b>${user.isCurrent ? ' <small>(tu)</small>' : ''}</td>
+    <td><b>${escapeHtml(name)}</b>${user.isCurrent ? ' <small>(tu)</small>' : ''}${source}</td>
     <td>${escapeHtml(user.email)}</td>
     <td>${roleControl}</td>
     <td>${sedeControl}</td>

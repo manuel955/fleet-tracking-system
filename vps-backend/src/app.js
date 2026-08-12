@@ -225,6 +225,7 @@ function publicDashboardUser(row, currentId) {
     sedeType: row.dashboard_sede_type || '',
     sedeName: row.sede_name || '',
     isCurrent: row.id === currentId,
+    source: row.source || 'vps',
     createdAt: row.created_at,
   };
 }
@@ -248,7 +249,29 @@ async function manageDashboardUsers(user, body) {
        LEFT JOIN places p ON p.id = u.dashboard_sede_id
        WHERE u.role = 'dashboard' ORDER BY u.created_at`,
     );
-    return { users: result.rows.map((row) => publicDashboardUser(row, user.id)) };
+    const users = result.rows.map((row) => publicDashboardUser(row, user.id));
+    // During the migration, an existing Firebase dashboard account can still
+    // authenticate through the legacy identity provider even though it has no
+    // row in the VPS users table. Show that signed-in account in the list so
+    // administrators can distinguish it from a missing account. It remains
+    // Firebase-managed until it is explicitly recreated in the VPS account
+    // manager; no password is invented or copied from Firebase.
+    if (user.firebaseClaims && user.email &&
+        !users.some((entry) => entry.email.toLowerCase() === user.email.toLowerCase())) {
+      users.unshift(publicDashboardUser({
+        id: user.id,
+        email: user.email,
+        display_name: user.display_name,
+        status: 'active',
+        dashboard_role: user.dashboard_role || user.firebaseClaims.dashboardRole || 'SUPERVISOR',
+        dashboard_sede_type: user.dashboard_sede_type || user.firebaseClaims.sedeType || null,
+        dashboard_sede_id: user.dashboard_sede_id || user.firebaseClaims.sedeId || null,
+        sede_name: user.sede_name || user.firebaseClaims.sedeName || null,
+        created_at: null,
+        source: 'firebase',
+      }, user.id));
+    }
+    return { users };
   }
   if (action === 'create') {
     const email = requiredString(body.email, 'email', { max: 254 }).toLowerCase();
