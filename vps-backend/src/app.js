@@ -860,6 +860,16 @@ function isDashboardAdmin(user) {
   return String(user?.dashboard_role || '').toUpperCase() === 'ADMIN';
 }
 
+// Firebase UIDs are not UUIDs, while VPS users use UUID primary keys. Keep
+// legacy Firebase dashboard accounts fully usable for alert/incident actions
+// without attempting to cast their UID into a PostgreSQL UUID foreign key.
+function postgresUuidOrNull(value) {
+  const text = String(value ?? '').trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text)
+    ? text
+    : null;
+}
+
 function requireDashboardAdmin(user) {
   requireRole(user, ['dashboard']);
   if (!isDashboardAdmin(user)) {
@@ -1530,7 +1540,7 @@ async function updateOperationAlert(user, alertId, body) {
       WHERE id=$4
       RETURNING id, driver_id, driver_name, driver_plate, driver_phone, reason,
         status, disconnected_at, final_lat, final_lng, final_accuracy_m, created_at`,
-    [closed ? 'CLOSED' : 'OPEN', closed, user.id, alertId],
+    [closed ? 'CLOSED' : 'OPEN', closed, postgresUuidOrNull(user.id), alertId],
   );
   if (!result.rows[0]) {
     const error = new Error('Alerta no encontrada.');
@@ -1557,7 +1567,7 @@ async function updateTripFeedback(user, tripId, body) {
       WHERE trip_id=$4 AND incident_category <> 'none'
       RETURNING trip_id, passenger_id, driver_id, rating, comment, incident_category,
         incident_details, incident_status, created_at, updated_at, resolved_at`,
-    [action === 'resolve' ? 'RESOLVED' : 'OPEN', action === 'resolve', user.id, tripId],
+    [action === 'resolve' ? 'RESOLVED' : 'OPEN', action === 'resolve', postgresUuidOrNull(user.id), tripId],
   );
   if (!result.rows[0]) {
     const error = new Error('Incidencia no encontrada.');
