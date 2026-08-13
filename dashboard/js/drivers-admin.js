@@ -345,14 +345,6 @@ function driverAdminCardHtml(driverId, d) {
     .split(',')
     .map((key) => REJECTION_FIELD_LABELS[key.trim()])
     .filter(Boolean);
-  const expiryLabel = (value) => {
-    const timestamp = Number(value);
-    if (!Number.isFinite(timestamp) || timestamp <= 0) return 'Sin registrar';
-    const date = new Date(timestamp);
-    const expired = timestamp <= Date.now();
-    return `${date.toLocaleDateString('es-PE')}${expired ? ' · VENCIDO' : ''}`;
-  };
-
   const rejectionBlock =
     status === 'rejected'
       ? `<div class="rejection-note">
@@ -407,13 +399,10 @@ function driverAdminCardHtml(driverId, d) {
       </div>
       <div class="detail-section">
         <div class="row"><b>Teléfono:</b> ${escapeHtml(d.phone || '-')}</div>
+        <div class="row"><b>DNI:</b> ${escapeHtml(d.dni || '-')}</div>
         <div class="row"><b>Placa:</b> ${escapeHtml(d.plate || '-')}</div>
         <div class="row"><b>Lugar asignado:</b> ${escapeHtml(d.assignedPlace?.name || '-')}</div>
-        <div class="row"><b>Licencia vigente hasta:</b> ${escapeHtml(expiryLabel(d.licenseExpiresAt))}</div>
-        <div class="row"><b>SOAT vigente hasta:</b> ${escapeHtml(expiryLabel(d.soatExpiresAt))}</div>
-        <div class="row"><b>Revisión técnica vigente hasta:</b> ${escapeHtml(expiryLabel(d.technicalReviewExpiresAt))}</div>
       </div>
-      ${status !== 'rejected' ? driverConnectionHtml(driverId, d) : ''}
       ${rejectionBlock}
       ${suspensionBlock}
       ${
@@ -1907,12 +1896,8 @@ async function downloadDriverPdfLegacy(button) {
       ['Tipo de vehiculo', d.vehicleType],
       ['Color del vehiculo', d.vehicleColor],
       ['Pasajeros', d.vehicleSeats != null ? `${d.vehicleSeats} pasajeros` : null],
-      ['Estado operativo', d.status || 'Desconectado'],
       ['Registrado', d.registeredAt ? new Date(d.registeredAt).toLocaleString() : null],
       ['Documentos enviados', d.documentsSubmittedAt ? new Date(d.documentsSubmittedAt).toLocaleString() : null],
-      ['Licencia vence', d.licenseExpiresAt ? new Date(d.licenseExpiresAt).toLocaleDateString('es-PE') : null],
-      ['SOAT vence', d.soatExpiresAt ? new Date(d.soatExpiresAt).toLocaleDateString('es-PE') : null],
-      ['Revisión técnica vence', d.technicalReviewExpiresAt ? new Date(d.technicalReviewExpiresAt).toLocaleDateString('es-PE') : null],
       ['Revisado', d.reviewedAt ? new Date(d.reviewedAt).toLocaleString() : null],
       ['Revisado por', d.reviewedBy || null],
     ];
@@ -2123,12 +2108,8 @@ async function downloadDriverPdf(button) {
       ['Tipo de vehículo', d.vehicleType],
       ['Color del vehículo', d.vehicleColor],
       ['Pasajeros', d.vehicleSeats != null ? `${d.vehicleSeats} pasajeros` : null],
-      ['Estado operativo', d.status || 'Desconectado'],
       ['Registrado', dateTime(d.registeredAt)],
       ['Documentos enviados', dateTime(d.documentsSubmittedAt)],
-      ['Licencia vence', dateOnly(d.licenseExpiresAt)],
-      ['SOAT vence', dateOnly(d.soatExpiresAt)],
-      ['Revisión técnica vence', dateOnly(d.technicalReviewExpiresAt)],
       ['Revisado', dateTime(d.reviewedAt)],
       ['Revisado por', d.reviewedBy],
     ];

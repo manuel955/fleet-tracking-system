@@ -1846,7 +1846,7 @@ async function dashboardOverview(user) {
   const [driversResult, tripsResult] = await Promise.all([
     pool.query(`
       SELECT d.id, u.display_name, u.email, u.status AS user_status,
-        d.approval_status, d.phone, d.plate, d.age, d.vehicle_brand,
+        d.approval_status, d.phone, d.plate, d.age, d.dni, d.vehicle_brand,
         d.vehicle_type, d.vehicle_color, d.vehicle_seats,
         d.profile_photo_url, d.dni_doc_url, d.dni_front_doc_url, d.dni_back_doc_url,
         d.license_doc_url, d.soat_doc_url, d.circulation_card_doc_url,
@@ -1884,6 +1884,7 @@ async function dashboardOverview(user) {
     approvalStatus: row.approval_status,
     phone: row.phone,
     plate: row.plate,
+    dni: row.dni || '',
     age: row.age == null ? null : Number(row.age),
     vehicleBrand: row.vehicle_brand || '',
     vehicleType: row.vehicle_type,
