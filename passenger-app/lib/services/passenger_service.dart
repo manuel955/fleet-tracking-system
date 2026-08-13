@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
 import 'auth_service.dart';
 import 'vps_api_client.dart';
+import 'push_service.dart';
 
 /// Registro del pasajero: nombre, telefono y una foto de su credencial
 /// (DNI/carnet). A diferencia de la app del conductor, esta foto NO se usa
@@ -26,7 +27,6 @@ class PassengerService {
   }
 
   static Future<bool> hasAccess() async {
-    if (AppConfig.useVpsBackend && AuthService.hasEmailSession) return true;
     final prefs = await SharedPreferences.getInstance();
     if (prefs.getBool(_accessGrantedKey) != true) return false;
     if (prefs.getBool(_accessLegacyKey) == true) return true;
@@ -43,7 +43,9 @@ class PassengerService {
       final token = result['token']?.toString();
       final uid = user is Map ? user['id']?.toString() : null;
       if (token == null || token.isEmpty || uid == null || uid.isEmpty) {
-        throw Exception('El API VPS no devolvió una sesión de invitado válida.');
+        throw Exception(
+          'El API VPS no devolvió una sesión de invitado válida.',
+        );
       }
       await AuthService.adoptVpsSession(
         uid: uid,
@@ -52,7 +54,9 @@ class PassengerService {
         displayName: user is Map ? user['displayName']?.toString() : null,
       );
       final access = result['access'];
-      if (access is! Map) throw Exception('El VPS no devolvió el acceso del huésped.');
+      if (access is! Map) {
+        throw Exception('El VPS no devolvió el acceso del huésped.');
+      }
       final normalizedAccess = Map<String, dynamic>.from(access);
       await _persistAccess(normalizedAccess);
       return normalizedAccess;
@@ -99,7 +103,19 @@ class PassengerService {
         await clearCachedAccess();
         return false;
       }
-      await _persistAccess({'status': 'authorized', 'legacy': true});
+      final status = user['passengerAccessStatus']?.toString();
+      final expiresAt = (user['passengerAccessExpiresAt'] as num?)?.toInt();
+      if (status != 'authorized' ||
+          (expiresAt != null &&
+              expiresAt <= DateTime.now().millisecondsSinceEpoch)) {
+        await clearCachedAccess();
+        return false;
+      }
+      await _persistAccess({
+        'status': 'authorized',
+        'legacy': expiresAt == null,
+        'expiresAt': ?expiresAt,
+      });
       return true;
     }
     final auth = await AuthService.signInAnonymously();
@@ -116,11 +132,16 @@ class PassengerService {
     if (response.statusCode != 200) {
       if (response.statusCode == 401 || response.statusCode == 403) {
         await clearCachedAccess();
+        return false;
       }
-      return false;
+      throw Exception(
+        'El servicio de acceso no está disponible temporalmente.',
+      );
     }
     final body = decodeResponseBody(response.body);
-    if (body is! Map || body['access'] is! Map) return false;
+    if (body is! Map || body['access'] is! Map) {
+      throw Exception('El servicio de acceso devolvió una respuesta inválida.');
+    }
     final access = Map<String, dynamic>.from(body['access'] as Map);
     await _persistAccess(access);
     return true;
@@ -247,9 +268,18 @@ class PassengerService {
       );
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('registered', true);
-      await prefs.setString('passenger_name', profile['name']?.toString() ?? name);
-      await prefs.setString('passenger_phone', profile['phone']?.toString() ?? phone);
-      await prefs.setString('passenger_photo_url', profile['photoUrl']?.toString() ?? photoUrl);
+      await prefs.setString(
+        'passenger_name',
+        profile['name']?.toString() ?? name,
+      );
+      await prefs.setString(
+        'passenger_phone',
+        profile['phone']?.toString() ?? phone,
+      );
+      await prefs.setString(
+        'passenger_photo_url',
+        profile['photoUrl']?.toString() ?? photoUrl,
+      );
       return;
     }
     final response = await http
@@ -284,6 +314,7 @@ class PassengerService {
   }
 
   static Future<void> logout() async {
+    await PushService.unregisterCurrentToken();
     await AuthService.clearLocalSession();
   }
 

@@ -204,6 +204,9 @@ class _DriverHomePageState extends State<DriverHomePage>
   // telefono inicio sesion con la misma cuenta y, si es asi, cierra esta
   // sesion solo (ver _checkSessionStillActive).
   Timer? _sessionCheckTimer;
+  StreamSubscription<Map<String, dynamic>?>? _locationUpdateSubscription;
+  StreamSubscription<RemoteMessage>? _foregroundMessageSubscription;
+  bool _sessionCheckInFlight = false;
   bool _locationReadInFlight = false;
   bool _shiftReconcileInFlight = false;
 
@@ -216,7 +219,8 @@ class _DriverHomePageState extends State<DriverHomePage>
 
     if (_supportsMobileServices) {
       try {
-        FlutterBackgroundService().on('location_update').listen((event) {
+        _locationUpdateSubscription =
+            FlutterBackgroundService().on('location_update').listen((event) {
           if (event == null) return;
           final lat = (event['lat'] as num?)?.toDouble();
           final lng = (event['lng'] as num?)?.toDouble();
@@ -347,7 +351,8 @@ class _DriverHomePageState extends State<DriverHomePage>
     // viaje de inmediato. El aviso sonoro lo pone _pollForTrip, que ya
     // deduplica por tripId.
     if (_supportsMobileServices) {
-      FirebaseMessaging.onMessage.listen((message) async {
+      _foregroundMessageSubscription =
+          FirebaseMessaging.onMessage.listen((message) async {
         switch (message.data['type']) {
           case 'trip_assigned':
             await NotificationService.showTripAssigned(
@@ -600,7 +605,8 @@ class _DriverHomePageState extends State<DriverHomePage>
   // activo (es una medida de seguridad de la cuenta, no una decision del
   // propio conductor).
   Future<void> _checkSessionStillActive() async {
-    if (_driverId == null) return;
+    if (_driverId == null || _sessionCheckInFlight) return;
+    _sessionCheckInFlight = true;
     try {
       final wasApproved = _driverProfile?['approvalStatus'] == 'approved' &&
           _driverProfile?['suspended'] != true;
@@ -662,6 +668,8 @@ class _DriverHomePageState extends State<DriverHomePage>
       }
     } catch (_) {
       // Fallo de red puntual: se reintenta en el siguiente tick.
+    } finally {
+      _sessionCheckInFlight = false;
     }
   }
 
@@ -1269,6 +1277,8 @@ class _DriverHomePageState extends State<DriverHomePage>
     _tripPollTimer?.cancel();
     _tripPollTimer = null;
     _sessionCheckTimer?.cancel();
+    _locationUpdateSubscription?.cancel();
+    _foregroundMessageSubscription?.cancel();
     _sessionCheckTimer = null;
 
     if (_supportsMobileServices) {

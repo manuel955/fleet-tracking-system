@@ -34,9 +34,11 @@ class _PlaceSearchScreenState extends State<PlaceSearchScreen> {
   List<PlaceSuggestion> _suggestions = [];
   bool _loading = false;
   String? _error;
+  int _searchGeneration = 0;
 
   @override
   void dispose() {
+    _searchGeneration++;
     _debounce?.cancel();
     _controller.dispose();
     super.dispose();
@@ -44,10 +46,15 @@ class _PlaceSearchScreenState extends State<PlaceSearchScreen> {
 
   void _onChanged(String value) {
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 400), () => _search(value));
+    final generation = ++_searchGeneration;
+    _debounce = Timer(
+      const Duration(milliseconds: 400),
+      () => _search(value, generation),
+    );
   }
 
-  Future<void> _search(String value) async {
+  Future<void> _search(String value, int generation) async {
+    if (!mounted || generation != _searchGeneration) return;
     if (value.trim().isEmpty) {
       setState(() {
         _suggestions = [];
@@ -61,14 +68,14 @@ class _PlaceSearchScreenState extends State<PlaceSearchScreen> {
     });
     try {
       final results = await PlacesService.autocomplete(value, _sessionToken);
-      if (mounted) {
+      if (mounted && generation == _searchGeneration) {
         setState(() {
           _suggestions = results;
           _loading = false;
         });
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && generation == _searchGeneration) {
         setState(() {
           _loading = false;
           _error = 'Error al buscar: $e';
@@ -78,6 +85,7 @@ class _PlaceSearchScreenState extends State<PlaceSearchScreen> {
   }
 
   Future<void> _selectSuggestion(PlaceSuggestion suggestion) async {
+    _searchGeneration++;
     setState(() => _loading = true);
     try {
       final latLng = await PlacesService.getPlaceLatLng(

@@ -12,6 +12,10 @@ const ROUTE_RECALCULATION_INTERVAL_MS = 30 * 1000;
 const ROUTE_RECALCULATION_DISTANCE_METERS = 50;
 const VPS_API_BASE_URL = String(window.vpsApiBaseUrl || '').replace(/\/$/, '');
 let vpsPollTimer = null;
+let vpsPublicConfigTimer = null;
+let gpsRenderTimer = null;
+let vpsDashboardRequest = null;
+let vpsDashboardRequestSequence = 0;
 
 const STATE_COLORS = {
   connecting: '#0ea5e9',
@@ -184,6 +188,16 @@ auth.onAuthStateChanged(async (user) => {
     window.dashboardRole = '';
     window.dashboardIsAdmin = false;
     window.dashboardIsCoordinator = false;
+    subscribed = false;
+    if (vpsPollTimer) clearInterval(vpsPollTimer);
+    if (vpsPublicConfigTimer) clearInterval(vpsPublicConfigTimer);
+    if (gpsRenderTimer) clearInterval(gpsRenderTimer);
+    vpsPollTimer = null;
+    vpsPublicConfigTimer = null;
+    gpsRenderTimer = null;
+    vpsDashboardRequest?.abort();
+    vpsDashboardRequest = null;
+    if (typeof resetDriversAdminSubscriptions === 'function') resetDriversAdminSubscriptions();
     return;
   }
 
@@ -253,8 +267,8 @@ function tryStartDashboard() {
       refreshVpsDashboard();
       refreshVpsPublicConfig();
       vpsPollTimer = setInterval(refreshVpsDashboard, 5000);
-      setInterval(refreshVpsPublicConfig, 60000);
-      setInterval(() => {
+      vpsPublicConfigTimer = setInterval(refreshVpsPublicConfig, 60000);
+      gpsRenderTimer = setInterval(() => {
         if (!map) return;
         Object.entries(driversCache).forEach(([driverId, d]) => updateMarkerForDriver(driverId, d));
         scheduleSidebarRender();
@@ -301,15 +315,21 @@ async function refreshVpsPublicConfig() {
 
 async function refreshVpsDashboard() {
   if (!VPS_API_BASE_URL || !auth.currentUser || !userAuthenticated) return;
+  vpsDashboardRequest?.abort();
+  const request = new AbortController();
+  vpsDashboardRequest = request;
+  const sequence = ++vpsDashboardRequestSequence;
   try {
     const token = await auth.currentUser.getIdToken();
     const response = await fetch(`${VPS_API_BASE_URL}/api/v1/dashboard/overview`, {
       headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(12000)]),
     });
     if (!response.ok) throw new Error(`VPS dashboard ${response.status}`);
     const snapshot = await response.json();
+    if (sequence !== vpsDashboardRequestSequence || request.signal.aborted) return;
+    window.latestVpsDashboardSnapshot = snapshot;
     const nextDrivers = Object.fromEntries((snapshot.drivers || []).map((driver) => [driver.id, driver]));
     driversCache = nextDrivers;
     activeTripsCache = Object.fromEntries((snapshot.trips || [])
@@ -332,10 +352,13 @@ async function refreshVpsDashboard() {
     scheduleSidebarRender();
     window.vpsDashboardLastError = '';
   } catch (error) {
+    if (request.signal.aborted) return;
     // Keep the last good snapshot visible. The top-level live indicator and
     // freshness rules make a stale VPS connection obvious without blanking
     // the operator's map during a short network hiccup.
     window.vpsDashboardLastError = error?.message || 'VPS unavailable';
+  } finally {
+    if (vpsDashboardRequest === request) vpsDashboardRequest = null;
   }
 }
 

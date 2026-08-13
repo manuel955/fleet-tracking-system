@@ -73,6 +73,25 @@ class TripService {
         throw ArgumentError('El backend VPS requiere un destino completo.');
       }
       final auth = await AuthService.signInAnonymously();
+      final prefs = await SharedPreferences.getInstance();
+      final requestPayload = <String, dynamic>{
+        'pickupLat': pickupLat,
+        'pickupLng': pickupLng,
+        'pickupAddress': pickupAddress,
+        'destinationLat': destinationLat,
+        'destinationLng': destinationLng,
+        'destinationAddress': destinationAddress,
+        'passengerCount': passengerCount,
+        'scheduledPickupAt': scheduledPickupAt,
+      };
+      final fingerprint = jsonEncode(requestPayload);
+      var requestId = prefs.getString('pending_trip_request_id');
+      if (requestId == null ||
+          prefs.getString('pending_trip_request_fingerprint') != fingerprint) {
+        requestId = _newRequestId();
+        await prefs.setString('pending_trip_request_id', requestId);
+        await prefs.setString('pending_trip_request_fingerprint', fingerprint);
+      }
       final trip = await VpsApiClient.createTrip(
         token: auth['idToken'].toString(),
         pickupLat: pickupLat,
@@ -84,18 +103,20 @@ class TripService {
         destinationLng: destinationLng,
         destinationAddress: destinationAddress,
         passengerCount: passengerCount,
+        requestId: requestId,
         scheduledPickupAt: scheduledPickupAt,
       );
       final tripId = trip['id']?.toString();
       if (tripId == null || tripId.isEmpty) {
         throw Exception('El API VPS no devolvio el identificador del viaje.');
       }
-      final prefs = await SharedPreferences.getInstance();
       final key = trip['status'] == 'scheduled'
           ? 'scheduled_trip_id'
           : 'active_trip_id';
       await prefs.setString(key, tripId);
       await prefs.setString('$_tripCachePrefix$tripId', jsonEncode(trip));
+      await prefs.remove('pending_trip_request_id');
+      await prefs.remove('pending_trip_request_fingerprint');
       return tripId;
     }
     final auth = await AuthService.signInAnonymously();
@@ -390,6 +411,12 @@ class TripService {
       final auth = await AuthService.signInAnonymously();
       final trips = await VpsApiClient.listTrips(
         token: auth['idToken'].toString(),
+        limit: last7Days ? 100 : 200,
+        since: last7Days
+            ? DateTime.now()
+                  .subtract(const Duration(days: 7))
+                  .millisecondsSinceEpoch
+            : null,
       );
       final entries = trips
           .map((trip) => MapEntry(trip['id']!.toString(), trip))
@@ -492,7 +519,14 @@ class TripService {
     })
   >
   recoverOpenTrips() async {
-    final trips = await getMyTrips(last7Days: false);
+    final trips = AppConfig.useVpsBackend
+        ? (await VpsApiClient.listTrips(
+            token: (await AuthService.signInAnonymously())['idToken']
+                .toString(),
+            limit: 20,
+            openOnly: true,
+          )).map((trip) => MapEntry(trip['id'].toString(), trip)).toList()
+        : await getMyTrips(last7Days: false);
     MapEntry<String, Map<String, dynamic>>? active;
     MapEntry<String, Map<String, dynamic>>? scheduled;
     for (final entry in trips) {
@@ -520,15 +554,38 @@ class TripService {
   /// abrir la hoja de calificación en ese instante.
   static Future<MapEntry<String, Map<String, dynamic>>?>
   recoverPendingFeedback() async {
-    final trips = await getMyTrips(last7Days: false);
+    final trips = AppConfig.useVpsBackend
+        ? (await VpsApiClient.listTrips(
+            token: (await AuthService.signInAnonymously())['idToken']
+                .toString(),
+            limit: 10,
+            pendingFeedback: true,
+          )).map((trip) => MapEntry(trip['id'].toString(), trip)).toList()
+        : await getMyTrips(last7Days: false);
     for (final entry in trips) {
       final trip = entry.value;
-      if (trip['status']?.toString() != 'completed') continue;
-      final rating = trip['rating'];
-      final feedbackComment = trip['feedbackComment']?.toString().trim() ?? '';
-      if (rating == null && feedbackComment.isEmpty) return entry;
+      if (needsFeedback(trip)) return entry;
     }
     return null;
+  }
+
+  static bool needsFeedback(Map<String, dynamic> trip) {
+    if (trip['status']?.toString() != 'completed') return false;
+    final feedback = trip['feedback'] is Map
+        ? Map<String, dynamic>.from(trip['feedback'] as Map)
+        : const <String, dynamic>{};
+    final rating = feedback['rating'] ?? trip['rating'];
+    final feedbackComment =
+        (feedback['comment'] ?? trip['feedbackComment'])?.toString().trim() ??
+        '';
+    final incidentCategory =
+        (feedback['incidentCategory'] ?? trip['incidentCategory'])
+            ?.toString()
+            .trim() ??
+        'none';
+    return rating == null &&
+        feedbackComment.isEmpty &&
+        (incidentCategory.isEmpty || incidentCategory == 'none');
   }
 
   /// Borra TODOS los viajes del pasajero (sin importar la fecha) -- se usa

@@ -37,9 +37,7 @@ class UpdateService {
           : Uri.parse(
               '${AppConfig.firebaseDbUrl}/config/${AppConfig.updateBuildConfigKey}.json',
             );
-      final response = await http
-          .get(uri)
-          .timeout(const Duration(seconds: 8));
+      final response = await http.get(uri).timeout(const Duration(seconds: 8));
       if (response.statusCode != 200) {
         return requiresBuildUpdate(
           localBuild: localNumber,
@@ -57,8 +55,13 @@ class UpdateService {
       if (remoteNumber != null && remoteNumber > (cachedBuild ?? 0)) {
         await prefs.setInt(_cachedMinimumBuildKey, remoteNumber);
       }
-      if (AppConfig.useVpsBackend && raw is Map && raw['passengerApkUrl'] is String) {
-        await prefs.setString(_cachedDownloadUrlKey, raw['passengerApkUrl'] as String);
+      if (AppConfig.useVpsBackend &&
+          raw is Map &&
+          raw['passengerApkUrl'] is String) {
+        await prefs.setString(
+          _cachedDownloadUrlKey,
+          raw['passengerApkUrl'] as String,
+        );
       }
     } catch (_) {
       // La última política confirmada sigue aplicando aun sin conexión.
@@ -72,9 +75,12 @@ class UpdateService {
 
   static Future<void> downloadUpdate() async {
     final prefs = await SharedPreferences.getInstance();
-    final url = prefs.getString(_cachedDownloadUrlKey) ?? AppConfig.apkDownloadUrl;
+    final url =
+        prefs.getString(_cachedDownloadUrlKey) ?? AppConfig.apkDownloadUrl;
     await launchUrl(
-      Uri.parse('$url${url.contains('?') ? '&' : '?'}v=${DateTime.now().millisecondsSinceEpoch}'),
+      Uri.parse(
+        '$url${url.contains('?') ? '&' : '?'}v=${DateTime.now().millisecondsSinceEpoch}',
+      ),
       mode: LaunchMode.externalApplication,
     );
   }

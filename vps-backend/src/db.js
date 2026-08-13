@@ -1,4 +1,6 @@
 import pg from 'pg';
+import { readdir, readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 
 const { Pool } = pg;
@@ -15,6 +17,27 @@ export async function databaseHealth() {
 
 export async function closeDatabase() {
   await pool?.end();
+}
+
+export async function runMigrations() {
+  if (!pool) return;
+  const migrationsDirectory = fileURLToPath(new URL('../db/', import.meta.url));
+  const files = (await readdir(migrationsDirectory))
+    .filter((name) => /^\d+.*\.sql$/.test(name))
+    .sort();
+  await pool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
+    name TEXT PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+  for (const name of files) {
+    const applied = await pool.query('SELECT 1 FROM schema_migrations WHERE name=$1', [name]);
+    if (applied.rowCount) continue;
+    const sql = await readFile(new URL(`../db/${name}`, import.meta.url), 'utf8');
+    await withTransaction(async (client) => {
+      await client.query(sql);
+      await client.query('INSERT INTO schema_migrations (name) VALUES ($1)', [name]);
+    });
+  }
 }
 
 export async function withTransaction(callback) {

@@ -31,6 +31,8 @@ services:
       - ./db/007_document_profiles.sql:/docker-entrypoint-initdb.d/007_document_profiles.sql:ro
       - ./db/008_dashboard_operations.sql:/docker-entrypoint-initdb.d/008_dashboard_operations.sql:ro
       - ./db/009_trip_timing.sql:/docker-entrypoint-initdb.d/009_trip_timing.sql:ro
+      - ./db/010_driver_assigned_place.sql:/docker-entrypoint-initdb.d/010_driver_assigned_place.sql:ro
+      - ./db/011_safe_stabilization.sql:/docker-entrypoint-initdb.d/011_safe_stabilization.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U apl -d apl_logistics"]
       interval: 5s

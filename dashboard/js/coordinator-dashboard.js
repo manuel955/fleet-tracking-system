@@ -89,6 +89,7 @@
   let tripMapRequestToken = 0;
   let tripDetailTimer = null;
   let coordinatorPollTimer = null;
+  let coordinatorPollInFlight = false;
   let tripDetailInFlight = false;
   let modalTripStatus = null;
   let modalTripDetail = null;
@@ -731,6 +732,8 @@
     tripListenerRef = null;
     if (window.vpsApiBaseUrl && auth.currentUser?.isVpsSession) {
       const refresh = async () => {
+        if (coordinatorPollInFlight) return;
+        coordinatorPollInFlight = true;
         try {
           const result = await coordinatorRequest('listCoordinatorTrips');
           trips = Object.fromEntries((result.trips || []).map((trip) => [trip.id, trip]));
@@ -738,6 +741,8 @@
           if (selectedTripId && trips[selectedTripId]) refreshSelectedTripDetail();
         } catch (_) {
           // Keep the last successful snapshot visible during a short outage.
+        } finally {
+          coordinatorPollInFlight = false;
         }
       };
       refresh();
@@ -757,6 +762,7 @@
     tripListenerRef = null;
     if (coordinatorPollTimer) clearInterval(coordinatorPollTimer);
     coordinatorPollTimer = null;
+    coordinatorPollInFlight = false;
     destroyPreviewMap();
     coordinatorUser = null;
     coordinatorPlace = null;

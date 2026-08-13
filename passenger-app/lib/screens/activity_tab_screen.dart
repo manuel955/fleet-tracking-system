@@ -380,8 +380,9 @@ class _TripFeedbackSheetState extends State<_TripFeedbackSheet> {
         incidentDetails: _incidentController.text,
       );
       if (!mounted) return;
+      final messenger = ScaffoldMessenger.maybeOf(context);
       Navigator.pop(context, true);
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger?.showSnackBar(
         const SnackBar(
           content: Text('Gracias. Tu información quedó guardada.'),
         ),

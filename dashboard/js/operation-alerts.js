@@ -129,6 +129,10 @@
 
   async function refreshVpsAlerts() {
     if (!window.vpsApiBaseUrl || !auth.currentUser) return;
+    if (window.latestVpsDashboardSnapshot) {
+      handleSnapshot({ val: () => window.latestVpsDashboardSnapshot.operationAlerts || {} });
+      return;
+    }
     try {
       const token = await auth.currentUser.getIdToken();
       const response = await fetch(`${String(window.vpsApiBaseUrl).replace(/\/$/, '')}/api/v1/dashboard/overview`, {

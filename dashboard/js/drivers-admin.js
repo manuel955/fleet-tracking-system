@@ -75,6 +75,7 @@ let tripHistoryOutsideListenerBound = false;
 const DRIVER_ADMIN_VPS_API_BASE_URL = String(window.vpsApiBaseUrl || '').replace(/\/$/, '');
 let driverAdminVpsTimer = null;
 let driverAdminVpsError = '';
+let driverAdminRefreshInFlight = false;
 
 const mapViewEl = document.getElementById('map-view');
 const adminViewEl = document.getElementById('drivers-admin-view');
@@ -91,6 +92,7 @@ function openDashboardView(view) {
   placesViewEl.classList.toggle('hidden', view !== 'places');
   settingsViewEl.classList.toggle('hidden', view !== 'settings');
   if (view === 'drivers-admin') startDriversAdmin();
+  else if (adminSubscribed) resetDriversAdminSubscriptions();
   if (view === 'places') startPlaces();
   if (view === 'settings') {
     // El boton superior siempre vuelve al inicio de Configuracion, incluso
@@ -186,7 +188,8 @@ function mapVpsDriverForAdmin(driver) {
 }
 
 async function refreshDriversAdminFromVps() {
-  if (!DRIVER_ADMIN_VPS_API_BASE_URL) return;
+  if (!DRIVER_ADMIN_VPS_API_BASE_URL || driverAdminRefreshInFlight) return;
+  driverAdminRefreshInFlight = true;
   try {
     const currentUser = auth.currentUser;
     if (!currentUser) throw new Error('Sesión del dashboard no disponible.');
@@ -217,6 +220,8 @@ async function refreshDriversAdminFromVps() {
     driverAdminVpsError = error?.message || 'No se pudo cargar el API del VPS.';
     updatePendingBadge();
     renderDriversAdmin();
+  } finally {
+    driverAdminRefreshInFlight = false;
   }
 }
 

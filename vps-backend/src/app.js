@@ -5,6 +5,36 @@ import { databaseHealth, pool, withTransaction } from './db.js';
 import { authenticate, hashPassword, publicUser, signUser, verifyPassword } from './auth.js';
 import { authorizePrivateDownload, createPrivateStorageAccessUrl, deletePrivateObjectsForOwner, getStorageObject, isPublicStorageKey, normalizeStorageKey, publicStorageUrl, storageConfigured, uploadStorageObject, verifyPrivateStorageAccessToken } from './storage.js';
 
+const requestRateBuckets = new Map();
+const MAX_RATE_BUCKETS = 5000;
+
+export function consumeRateLimit(scope, key, { limit, windowMs, now = Date.now() }) {
+  const bucketKey = `${scope}:${String(key || '').trim().toLowerCase()}`;
+  let bucket = requestRateBuckets.get(bucketKey);
+  if (!bucket || bucket.resetAt <= now) bucket = { count: 0, resetAt: now + windowMs };
+  bucket.count += 1;
+  requestRateBuckets.set(bucketKey, bucket);
+  if (requestRateBuckets.size > MAX_RATE_BUCKETS) {
+    for (const [storedKey, value] of requestRateBuckets) {
+      if (value.resetAt <= now || requestRateBuckets.size > MAX_RATE_BUCKETS) {
+        requestRateBuckets.delete(storedKey);
+      }
+    }
+  }
+  return {
+    allowed: bucket.count <= limit,
+    retryAfterSeconds: Math.max(1, Math.ceil((bucket.resetAt - now) / 1000)),
+  };
+}
+
+function enforceRateLimit(scope, key, options) {
+  const result = consumeRateLimit(scope, key, options);
+  if (result.allowed) return;
+  const error = new Error(`Demasiados intentos. Espera ${result.retryAfterSeconds} segundos.`);
+  error.statusCode = 429;
+  throw error;
+}
+
 function json(res, status, body) {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
@@ -33,9 +63,20 @@ function applyCors(req, res) {
   return true;
 }
 
-async function readJson(req) {
-  let body = '';
-  for await (const chunk of req) body += chunk;
+async function readJson(req, { maxBytes = config.maxJsonBytes } = {}) {
+  const chunks = [];
+  let totalBytes = 0;
+  for await (const chunk of req) {
+    const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += value.length;
+    if (totalBytes > maxBytes) {
+      const error = new Error('El cuerpo de la solicitud es demasiado grande.');
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(value);
+  }
+  const body = Buffer.concat(chunks).toString('utf8');
   if (!body.trim()) return {};
   try {
     return JSON.parse(body);
@@ -113,6 +154,14 @@ function normalizeInviteToken(value) {
   return /^[a-f0-9]{32,128}$/i.test(token) ? token.toLowerCase() : null;
 }
 
+export function hasAuthorizedPassengerAccess(user, now = Date.now()) {
+  if (user?.role !== 'passenger') return false;
+  if (user.passenger_access_status !== 'authorized') return false;
+  if (user.passenger_access_expires_at
+      && new Date(user.passenger_access_expires_at).getTime() <= now) return false;
+  return true;
+}
+
 function assertPassengerAccess(user) {
   requireRole(user, ['passenger']);
   if (user.passenger_access_status === 'revoked') {
@@ -122,6 +171,11 @@ function assertPassengerAccess(user) {
   }
   if (user.passenger_access_expires_at && new Date(user.passenger_access_expires_at).getTime() <= Date.now()) {
     const error = new Error('El acceso de pasajero ya venció.');
+    error.statusCode = 403;
+    throw error;
+  }
+  if (!hasAuthorizedPassengerAccess(user)) {
+    const error = new Error('Activa tu acceso con el código QR del hotel.');
     error.statusCode = 403;
     throw error;
   }
@@ -151,7 +205,7 @@ function publicInvite(row, token = null) {
 }
 
 async function savePublicConfig(user, key, value) {
-  requireRole(user, ['dashboard']);
+  requireDashboardAdmin(user);
   if (!PUBLIC_CONFIG_KEYS.has(key)) {
     const error = new Error('Clave de configuración no permitida.');
     error.statusCode = 400;
@@ -166,7 +220,7 @@ async function savePublicConfig(user, key, value) {
 }
 
 async function savePlace(user, body) {
-  requireRole(user, ['dashboard']);
+  requireDashboardAdmin(user);
   const category = requiredString(body.category, 'category', { max: 20 });
   if (!['hotels', 'sportVenues'].includes(category)) {
     const error = new Error('Categoría de lugar inválida.');
@@ -482,7 +536,8 @@ async function deleteVpsDriverAccount(driverId, actorLabel) {
     );
     await client.query(
       `UPDATE users SET email=NULL, password_hash=NULL,
-          display_name='Cuenta eliminada', status='disabled', updated_at=now()
+          display_name='Cuenta eliminada', status='disabled',
+          session_version=session_version+1, updated_at=now()
         WHERE id=$1`,
       [driverId],
     );
@@ -502,27 +557,30 @@ async function deleteCurrentVpsDriverAccount(user) {
 async function deleteCurrentVpsAccount(user) {
   if (user?.role === 'driver') return deleteCurrentVpsDriverAccount(user);
   requireRole(user, ['passenger']);
+  const activeTrip = await pool.query(
+    `SELECT id FROM trips
+      WHERE passenger_id = $1
+        AND status NOT IN ('completed', 'cancelled', 'no_drivers_available')
+      LIMIT 1`,
+    [user.id],
+  );
+  if (activeTrip.rowCount) {
+    throw Object.assign(new Error('Cancela o finaliza tu viaje antes de eliminar la cuenta.'), { statusCode: 409 });
+  }
+  // Object storage cannot participate in a PostgreSQL transaction. Delete it
+  // before anonymizing the account so failures leave a retryable DB state.
+  await deletePrivateObjectsForOwner(user.id);
   const result = await withTransaction(async (client) => {
-    const activeTrip = await client.query(
-      `SELECT id FROM trips
-        WHERE passenger_id = $1
-          AND status NOT IN ('completed', 'cancelled', 'no_drivers_available')
-        LIMIT 1 FOR UPDATE`,
-      [user.id],
-    );
-    if (activeTrip.rowCount) {
-      throw Object.assign(new Error('Cancela o finaliza tu viaje antes de eliminar la cuenta.'), { statusCode: 409 });
-    }
     const tokenResult = await client.query('DELETE FROM device_tokens WHERE user_id=$1', [user.id]);
     await client.query(
       `UPDATE passenger_profiles SET phone='', credential_photo_url=NULL, updated_at=now()
         WHERE user_id=$1`,
       [user.id],
     );
-    await deletePrivateObjectsForOwner(user.id);
     await client.query(
       `UPDATE users SET email=NULL, password_hash=NULL, display_name='Cuenta eliminada',
-          status='disabled', passenger_access_status='revoked', updated_at=now()
+          status='disabled', passenger_access_status='revoked',
+          session_version=session_version+1, updated_at=now()
         WHERE id=$1 AND role='passenger'`,
       [user.id],
     );
@@ -532,7 +590,7 @@ async function deleteCurrentVpsAccount(user) {
 }
 
 async function removePlace(user, id) {
-  requireRole(user, ['dashboard']);
+  requireDashboardAdmin(user);
   const result = await pool.query('DELETE FROM places WHERE id = $1 RETURNING id', [id]);
   if (!result.rowCount) {
     const error = new Error('Lugar no encontrado.');
@@ -720,7 +778,7 @@ async function manageDashboardUsers(user, body) {
 }
 
 async function managePassengerInvites(user, body) {
-  requireRole(user, ['dashboard']);
+  requireDashboardAdmin(user);
   const action = requiredString(body.action, 'action', { max: 20 });
   if (action === 'list') {
     const result = await pool.query('SELECT * FROM passenger_invites ORDER BY created_at DESC');
@@ -835,8 +893,14 @@ async function redeemPassengerInvite(body) {
 
 async function register(body) {
   const email = requiredString(body.email, 'email', { max: 254 }).toLowerCase();
+  enforceRateLimit('register', email, { limit: 5, windowMs: 60 * 60 * 1000 });
   const password = requiredString(body.password, 'password', { min: 8, max: 128 });
   const role = body.role === 'driver' ? 'driver' : 'passenger';
+  if (role === 'passenger') {
+    const error = new Error('Primero activa el acceso con el código QR del hotel.');
+    error.statusCode = 403;
+    throw error;
+  }
   const displayName = requiredString(body.displayName ?? body.name ?? '', 'displayName', { max: 120 });
   const passwordHash = await hashPassword(password);
 
@@ -846,7 +910,7 @@ async function register(body) {
     const inserted = await client.query(
       `INSERT INTO users (role, email, password_hash, display_name)
        VALUES ($1, $2, $3, $4)
-       RETURNING id, role, email, display_name, status`,
+       RETURNING id, role, email, display_name, status, session_version`,
       [role, email, passwordHash, displayName],
     );
     const created = inserted.rows[0];
@@ -880,12 +944,46 @@ async function register(body) {
   return { token: signUser(user), user: publicUser(user) };
 }
 
+async function linkPassengerEmail(user, body) {
+  assertPassengerAccess(user);
+  const email = requiredString(body.email, 'email', { max: 254 }).toLowerCase();
+  const password = requiredString(body.password, 'password', { min: 8, max: 128 });
+  if (!email.includes('@')) {
+    const error = new Error('Escribe un correo válido.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const passwordHash = await hashPassword(password);
+  try {
+    const result = await pool.query(
+      `UPDATE users
+          SET email=$1, password_hash=$2, session_version=session_version+1, updated_at=now()
+        WHERE id=$3 AND role='passenger' AND passenger_access_status='authorized'
+        RETURNING id, role, email, display_name, status, session_version,
+          passenger_access_status, passenger_access_expires_at`,
+      [email, passwordHash, user.id],
+    );
+    if (!result.rows[0]) {
+      throw Object.assign(new Error('Activa tu acceso con el código QR del hotel.'), { statusCode: 403 });
+    }
+    return { token: signUser(result.rows[0]), user: publicUser(result.rows[0]) };
+  } catch (error) {
+    if (error?.code === '23505') {
+      error.statusCode = 409;
+      error.message = 'Ya existe una cuenta con ese correo.';
+    }
+    throw error;
+  }
+}
+
 async function login(body) {
   const email = requiredString(body.email, 'email', { max: 254 }).toLowerCase();
+  enforceRateLimit('login', email, { limit: 20, windowMs: 15 * 60 * 1000 });
   const password = requiredString(body.password, 'password', { min: 1, max: 128 });
   if (!pool) throw new Error('Database is not configured');
   const result = await pool.query(
     `SELECT u.id, u.role, u.email, u.password_hash, u.display_name, u.status,
+        u.session_version, u.passenger_access_status, u.passenger_access_expires_at,
         u.dashboard_role, u.dashboard_sede_type, u.dashboard_sede_id,
         p.name AS sede_name, p.address AS sede_address,
         p.latitude AS sede_lat, p.longitude AS sede_lng
@@ -915,6 +1013,7 @@ async function ensurePasswordResetTable() {
 
 async function requestPasswordReset(body) {
   const email = requiredString(body.email, 'email', { max: 254 }).toLowerCase();
+  enforceRateLimit('password-reset', email, { limit: 5, windowMs: 60 * 60 * 1000 });
   if (!config.resendApiKey || !config.mailFrom) {
     throw Object.assign(new Error('La recuperación por correo aún no está configurada en el VPS.'), { statusCode: 503 });
   }
@@ -947,8 +1046,12 @@ async function requestPasswordReset(body) {
       subject: 'Restablece tu contraseña de APL Logistics',
       html: `<p>Solicitaste cambiar tu contraseña de APL Logistics.</p><p><a href="${resetUrl}">Crear una contraseña nueva</a></p><p>El enlace vence en 30 minutos.</p>`,
     }),
+    signal: AbortSignal.timeout(10_000),
   });
-  if (!response.ok) throw Object.assign(new Error('No se pudo enviar el correo de recuperación.'), { statusCode: 502 });
+  if (!response.ok) {
+    await pool.query('DELETE FROM password_reset_tokens WHERE token_hash=$1', [tokenHash]);
+    throw Object.assign(new Error('No se pudo enviar el correo de recuperación.'), { statusCode: 502 });
+  }
   return { ok: true };
 }
 
@@ -965,7 +1068,11 @@ async function resetPassword(body) {
       [tokenHash],
     );
     if (!found.rowCount) throw Object.assign(new Error('El enlace de recuperación venció o ya fue usado.'), { statusCode: 400 });
-    await client.query(`UPDATE users SET password_hash=$1, updated_at=now() WHERE id=$2 AND status='active'`, [passwordHash, found.rows[0].user_id]);
+    await client.query(
+      `UPDATE users SET password_hash=$1, session_version=session_version+1,
+          updated_at=now() WHERE id=$2 AND status='active'`,
+      [passwordHash, found.rows[0].user_id],
+    );
     await client.query(`UPDATE password_reset_tokens SET used_at=now() WHERE id=$1`, [found.rows[0].id]);
     return { ok: true };
   });
@@ -1116,6 +1223,35 @@ function parseScheduledPickup(value) {
   return new Date(millis);
 }
 
+function scheduledPickupLabel(timestamp) {
+  if (!timestamp) return null;
+  const date = new Date(timestamp);
+  const local = new Intl.DateTimeFormat('es-PE', {
+    timeZone: 'America/Lima', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(date);
+  const day = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Lima', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(date);
+  const today = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Lima', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date());
+  return day === today ? `Hoy a las ${local}` : `${day} a las ${local}`;
+}
+
+function tripAssignmentPushData(trip) {
+  const label = scheduledPickupLabel(trip.scheduledPickupAt);
+  return {
+    tripId: trip.id,
+    status: trip.status,
+    pickupAddress: trip.pickupAddress,
+    destinationAddress: trip.destinationAddress,
+    scheduledPickupAt: trip.scheduledPickupAt,
+    ...(label ? { scheduledPickupLabel: label, scheduledPickupSpeech: label } : {}),
+    route: 'active-trip',
+    deepLink: `driver://trip/${trip.id}`,
+  };
+}
+
 function publicTrip(row) {
   const millis = (value) => value ? new Date(value).getTime() : null;
   return {
@@ -1151,6 +1287,18 @@ function publicTrip(row) {
     cancelReason: row.cancel_reason,
     rating: row.rating,
     feedbackComment: row.feedback_comment,
+    feedback: row.rating == null
+        && !row.feedback_comment
+        && !row.incident_category
+        && !row.incident_details
+      ? null
+      : {
+          rating: row.rating,
+          comment: row.feedback_comment || '',
+          incidentCategory: row.incident_category || 'none',
+          incidentDetails: row.incident_details || '',
+          incidentStatus: row.incident_status || 'NONE',
+        },
   };
 }
 
@@ -1161,6 +1309,7 @@ const tripSelect = `
     passenger_count, scheduled_pickup_at, created_at, updated_at,
     completed_at, accepted_at, in_progress_at,
     cancelled_by, cancel_reason, rating, feedback_comment,
+    request_id, requested_passenger_name, requested_passenger_phone,
     (SELECT u.display_name FROM users u WHERE u.id = trips.driver_id) AS driver_name,
     (SELECT d.phone FROM drivers d WHERE d.id = trips.driver_id) AS driver_phone,
     (SELECT d.plate FROM drivers d WHERE d.id = trips.driver_id) AS driver_plate,
@@ -1168,8 +1317,13 @@ const tripSelect = `
     (SELECT d.vehicle_type FROM drivers d WHERE d.id = trips.driver_id) AS driver_vehicle_type,
     (SELECT d.vehicle_color FROM drivers d WHERE d.id = trips.driver_id) AS driver_vehicle_color,
     (SELECT d.vehicle_seats FROM drivers d WHERE d.id = trips.driver_id) AS driver_vehicle_seats,
-    (SELECT u.display_name FROM users u WHERE u.id = trips.passenger_id) AS passenger_name,
-    (SELECT pp.phone FROM passenger_profiles pp WHERE pp.user_id = trips.passenger_id) AS passenger_phone
+    COALESCE(requested_passenger_name,
+      (SELECT u.display_name FROM users u WHERE u.id = trips.passenger_id)) AS passenger_name,
+    COALESCE(requested_passenger_phone,
+      (SELECT pp.phone FROM passenger_profiles pp WHERE pp.user_id = trips.passenger_id)) AS passenger_phone,
+    (SELECT tf.incident_category FROM trip_feedback tf WHERE tf.trip_id=trips.id) AS incident_category,
+    (SELECT tf.incident_details FROM trip_feedback tf WHERE tf.trip_id=trips.id) AS incident_details,
+    (SELECT tf.incident_status FROM trip_feedback tf WHERE tf.trip_id=trips.id) AS incident_status
   FROM trips`;
 
 async function findTrip(tripId) {
@@ -1192,7 +1346,8 @@ export function buildAvailableDriverQuery(tripId, passengerCount, preferredDrive
              LEFT JOIN driver_locations l
                ON l.driver_id = d.id
               AND l.recorded_at >= now() - interval '2 minutes'
-            WHERE d.approval_status = 'approved'
+             WHERE d.approval_status = 'approved'
+              AND d.suspended = FALSE
               AND d.availability_status = 'online'
               AND d.current_trip_id IS NULL
               AND d.vehicle_seats >= $2
@@ -1284,23 +1439,44 @@ async function createTrip(user, body) {
   const destinationLat = parseCoordinate(body.destinationLat, 'destinationLat', -90, 90);
   const destinationLng = parseCoordinate(body.destinationLng, 'destinationLng', -180, 180);
   const passengerCount = parsePassengerCount(body.passengerCount);
+  const requestId = body.requestId == null || body.requestId === ''
+    ? null
+    : requiredString(body.requestId, 'requestId', { min: 16, max: 128 });
   const scheduledPickupAt = parseScheduledPickup(body.scheduledPickupAt);
   const status = scheduledPickupAt && scheduledPickupAt.getTime() > Date.now() + 60_000
     ? 'scheduled'
     : 'searching';
 
   const trip = await withTransaction(async (client) => {
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [String(user.id)]);
+    if (requestId) {
+      const existingRequest = await client.query(
+        `${tripSelect} WHERE passenger_id=$1 AND request_id=$2 LIMIT 1`,
+        [user.id, requestId],
+      );
+      if (existingRequest.rows[0]) return publicTrip(existingRequest.rows[0]);
+    }
+    const openTrip = await client.query(
+      `${tripSelect}
+        WHERE passenger_id=$1
+          AND status NOT IN ('completed', 'cancelled', 'no_drivers_available')
+          AND (($2::timestamptz IS NULL AND scheduled_pickup_at IS NULL)
+            OR ($2::timestamptz IS NOT NULL AND scheduled_pickup_at IS NOT NULL))
+        ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+      [user.id, scheduledPickupAt],
+    );
+    if (openTrip.rows[0]) return publicTrip(openTrip.rows[0]);
     const inserted = await client.query(
       `INSERT INTO trips (
         passenger_id, status, origin_address, origin_lat, origin_lng,
         destination_address, destination_lat, destination_lng,
-        passenger_count, scheduled_pickup_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        passenger_count, scheduled_pickup_at, request_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING id`,
       [
         user.id, status, pickupAddress, pickupLat, pickupLng,
         destinationAddress, destinationLat, destinationLng,
-        passengerCount, scheduledPickupAt,
+        passengerCount, scheduledPickupAt, requestId,
       ],
     );
     const tripId = inserted.rows[0].id;
@@ -1309,14 +1485,14 @@ async function createTrip(user, body) {
     return publicTrip(result.rows[0]);
   });
   if (trip.driverId) {
-    await notifyVpsDevices([trip.driverId], 'trip_assigned', {
+    await notifyVpsDevices([trip.driverId], 'trip_assigned', tripAssignmentPushData(trip));
+  } else if (trip.status === 'no_drivers_available') {
+    await notifyVpsDevices([trip.passengerId], 'no_drivers_available', {
       tripId: trip.id,
       status: trip.status,
-      pickupAddress: trip.pickupAddress,
-      destinationAddress: trip.destinationAddress,
-      scheduledPickupAt: trip.scheduledPickupAt,
-      route: 'active-trip',
-      deepLink: `driver://trip/${trip.id}`,
+      reason: 'No encontramos un conductor disponible.',
+      route: 'searching',
+      deepLink: `passenger://trip/${trip.id}`,
     });
   }
   return trip;
@@ -1333,31 +1509,23 @@ async function createCoordinatorTrip(user, body) {
     const inserted = await client.query(
       `INSERT INTO trips (
         passenger_id, status, origin_address, origin_lat, origin_lng,
-        destination_address, destination_lat, destination_lng, passenger_count
-      ) VALUES ($1, 'searching', $2, $3, $4, $5, $6, $7, $8)
+        destination_address, destination_lat, destination_lng, passenger_count,
+        requested_passenger_name, requested_passenger_phone
+      ) VALUES ($1, 'searching', $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING id`,
       [user.id, place.address, place.lat, place.lng, destinationAddress,
-        destinationLat, destinationLng, passengerCount],
+        destinationLat, destinationLng, passengerCount,
+        String(body.passengerName || '').trim().slice(0, 120) || user.display_name || 'Pasajero de sede',
+        String(body.passengerPhone || '').trim().slice(0, 40)],
     );
     const tripId = inserted.rows[0].id;
     await assignAvailableDriver(client, tripId, passengerCount);
     const result = await client.query(`${tripSelect} WHERE id = $1`, [tripId]);
     const value = publicTrip(result.rows[0]);
-    // These values are display-only for a coordinator request. The source of
-    // truth remains the coordinator account and the trip's passenger count.
-    value.passengerName = String(body.passengerName || '').trim().slice(0, 120) || user.display_name || 'Pasajero de sede';
-    value.passengerPhone = String(body.passengerPhone || '').trim().slice(0, 40);
     return value;
   });
   if (trip.driverId) {
-    await notifyVpsDevices([trip.driverId], 'trip_assigned', {
-      tripId: trip.id,
-      status: trip.status,
-      pickupAddress: trip.pickupAddress,
-      destinationAddress: trip.destinationAddress,
-      route: 'active-trip',
-      deepLink: `driver://trip/${trip.id}`,
-    });
+    await notifyVpsDevices([trip.driverId], 'trip_assigned', tripAssignmentPushData(trip));
   }
   return trip;
 }
@@ -1411,13 +1579,18 @@ async function cancelCoordinatorTrip(user, tripId, body) {
 }
 
 function canReadTrip(user, trip) {
-  return user.role === 'dashboard' || trip.passenger_id === user.id || trip.driver_id === user.id;
+  if (user.role === 'dashboard') {
+    return isDashboardAdmin(user)
+      || (isDashboardCoordinator(user) && trip.passenger_id === user.id);
+  }
+  return trip.passenger_id === user.id || trip.driver_id === user.id;
 }
 
 async function listTrips(user, url) {
   requireRole(user, ['passenger', 'driver', 'dashboard']);
   if (user.role === 'passenger') assertPassengerAccess(user);
-  const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? 50), 1), 100);
+  if (user.role === 'dashboard') requireDashboardAdmin(user);
+  const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? 50), 1), 200);
   const conditions = [];
   const values = [];
   if (user.role === 'passenger') {
@@ -1426,6 +1599,18 @@ async function listTrips(user, url) {
   } else if (user.role === 'driver') {
     values.push(user.id);
     conditions.push(`driver_id = $${values.length}`);
+  }
+  const since = Number(url.searchParams.get('since') || 0);
+  if (Number.isFinite(since) && since > 0) {
+    values.push(new Date(since));
+    conditions.push(`created_at >= $${values.length}`);
+  }
+  if (url.searchParams.get('open') === 'true') {
+    conditions.push(`status NOT IN ('completed', 'cancelled', 'no_drivers_available')`);
+  }
+  if (url.searchParams.get('pendingFeedback') === 'true') {
+    conditions.push(`status='completed'`);
+    conditions.push(`NOT EXISTS (SELECT 1 FROM trip_feedback tf WHERE tf.trip_id=trips.id)`);
   }
   values.push(limit);
   const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
@@ -1629,6 +1814,7 @@ function publicFeedback(row) {
  */
 async function dashboardOverview(user) {
   requireRole(user, ['dashboard']);
+  const includePrivateDocuments = isDashboardAdmin(user);
   const [driversResult, tripsResult] = await Promise.all([
     pool.query(`
       SELECT d.id, u.display_name, u.email, u.status AS user_status,
@@ -1648,7 +1834,10 @@ async function dashboardOverview(user) {
       LEFT JOIN driver_locations l ON l.driver_id = d.id
       WHERE u.status = 'active'
       ORDER BY u.display_name ASC, d.id ASC`),
-    pool.query(`${tripSelect} ORDER BY created_at DESC LIMIT 200`),
+    pool.query(`${tripSelect}
+      WHERE status IN ('scheduled','searching','no_drivers_available','assigned_pending_accept','accepted','arrived_at_pickup','in_progress')
+         OR created_at >= now() - interval '7 days'
+      ORDER BY created_at DESC LIMIT 1000`),
   ]);
 
   const trips = tripsResult.rows.map(publicTrip);
@@ -1666,16 +1855,16 @@ async function dashboardOverview(user) {
     vehicleType: row.vehicle_type,
     vehicleColor: row.vehicle_color || '',
     vehicleSeats: row.vehicle_seats,
-    profilePhotoUrl: dashboardDocumentUrl(row.profile_photo_url),
-    dniDocUrl: dashboardDocumentUrl(row.dni_doc_url),
-    dniFrontDocUrl: dashboardDocumentUrl(row.dni_front_doc_url),
-    dniBackDocUrl: dashboardDocumentUrl(row.dni_back_doc_url),
-    licenseDocUrl: dashboardDocumentUrl(row.license_doc_url),
-    soatDocUrl: dashboardDocumentUrl(row.soat_doc_url),
-    circulationCardDocUrl: dashboardDocumentUrl(row.circulation_card_doc_url),
-    technicalReviewDocUrl: dashboardDocumentUrl(row.technical_review_doc_url),
-    criminalRecordDocUrl: dashboardDocumentUrl(row.criminal_record_doc_url),
-    workCertificateDocUrl: dashboardDocumentUrl(row.work_certificate_doc_url),
+    profilePhotoUrl: includePrivateDocuments ? dashboardDocumentUrl(row.profile_photo_url) : null,
+    dniDocUrl: includePrivateDocuments ? dashboardDocumentUrl(row.dni_doc_url) : null,
+    dniFrontDocUrl: includePrivateDocuments ? dashboardDocumentUrl(row.dni_front_doc_url) : null,
+    dniBackDocUrl: includePrivateDocuments ? dashboardDocumentUrl(row.dni_back_doc_url) : null,
+    licenseDocUrl: includePrivateDocuments ? dashboardDocumentUrl(row.license_doc_url) : null,
+    soatDocUrl: includePrivateDocuments ? dashboardDocumentUrl(row.soat_doc_url) : null,
+    circulationCardDocUrl: includePrivateDocuments ? dashboardDocumentUrl(row.circulation_card_doc_url) : null,
+    technicalReviewDocUrl: includePrivateDocuments ? dashboardDocumentUrl(row.technical_review_doc_url) : null,
+    criminalRecordDocUrl: includePrivateDocuments ? dashboardDocumentUrl(row.criminal_record_doc_url) : null,
+    workCertificateDocUrl: includePrivateDocuments ? dashboardDocumentUrl(row.work_certificate_doc_url) : null,
     licenseExpiresAt: row.license_expires_at == null ? null : Number(row.license_expires_at),
     soatExpiresAt: row.soat_expires_at == null ? null : Number(row.soat_expires_at),
     technicalReviewExpiresAt: row.technical_review_expires_at == null ? null : Number(row.technical_review_expires_at),
@@ -1764,7 +1953,8 @@ async function setDriverAvailability(user, body) {
   requireRole(user, ['driver']);
   const online = body.online === true || body.online === 'true';
   const previous = await pool.query(
-    `SELECT availability_status FROM drivers WHERE id=$1 AND approval_status='approved'`,
+    `SELECT availability_status FROM drivers
+      WHERE id=$1 AND approval_status='approved' AND suspended=FALSE`,
     [user.id],
   );
   if (!previous.rows[0]) {
@@ -1775,7 +1965,7 @@ async function setDriverAvailability(user, body) {
   const result = await pool.query(
     `UPDATE drivers
         SET availability_status = $1, updated_at = now()
-      WHERE id = $2 AND approval_status = 'approved'
+      WHERE id = $2 AND approval_status = 'approved' AND suspended=FALSE
       RETURNING id, availability_status, current_trip_id`,
     [online ? 'online' : 'offline', user.id],
   );
@@ -1815,6 +2005,14 @@ async function setDriverAvailability(user, body) {
 
 async function updateDriverLocation(user, body) {
   requireRole(user, ['driver']);
+  const eligible = await pool.query(
+    `SELECT 1 FROM drivers
+      WHERE id=$1 AND approval_status='approved' AND suspended=FALSE`,
+    [user.id],
+  );
+  if (!eligible.rowCount) {
+    throw Object.assign(new Error('El conductor no está aprobado para operar.'), { statusCode: 403 });
+  }
   const latitude = parseCoordinate(body.latitude, 'latitude', -90, 90);
   const longitude = parseCoordinate(body.longitude, 'longitude', -180, 180);
   const accuracyM = body.accuracyM === undefined ? null : parseCoordinate(body.accuracyM, 'accuracyM', 0, 10000);
@@ -1840,6 +2038,14 @@ async function updateDriverLocation(user, body) {
 
 async function driverHeartbeat(user, body) {
   requireRole(user, ['driver']);
+  const eligible = await pool.query(
+    `SELECT 1 FROM drivers
+      WHERE id=$1 AND approval_status='approved' AND suspended=FALSE`,
+    [user.id],
+  );
+  if (!eligible.rowCount) {
+    throw Object.assign(new Error('El conductor no está aprobado para operar.'), { statusCode: 403 });
+  }
   // Este endpoint confirma que la app sigue viva, pero nunca escribe una
   // coordenada antigua en driver_locations. Solo updateDriverLocation puede
   // renovar el GPS y cerrar una alerta de señal perdida.
@@ -1850,11 +2056,13 @@ async function driverHeartbeat(user, body) {
 async function getDriverMe(user) {
   requireRole(user, ['driver']);
   const result = await pool.query(
-    `SELECT d.id, d.approval_status, d.phone, d.plate, d.vehicle_type,
+    `SELECT d.id, d.approval_status, d.phone, d.plate, d.age,
+       d.vehicle_brand, d.vehicle_type, d.vehicle_color,
        d.vehicle_seats, d.availability_status, d.current_trip_id,
-       d.assigned_place,
+       d.assigned_place, d.suspended, u.display_name,
        l.latitude, l.longitude, l.accuracy_m, l.recorded_at
-       FROM drivers d LEFT JOIN driver_locations l ON l.driver_id = d.id
+       FROM drivers d JOIN users u ON u.id=d.id
+       LEFT JOIN driver_locations l ON l.driver_id = d.id
       WHERE d.id = $1`,
     [user.id],
   );
@@ -1867,11 +2075,17 @@ async function getDriverMe(user) {
   return {
     id: row.id,
     approvalStatus: row.approval_status,
+    name: row.display_name,
     phone: row.phone,
     plate: row.plate,
+    age: row.age,
+    vehicleBrand: row.vehicle_brand,
     vehicleType: row.vehicle_type,
+    vehicleColor: row.vehicle_color,
     vehicleSeats: row.vehicle_seats,
     availabilityStatus: row.availability_status,
+    connectionStatus: row.availability_status === 'online' ? 'ONLINE' : 'OFFLINE',
+    suspended: row.suspended === true,
     currentTripId: row.current_trip_id,
     assignedPlace: row.assigned_place || null,
     location: row.latitude === null ? null : {
@@ -1882,12 +2096,32 @@ async function getDriverMe(user) {
   };
 }
 
+async function updateDriverPhone(user, body) {
+  requireRole(user, ['driver']);
+  const phone = requiredString(body.phone, 'phone', { min: 6, max: 30 });
+  const result = await pool.query(
+    `UPDATE drivers SET phone=$1, updated_at=now()
+      WHERE id=$2 AND approval_status='approved' AND suspended=FALSE
+      RETURNING phone`,
+    [phone, user.id],
+  );
+  if (!result.rows[0]) {
+    throw Object.assign(new Error('El conductor no está aprobado para operar.'), { statusCode: 403 });
+  }
+  return { phone: result.rows[0].phone };
+}
+
 async function getTripDriverLocation(user, tripId) {
   assertPassengerAccess(user);
   const trip = await findTrip(tripId);
   if (!trip || trip.passenger_id !== user.id || !trip.driver_id) {
     const error = new Error('Viaje no encontrado.');
     error.statusCode = 404;
+    throw error;
+  }
+  if (!['accepted', 'arrived_at_pickup', 'in_progress'].includes(trip.status)) {
+    const error = new Error('La ubicación del conductor solo está disponible durante el viaje activo.');
+    error.statusCode = 409;
     throw error;
   }
   const result = await pool.query(
@@ -1931,6 +2165,14 @@ const driverTransitions = Object.freeze({
 
 async function advanceDriverTrip(user, tripId, body) {
   requireRole(user, ['driver']);
+  const eligible = await pool.query(
+    `SELECT 1 FROM drivers
+      WHERE id=$1 AND approval_status='approved' AND suspended=FALSE`,
+    [user.id],
+  );
+  if (!eligible.rowCount) {
+    throw Object.assign(new Error('El conductor no está aprobado para operar.'), { statusCode: 403 });
+  }
   const action = requiredString(body.action ?? body.newStatus, 'action', { max: 40 });
   const requestedStatus = ({ arrive: 'arrived_at_pickup', start: 'in_progress', complete: 'completed' })[action] ?? action;
   const trip = await withTransaction(async (client) => {
@@ -2034,7 +2276,12 @@ async function cancelTrip(user, tripId, body) {
   const trip = await withTransaction(async (client) => {
     const result = await client.query(`${tripSelect} WHERE id = $1 FOR UPDATE`, [tripId]);
     const trip = result.rows[0];
-    if (!trip || (user.role === 'passenger' && trip.passenger_id !== user.id)) {
+    const dashboardAllowed = user.role !== 'dashboard'
+      || isDashboardAdmin(user)
+      || (isDashboardCoordinator(user) && trip?.passenger_id === user.id);
+    if (!trip
+        || (user.role === 'passenger' && trip.passenger_id !== user.id)
+        || !dashboardAllowed) {
       const error = new Error('Viaje no encontrado.');
       error.statusCode = 404;
       throw error;
@@ -2057,14 +2304,21 @@ async function cancelTrip(user, tripId, body) {
     return publicTrip(updated.rows[0]);
   });
   if (trip.status === 'cancelled') {
-    const recipientIds = [trip.passengerId, trip.driverId].filter(Boolean);
-    await notifyVpsDevices(recipientIds, 'trip_cancelled', {
+    const common = {
       tripId: trip.id,
       status: trip.status,
       cancelReason: trip.cancelReason,
       cancelledBy: trip.cancelledBy,
+    };
+    await notifyVpsDevices([trip.passengerId].filter(Boolean), 'trip_cancelled', {
+      ...common,
       route: 'home',
       deepLink: 'passenger://home',
+    });
+    await notifyVpsDevices([trip.driverId].filter(Boolean), 'trip_cancelled', {
+      ...common,
+      route: 'home',
+      deepLink: 'driver://home',
     });
   }
   return trip;
@@ -2072,7 +2326,7 @@ async function cancelTrip(user, tripId, body) {
 
 async function retryTrip(user, tripId) {
   assertPassengerAccess(user);
-  return withTransaction(async (client) => {
+  const trip = await withTransaction(async (client) => {
     const result = await client.query(`${tripSelect} WHERE id = $1 FOR UPDATE`, [tripId]);
     const trip = result.rows[0];
     if (!trip || trip.passenger_id !== user.id) {
@@ -2088,6 +2342,18 @@ async function retryTrip(user, tripId) {
     const updated = await client.query(`${tripSelect} WHERE id = $1`, [tripId]);
     return publicTrip(updated.rows[0]);
   });
+  if (trip.driverId) {
+    await notifyVpsDevices([trip.driverId], 'trip_assigned', tripAssignmentPushData(trip));
+  } else if (trip.status === 'no_drivers_available') {
+    await notifyVpsDevices([trip.passengerId], 'no_drivers_available', {
+      tripId: trip.id,
+      status: trip.status,
+      reason: 'Aún no encontramos un conductor disponible.',
+      route: 'searching',
+      deepLink: `passenger://trip/${trip.id}`,
+    });
+  }
+  return trip;
 }
 
 async function submitFeedback(user, tripId, body) {
@@ -2184,6 +2450,16 @@ async function registerDeviceToken(user, body) {
   return { registered: true };
 }
 
+async function unregisterDeviceToken(user, body) {
+  requireRole(user, ['passenger', 'driver', 'dashboard']);
+  const token = requiredString(body.token, 'token', { max: 4096 });
+  const result = await pool.query(
+    'DELETE FROM device_tokens WHERE user_id=$1 AND token=$2',
+    [user.id, token],
+  );
+  return { removed: result.rowCount || 0 };
+}
+
 async function notifyVpsDevices(userIds, type, data = {}) {
   if (!config.fcmWebhookUrl || !config.fcmWebhookSecret || !pool || !userIds?.length) return;
   try {
@@ -2250,22 +2526,20 @@ export async function dispatchScheduledTrips({ now = new Date() } = {}) {
         [trip.id],
       );
       const driverId = await assignAvailableDriver(client, trip.id, trip.passenger_count ?? 1);
-      if (driverId) {
-        const updated = await client.query(`${tripSelect} WHERE id = $1`, [trip.id]);
-        dispatched.push({ trip: publicTrip(updated.rows[0]), driverId });
-      }
+      const updated = await client.query(`${tripSelect} WHERE id = $1`, [trip.id]);
+      dispatched.push({ trip: publicTrip(updated.rows[0]), driverId });
     }
     return dispatched;
   });
-  await Promise.all(dispatchedTrips.map(({ trip, driverId }) => notifyVpsDevices([driverId], 'trip_assigned', {
-    tripId: trip.id,
-    status: trip.status,
-    pickupAddress: trip.pickupAddress,
-    destinationAddress: trip.destinationAddress,
-    scheduledPickupAt: trip.scheduledPickupAt,
-    route: 'active-trip',
-    deepLink: `driver://trip/${trip.id}`,
-  })));
+  await Promise.all(dispatchedTrips.map(({ trip, driverId }) => driverId
+    ? notifyVpsDevices([driverId], 'trip_assigned', tripAssignmentPushData(trip))
+    : notifyVpsDevices([trip.passengerId], 'no_drivers_available', {
+      tripId: trip.id,
+      status: trip.status,
+      reason: 'AÃºn no encontramos un conductor disponible.',
+      route: 'searching',
+      deepLink: `passenger://trip/${trip.id}`,
+    })));
   return dispatchedTrips.length;
 }
 
@@ -2369,7 +2643,10 @@ export function createApp({ health = databaseHealth } = {}) {
 
       if (req.method === 'POST' && url.pathname === '/api/v1/storage/upload') {
         const user = await authenticate(req);
-        return json(res, 201, await uploadStorageObject(user, await readJson(req)));
+        return json(res, 201, await uploadStorageObject(
+          user,
+          await readJson(req, { maxBytes: config.maxStorageJsonBytes }),
+        ));
       }
 
       const storageDownloadMatch = url.pathname.match(/^\/api\/v1\/storage\/download\/(.+)$/);
@@ -2490,6 +2767,11 @@ export function createApp({ health = databaseHealth } = {}) {
         return json(res, 201, await register(await readJson(req)));
       }
 
+      if (req.method === 'POST' && url.pathname === '/api/v1/auth/link-passenger-email') {
+        const user = await authenticate(req);
+        return json(res, 200, await linkPassengerEmail(user, await readJson(req)));
+      }
+
       if (req.method === 'POST' && url.pathname === '/api/v1/auth/login') {
         return json(res, 200, await login(await readJson(req)));
       }
@@ -2524,6 +2806,11 @@ export function createApp({ health = databaseHealth } = {}) {
         return json(res, 200, await getDriverMe(user));
       }
 
+      if (req.method === 'POST' && url.pathname === '/api/v1/drivers/me/phone') {
+        const user = await authenticate(req);
+        return json(res, 200, await updateDriverPhone(user, await readJson(req)));
+      }
+
       if (req.method === 'POST' && url.pathname === '/api/v1/drivers/availability') {
         const user = await authenticate(req);
         return json(res, 200, await setDriverAvailability(user, await readJson(req)));
@@ -2542,6 +2829,11 @@ export function createApp({ health = databaseHealth } = {}) {
       if (req.method === 'POST' && url.pathname === '/api/v1/device-tokens') {
         const user = await authenticate(req);
         return json(res, 200, await registerDeviceToken(user, await readJson(req)));
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/v1/device-tokens/remove') {
+        const user = await authenticate(req);
+        return json(res, 200, await unregisterDeviceToken(user, await readJson(req)));
       }
 
       if (req.method === 'GET' && url.pathname === '/api/v1/dashboard/overview') {

@@ -144,7 +144,8 @@ class AuthService {
     final uid = session['uid'] as String?;
     final token = session['idToken'] as String?;
     final expiresAt = session['expiresAt'] as int? ?? 0;
-    if (uid != null && token != null &&
+    if (uid != null &&
+        token != null &&
         DateTime.now().millisecondsSinceEpoch < expiresAt) {
       return {'uid': uid, 'idToken': token};
     }
@@ -184,14 +185,11 @@ class AuthService {
   }) async {
     if (AppConfig.useVpsBackend) {
       final normalizedEmail = email.trim().toLowerCase();
-      final prefs = await SharedPreferences.getInstance();
-      final data = await VpsApiClient.register(
+      final session = await currentSession();
+      final data = await VpsApiClient.linkPassengerEmail(
+        token: session['idToken'].toString(),
         email: normalizedEmail,
         password: password,
-        displayName:
-            prefs.getString('passenger_name')?.trim().isNotEmpty == true
-            ? prefs.getString('passenger_name')!.trim()
-            : 'Pasajero',
       );
       final user = data['user'];
       final token = data['token']?.toString();

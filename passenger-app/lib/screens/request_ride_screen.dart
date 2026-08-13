@@ -120,22 +120,28 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
       }
       if (permission.isPermanentlyDenied) {
         if (mounted) {
-          setState(() => _error =
-              'Permiso de ubicación bloqueado. Actívalo en Ajustes o busca el punto de recogida manualmente.');
+          setState(
+            () => _error =
+                'Permiso de ubicación bloqueado. Actívalo en Ajustes o busca el punto de recogida manualmente.',
+          );
         }
         return;
       }
       if (!permission.isGranted) {
         if (mounted) {
-          setState(() => _error =
-              'Necesitamos tu ubicación para pedir el viaje. También puedes elegir el punto manualmente.');
+          setState(
+            () => _error =
+                'Necesitamos tu ubicación para pedir el viaje. También puedes elegir el punto manualmente.',
+          );
         }
         return;
       }
       if (!await Geolocator.isLocationServiceEnabled()) {
         if (mounted) {
-          setState(() => _error =
-              'Activa el GPS o elige manualmente el punto de recogida.');
+          setState(
+            () => _error =
+                'Activa el GPS o elige manualmente el punto de recogida.',
+          );
         }
         return;
       }
@@ -149,8 +155,10 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
       _mapController?.animateCamera(CameraUpdate.newLatLng(_pickup));
     } catch (_) {
       if (mounted) {
-        setState(() => _error =
-            'No pudimos obtener tu ubicación. Busca o mueve el punto de recogida manualmente.');
+        setState(
+          () => _error =
+              'No pudimos obtener tu ubicación. Busca o mueve el punto de recogida manualmente.',
+        );
       }
     } finally {
       if (mounted) setState(() => _loadingLocation = false);
@@ -369,8 +377,10 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
 
   Future<void> _requestRide() async {
     if (!_pickupIsVerified) {
-      setState(() => _error =
-          'Confirma un punto de recogida real: activa el GPS, busca una dirección o mueve el pin.');
+      setState(
+        () => _error =
+            'Confirma un punto de recogida real: activa el GPS, busca una dirección o mueve el pin.',
+      );
       return;
     }
     setState(() {
@@ -401,9 +411,11 @@ class _RequestRideScreenState extends State<RequestRideScreen> {
             ? _scheduledDateTime(_scheduledTime!).millisecondsSinceEpoch
             : null,
       );
+      if (!mounted) return;
       widget.onRequested(tripId);
-      if (mounted) Navigator.pop(context, tripId);
+      Navigator.pop(context, tripId);
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _requesting = false;
         _error = 'Error al pedir el viaje: $e';

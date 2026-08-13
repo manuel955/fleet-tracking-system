@@ -86,8 +86,13 @@ class VpsApiClient {
     body: {'email': email.trim().toLowerCase(), 'password': password},
   );
 
-  static Future<Map<String, dynamic>> requestPasswordReset({required String email}) =>
-      _request('POST', '/api/v1/auth/request-password-reset', body: {'email': email.trim().toLowerCase()});
+  static Future<Map<String, dynamic>> requestPasswordReset({
+    required String email,
+  }) => _request(
+    'POST',
+    '/api/v1/auth/request-password-reset',
+    body: {'email': email.trim().toLowerCase()},
+  );
 
   static Future<Map<String, dynamic>> register({
     required String email,
@@ -103,6 +108,17 @@ class VpsApiClient {
       'displayName': displayName.trim(),
       'role': role,
     },
+  );
+
+  static Future<Map<String, dynamic>> linkPassengerEmail({
+    required String token,
+    required String email,
+    required String password,
+  }) => _request(
+    'POST',
+    '/api/v1/auth/link-passenger-email',
+    token: token,
+    body: {'email': email.trim().toLowerCase(), 'password': password},
   );
 
   static Future<Map<String, dynamic>> uploadStorage({
@@ -178,17 +194,37 @@ class VpsApiClient {
     body: {'token': deviceToken, 'platform': platform},
   );
 
+  static Future<void> unregisterDeviceToken({
+    required String token,
+    required String deviceToken,
+  }) async {
+    await _request(
+      'POST',
+      '/api/v1/device-tokens/remove',
+      token: token,
+      body: {'token': deviceToken},
+    );
+  }
+
   static Future<List<Map<String, dynamic>>> listTrips({
     required String token,
     int limit = 50,
+    int? since,
+    bool openOnly = false,
+    bool pendingFeedback = false,
   }) async {
     final base = AppConfig.vpsApiBaseUrl.trim().replaceFirst(
       RegExp(r'/+$'),
       '',
     );
-    final uri = Uri.parse(
-      '$base/api/v1/trips',
-    ).replace(queryParameters: {'limit': limit.toString()});
+    final uri = Uri.parse('$base/api/v1/trips').replace(
+      queryParameters: {
+        'limit': limit.toString(),
+        if (since != null) 'since': since.toString(),
+        if (openOnly) 'open': 'true',
+        if (pendingFeedback) 'pendingFeedback': 'true',
+      },
+    );
     final response = await http
         .get(
           uri,
@@ -259,6 +295,7 @@ class VpsApiClient {
     required double destinationLng,
     required String destinationAddress,
     required int passengerCount,
+    required String requestId,
     int? scheduledPickupAt,
   }) async {
     final body = <String, dynamic>{
@@ -269,6 +306,7 @@ class VpsApiClient {
       'destinationLng': destinationLng,
       'destinationAddress': destinationAddress,
       'passengerCount': passengerCount,
+      'requestId': requestId,
     };
     if (scheduledPickupAt != null) {
       body['scheduledPickupAt'] = scheduledPickupAt;

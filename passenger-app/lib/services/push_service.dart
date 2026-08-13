@@ -18,6 +18,7 @@ Future<void> pushBackgroundHandler(RemoteMessage message) async {
     case 'driver_arrived':
       await NotificationService.showDriverArrived(
         message.data['tripId']?.toString(),
+        message.data['deepLink']?.toString(),
       );
       break;
     case 'trip_updated':
@@ -29,6 +30,7 @@ Future<void> pushBackgroundHandler(RemoteMessage message) async {
     case 'trip_cancelled':
       await NotificationService.showTripCancelled(
         message.data['reason']?.toString(),
+        message.data['deepLink']?.toString(),
       );
       break;
     case 'trip_status':
@@ -42,6 +44,13 @@ Future<void> pushBackgroundHandler(RemoteMessage message) async {
       await NotificationService.showSimple(
         'Viaje finalizado',
         'Tu viaje terminó. Abre la app para calificarlo.',
+      );
+      break;
+    case 'no_drivers_available':
+      await NotificationService.showSimple(
+        'Sin conductores disponibles',
+        message.data['reason']?.toString() ??
+            'No encontramos un conductor disponible. Abre la app para reintentar.',
       );
       break;
   }
@@ -92,6 +101,27 @@ class PushService {
           body: jsonEncode({'fcmToken': token}),
         )
         .timeout(const Duration(seconds: 10));
+  }
+
+  static Future<void> unregisterCurrentToken() async {
+    try {
+      final deviceToken = await FirebaseMessaging.instance.getToken();
+      if (deviceToken == null || deviceToken.isEmpty) return;
+      final session = await AuthService.currentSession();
+      if (AppConfig.useVpsBackend) {
+        await VpsApiClient.unregisterDeviceToken(
+          token: session['idToken'].toString(),
+          deviceToken: deviceToken,
+        );
+        return;
+      }
+      final uri = Uri.parse(
+        '${AppConfig.firebaseDbUrl}/passengers/${session['uid']}/fcmToken.json?auth=${session['idToken']}',
+      );
+      await http.delete(uri).timeout(const Duration(seconds: 10));
+    } catch (_) {
+      // El logout local no debe quedar bloqueado por una red intermitente.
+    }
   }
 
   static String get _platform {

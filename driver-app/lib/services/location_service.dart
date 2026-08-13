@@ -310,6 +310,8 @@ void onServiceStart(ServiceInstance service) async {
     alertCheckInFlight = true;
     try {
       await _checkTripAlerts();
+    } catch (error) {
+      _log(service, 'No se pudo consultar asignaciones: $error');
     } finally {
       alertCheckInFlight = false;
     }

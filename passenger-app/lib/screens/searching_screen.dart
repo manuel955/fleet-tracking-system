@@ -35,6 +35,7 @@ class _SearchingScreenState extends State<SearchingScreen> {
   Timer? _timer;
   late Map<String, dynamic> _trip;
   bool _busy = false;
+  bool _pollInFlight = false;
 
   @override
   void initState() {
@@ -64,9 +65,11 @@ class _SearchingScreenState extends State<SearchingScreen> {
   }
 
   Future<void> _poll() async {
+    if (_pollInFlight) return;
+    _pollInFlight = true;
     try {
       final trip = await TripService.getTrip(widget.tripId);
-      if (trip == null) return;
+      if (trip == null || !mounted) return;
       if (trip['status'] != _trip['status']) {
         widget.onStatusChanged(trip);
         return;
@@ -74,6 +77,8 @@ class _SearchingScreenState extends State<SearchingScreen> {
       if (mounted && _tripViewChanged(trip)) setState(() => _trip = trip);
     } catch (_) {
       // Reintenta en el siguiente tick.
+    } finally {
+      _pollInFlight = false;
     }
   }
 

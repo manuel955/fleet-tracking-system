@@ -12,7 +12,8 @@ const client = config.s3Endpoint && config.s3Bucket && config.s3AccessKey && con
   })
   : null;
 
-const MAX_BYTES = 120 * 1024 * 1024;
+const MAX_PUBLIC_BYTES = 120 * 1024 * 1024;
+const MAX_PRIVATE_BYTES = 8 * 1024 * 1024;
 const PUBLIC_PREFIXES = ['app_releases/', 'app_branding/', 'dashboard_branding/'];
 const DASHBOARD_PREFIXES = PUBLIC_PREFIXES;
 
@@ -93,14 +94,15 @@ export async function uploadStorageObject(user, body) {
   if (!user) throw storageError('SesiÃ³n requerida.', 401);
   const key = normalizeStorageKey(body.key);
   assertAllowedUpload(user, key);
+  const maxBytes = isPublicStorageKey(key) ? MAX_PUBLIC_BYTES : MAX_PRIVATE_BYTES;
   const contentType = String(body.contentType || 'application/octet-stream').slice(0, 160);
   const encoded = String(body.dataBase64 || '');
-  if (!encoded || encoded.length > Math.ceil(MAX_BYTES * 4 / 3) + 16) {
+  if (!encoded || encoded.length > Math.ceil(maxBytes * 4 / 3) + 16) {
     throw storageError('Archivo ausente o demasiado grande.', 413);
   }
   let data;
   try { data = Buffer.from(encoded, 'base64'); } catch (_) { throw storageError('Contenido base64 invÃ¡lido.'); }
-  if (!data.length || data.length > MAX_BYTES) throw storageError('Archivo ausente o demasiado grande.', 413);
+  if (!data.length || data.length > maxBytes) throw storageError('Archivo ausente o demasiado grande.', 413);
   const sha256 = createHash('sha256').update(data).digest('hex');
   await client.send(new PutObjectCommand({
     Bucket: config.s3Bucket,

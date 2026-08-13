@@ -51,6 +51,8 @@ class DriverProfileService {
         'vehicleBrand': profile['vehicleBrand'] ?? '',
         'vehicleColor': profile['vehicleColor'] ?? '',
         'status': availability,
+        'estado_conexion': profile['connectionStatus'] ??
+            (availability == 'online' ? 'ONLINE' : 'OFFLINE'),
         'turno_activo': availability == 'online',
         'suspended': profile['suspended'] == true,
       };
@@ -241,6 +243,11 @@ class DriverProfileService {
   static Future<void> updatePhone({required String phone}) async {
     final auth = await AuthService.currentSession();
     final idToken = auth['idToken'] as String;
+
+    if (AppConfig.useVpsBackend) {
+      await VpsApiClient.updatePhone(token: idToken, phone: phone);
+      return;
+    }
 
     final response = await http
         .post(

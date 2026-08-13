@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 /// Aviso local cuando llega un push (conductor llegó, viaje modificado).
@@ -13,6 +14,25 @@ class NotificationService {
       FlutterLocalNotificationsPlugin();
   static bool _initialized = false;
   static String? _lastArrivalTripId;
+  static final _openedController = StreamController<String>.broadcast();
+  static String? _pendingOpenedPayload;
+
+  static Stream<String> get openedPayloads => _openedController.stream;
+
+  static String? takePendingOpenedPayload() {
+    final payload = _pendingOpenedPayload;
+    _pendingOpenedPayload = null;
+    return payload;
+  }
+
+  static void _handleOpenedPayload(String? payload) {
+    if (payload == null || payload.isEmpty) return;
+    if (_openedController.hasListener) {
+      _openedController.add(payload);
+    } else {
+      _pendingOpenedPayload = payload;
+    }
+  }
 
   static Future<void> initialize() async {
     if (_initialized) return;
@@ -43,12 +63,24 @@ class NotificationService {
       const InitializationSettings(
         android: AndroidInitializationSettings('@drawable/notification_icon'),
       ),
+      onDidReceiveNotificationResponse: (response) {
+        _handleOpenedPayload(response.payload);
+      },
     );
+
+    final launch = await _plugin.getNotificationAppLaunchDetails();
+    if (launch?.didNotificationLaunchApp ?? false) {
+      _handleOpenedPayload(launch?.notificationResponse?.payload);
+    }
 
     _initialized = true;
   }
 
-  static Future<void> showSimple(String title, String body) async {
+  static Future<void> showSimple(
+    String title,
+    String body, {
+    String? payload,
+  }) async {
     await initialize();
     await _plugin.show(
       DateTime.now().millisecondsSinceEpoch.remainder(100000),
@@ -63,19 +95,27 @@ class NotificationService {
           priority: Priority.high,
         ),
       ),
+      payload: payload ?? 'passenger://home',
     );
   }
 
-  static Future<void> showTripCancelled([String? reason]) async {
+  static Future<void> showTripCancelled([
+    String? reason,
+    String? payload,
+  ]) async {
     await showSimple(
       'Viaje cancelado',
       (reason == null || reason.trim().isEmpty)
           ? 'Tu viaje fue cancelado.'
           : reason.trim(),
+      payload: payload,
     );
   }
 
-  static Future<void> showDriverArrived([String? tripId]) async {
+  static Future<void> showDriverArrived([
+    String? tripId,
+    String? payload,
+  ]) async {
     if (tripId != null && _lastArrivalTripId == tripId) return;
     if (tripId != null) _lastArrivalTripId = tripId;
     await initialize();
@@ -95,6 +135,7 @@ class NotificationService {
           enableVibration: true,
         ),
       ),
+      payload: payload ?? (tripId == null ? null : 'passenger://trip/$tripId'),
     );
   }
 }

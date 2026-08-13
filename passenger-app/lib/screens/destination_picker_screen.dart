@@ -43,6 +43,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
   final _sessionToken = PlacesService.newSessionToken();
   Timer? _debounce;
   Timer? _reverseDebounce;
+  int _searchGeneration = 0;
   LatLng? _lastReverseRequested;
   int _reverseRequestToken = 0;
   List<PlaceSuggestion> _suggestions = [];
@@ -84,6 +85,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
 
   @override
   void dispose() {
+    _searchGeneration++;
     _debounce?.cancel();
     _reverseDebounce?.cancel();
     _controller.dispose();
@@ -92,10 +94,15 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
 
   void _onChanged(String value) {
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 400), () => _search(value));
+    final generation = ++_searchGeneration;
+    _debounce = Timer(
+      const Duration(milliseconds: 400),
+      () => _search(value, generation),
+    );
   }
 
-  Future<void> _search(String value) async {
+  Future<void> _search(String value, int generation) async {
+    if (!mounted || generation != _searchGeneration) return;
     if (value.trim().isEmpty) {
       setState(() {
         _suggestions = [];
@@ -109,14 +116,14 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
     });
     try {
       final results = await PlacesService.autocomplete(value, _sessionToken);
-      if (mounted) {
+      if (mounted && generation == _searchGeneration) {
         setState(() {
           _suggestions = results;
           _loading = false;
         });
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && generation == _searchGeneration) {
         setState(() {
           _loading = false;
           _error = 'Error al buscar: $e';
@@ -126,6 +133,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
   }
 
   Future<void> _selectSuggestion(PlaceSuggestion suggestion) async {
+    _searchGeneration++;
     setState(() {
       _loading = true;
       _suggestions = [];
@@ -136,6 +144,7 @@ class _DestinationPickerScreenState extends State<DestinationPickerScreen> {
         suggestion.placeId,
         _sessionToken,
       );
+      if (!mounted) return;
       final target = LatLng(latLng.lat, latLng.lng);
       setState(() {
         _loading = false;

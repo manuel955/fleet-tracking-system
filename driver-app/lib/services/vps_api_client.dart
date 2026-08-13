@@ -113,6 +113,9 @@ class VpsApiClient {
     required String contentType,
     required Uint8List bytes,
   }) async {
+    if (bytes.lengthInBytes > 8 * 1024 * 1024) {
+      throw Exception('El archivo no debe superar 8 MB.');
+    }
     final encoded = base64Encode(bytes);
     return _request('POST', '/api/v1/storage/upload', token: token, body: {
       'key': key,
@@ -146,6 +149,18 @@ class VpsApiClient {
 
   static Future<Map<String, dynamic>> driverMe(String token) =>
       _request('GET', '/api/v1/drivers/me', token: token);
+
+  static Future<void> updatePhone({
+    required String token,
+    required String phone,
+  }) async {
+    await _request(
+      'POST',
+      '/api/v1/drivers/me/phone',
+      token: token,
+      body: {'phone': phone},
+    );
+  }
 
   static Map<String, dynamic> normalizeTrip(Map<String, dynamic> trip) {
     final normalized = Map<String, dynamic>.from(trip);

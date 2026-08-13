@@ -22,7 +22,9 @@ class PresetPlace {
 class PresetPlacesService {
   static Future<List<PresetPlace>> fetch(String configKey) async {
     final uri = AppConfig.useVpsBackend
-        ? Uri.parse('${AppConfig.vpsApiBaseUrl}/api/v1/public/places/$configKey')
+        ? Uri.parse(
+            '${AppConfig.vpsApiBaseUrl}/api/v1/public/places/$configKey',
+          )
         : Uri.parse('${AppConfig.firebaseDbUrl}/config/$configKey.json');
     final response = await http.get(uri).timeout(const Duration(seconds: 10));
     if (response.statusCode != 200) {

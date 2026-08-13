@@ -360,6 +360,7 @@ class _MapboxMapViewState extends State<MapboxMapView> {
   final Map<String, int> _markerAnimationTokens = {};
   bool _syncing = false;
   bool _syncPending = false;
+  bool _disposed = false;
   String? _error;
   Timer? _retryTimer;
   int _mapAttempt = 0;
@@ -378,6 +379,9 @@ class _MapboxMapViewState extends State<MapboxMapView> {
 
   @override
   void dispose() {
+    _disposed = true;
+    _syncPending = false;
+    _map = null;
     _retryTimer?.cancel();
     _tapSubscription?.cancel();
     _pointTapSubscription?.cancel();
@@ -543,7 +547,7 @@ class _MapboxMapViewState extends State<MapboxMapView> {
   }
 
   void _queueAnnotationSync() {
-    if (_map == null) return;
+    if (_disposed || _map == null) return;
     if (_syncing) {
       _syncPending = true;
       return;
@@ -551,7 +555,7 @@ class _MapboxMapViewState extends State<MapboxMapView> {
     _syncing = true;
     _syncAnnotations().whenComplete(() {
       _syncing = false;
-      if (_syncPending) {
+      if (!_disposed && _syncPending) {
         _syncPending = false;
         _queueAnnotationSync();
       }

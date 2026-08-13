@@ -161,6 +161,10 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
   Timer? _scheduledPollTimer;
   Timer? _accessValidationTimer;
   StreamSubscription<RemoteMessage>? _foregroundMessageSubscription;
+  StreamSubscription<String>? _notificationOpenSubscription;
+  bool _bootstrapInFlight = false;
+  bool _scheduledPollInFlight = false;
+  bool _accessValidationInFlight = false;
   int _tabIndex = 0;
   final _activityKey = GlobalKey<ActivityTabScreenState>();
 
@@ -168,6 +172,17 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
   void initState() {
     super.initState();
     _bootstrap();
+    if (!kIsWeb) {
+      _notificationOpenSubscription = NotificationService.openedPayloads.listen(
+        _onNotificationOpened,
+      );
+      final pendingPayload = NotificationService.takePendingOpenedPayload();
+      if (pendingPayload != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _onNotificationOpened(pendingPayload);
+        });
+      }
+    }
     _scheduledPollTimer = Timer.periodic(
       const Duration(seconds: 15),
       (_) => _pollScheduledTrip(),
@@ -183,17 +198,26 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
     _scheduledPollTimer?.cancel();
     _accessValidationTimer?.cancel();
     _foregroundMessageSubscription?.cancel();
+    _notificationOpenSubscription?.cancel();
     super.dispose();
   }
 
+  void _onNotificationOpened(String _) {
+    if (!mounted) return;
+    unawaited(_bootstrap());
+  }
+
   Future<void> _validatePassengerAccess() async {
-    if (!_registered) return;
+    if (!_registered || _accessValidationInFlight) return;
+    _accessValidationInFlight = true;
     bool accessGranted;
     try {
       accessGranted = await PassengerService.ensureAccess();
     } catch (_) {
       // Una caida de red no revoca el acceso que aun es valido en la cache.
       accessGranted = await PassengerService.hasAccess();
+    } finally {
+      _accessValidationInFlight = false;
     }
     if (!mounted) return;
     final hasOpenService = _activeTripId != null || _scheduledTripId != null;
@@ -221,12 +245,15 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
   // este en cualquier pestaña, no solo si esta viendo la tarjeta.
   Future<void> _pollScheduledTrip() async {
     final id = _scheduledTripId;
-    if (id == null) return;
+    if (id == null || _scheduledPollInFlight) return;
+    _scheduledPollInFlight = true;
     Map<String, dynamic>? trip;
     try {
       trip = await TripService.getTrip(id);
     } catch (_) {
       return;
+    } finally {
+      _scheduledPollInFlight = false;
     }
     if (!mounted) return;
     if (trip == null ||
@@ -263,180 +290,195 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
   }
 
   Future<void> _bootstrap() async {
-    final registered = await PassengerService.isRegistered();
-    // Un pasajero que ya tenía registro antes de activar los QR conserva la
-    // entrada aunque el primer intento de sincronización esté sin red.
-    var accessGranted = await PassengerService.hasAccess();
-    if (registered) {
-      // Conserva el acceso de cuentas antiguas. El servidor solo migra
-      // perfiles creados antes de activar el control QR.
-      try {
-        // Una respuesta del servidor tiene prioridad sobre la caché local:
-        // si el administrador revocó el QR, no se conserva un acceso antiguo.
-        accessGranted = await PassengerService.ensureAccess();
-      } catch (_) {
-        // Si no hay red, no se rompe la pantalla ya registrada; el siguiente
-        // intento volverá a sincronizar la autorización.
+    if (_bootstrapInFlight) return;
+    _bootstrapInFlight = true;
+    try {
+      final registered = await PassengerService.isRegistered();
+      // Un pasajero que ya tenía registro antes de activar los QR conserva la
+      // entrada aunque el primer intento de sincronización esté sin red.
+      var accessGranted = await PassengerService.hasAccess();
+      if (registered) {
+        // Conserva el acceso de cuentas antiguas. El servidor solo migra
+        // perfiles creados antes de activar el control QR.
+        try {
+          // Una respuesta del servidor tiene prioridad sobre la caché local:
+          // si el administrador revocó el QR, no se conserva un acceso antiguo.
+          accessGranted = await PassengerService.ensureAccess();
+        } catch (_) {
+          // Si no hay red, no se rompe la pantalla ya registrada; el siguiente
+          // intento volverá a sincronizar la autorización.
+        }
       }
-    }
 
-    // Con la app visible, el push llega por aqui en vez de por el handler
-    // de background -- mismo patron que driver-app/lib/main.dart.
-    if (!kIsWeb && _foregroundMessageSubscription == null) {
-      _foregroundMessageSubscription = FirebaseMessaging.onMessage.listen((
-        message,
-      ) {
-        switch (message.data['type']) {
-          case 'driver_arrived':
-            NotificationService.showDriverArrived(
-              message.data['tripId']?.toString(),
-            );
-            break;
-          case 'trip_updated':
-            NotificationService.showSimple(
-              'Viaje actualizado',
-              'El destino de tu viaje cambió.',
-            );
-            break;
-          case 'trip_cancelled':
-            NotificationService.showTripCancelled(
-              message.data['reason']?.toString(),
-            );
-            break;
-          case 'trip_status':
-            if (message.data['status']?.toString() == 'completed') {
+      // Con la app visible, el push llega por aqui en vez de por el handler
+      // de background -- mismo patron que driver-app/lib/main.dart.
+      if (!kIsWeb && _foregroundMessageSubscription == null) {
+        _foregroundMessageSubscription = FirebaseMessaging.onMessage.listen((
+          message,
+        ) {
+          switch (message.data['type']) {
+            case 'driver_arrived':
+              NotificationService.showDriverArrived(
+                message.data['tripId']?.toString(),
+              );
+              break;
+            case 'trip_updated':
+              NotificationService.showSimple(
+                'Viaje actualizado',
+                'El destino de tu viaje cambió.',
+              );
+              break;
+            case 'trip_cancelled':
+              NotificationService.showTripCancelled(
+                message.data['reason']?.toString(),
+              );
+              break;
+            case 'trip_status':
+              if (message.data['status']?.toString() == 'completed') {
+                NotificationService.showSimple(
+                  'Viaje finalizado',
+                  'Abre la app para calificarlo.',
+                );
+              }
+              break;
+            case 'trip_completed':
               NotificationService.showSimple(
                 'Viaje finalizado',
-                'Abre la app para calificarlo.',
+                'Tu viaje terminó. Abre la app para calificarlo.',
               );
-            }
-            break;
-          case 'trip_completed':
-            NotificationService.showSimple(
-              'Viaje finalizado',
-              'Tu viaje terminó. Abre la app para calificarlo.',
-            );
-            break;
-        }
-      });
-    }
-    if (registered) unawaited(PushService.registerToken());
-
-    var activeTripId = await TripService.getActiveTripId();
-
-    Map<String, dynamic>? trip;
-    Map<String, dynamic>? completedTripToRate;
-    String? completedTripId;
-    if (activeTripId != null) {
-      try {
-        trip = await TripService.getTrip(activeTripId);
-        if (trip?['status'] == 'completed') {
-          completedTripToRate = trip;
-          completedTripId = activeTripId;
-          await TripService.clearActiveTrip();
-          trip = null;
-          activeTripId = null;
-        } else if (trip == null || trip['status'] == 'cancelled') {
-          await TripService.clearActiveTrip();
-          trip = null;
-          activeTripId = null;
-        }
-      } catch (_) {
-        trip = await TripService.getCachedTrip(activeTripId!);
-      }
-    }
-
-    var scheduledTripId = await TripService.getScheduledTripId();
-    Map<String, dynamic>? scheduledTrip;
-    if (scheduledTripId != null) {
-      try {
-        scheduledTrip = await TripService.getTrip(scheduledTripId);
-        if (scheduledTrip == null ||
-            scheduledTrip['status'] == 'completed' ||
-            scheduledTrip['status'] == 'cancelled') {
-          await TripService.clearScheduledTrip();
-          scheduledTrip = null;
-          scheduledTripId = null;
-        } else if (scheduledTrip['status'] != 'scheduled') {
-          // Ya se habia despachado (dejo de estar 'scheduled') mientras la
-          // app estaba cerrada -- se trata directo como viaje activo, si no
-          // hay ya otro viaje inmediato ocupando ese lugar.
-          await TripService.promoteScheduledTrip(scheduledTripId);
-          if (trip == null) {
-            trip = scheduledTrip;
-            activeTripId = scheduledTripId;
+              break;
+            case 'no_drivers_available':
+              NotificationService.showSimple(
+                'Sin conductores disponibles',
+                message.data['reason']?.toString() ??
+                    'No encontramos un conductor disponible. Abre la app para reintentar.',
+              );
+              _pollScheduledTrip();
+              break;
           }
-          scheduledTrip = null;
-        }
-      } catch (_) {
-        scheduledTrip = await TripService.getCachedTrip(scheduledTripId!);
+        });
       }
-    }
+      if (registered) unawaited(PushService.registerToken());
 
-    // SharedPreferences es solo una caché. Si la app se cerró después de que
-    // el servidor creó el viaje pero antes de guardar el ID local, recupera
-    // los viajes abiertos desde Firebase y reconstruye ambos estados.
-    if (trip == null || scheduledTrip == null) {
-      try {
-        final recovered = await TripService.recoverOpenTrips();
-        if (trip == null && recovered.active != null) {
-          activeTripId = recovered.active!.key;
-          trip = recovered.active!.value;
+      var activeTripId = await TripService.getActiveTripId();
+
+      Map<String, dynamic>? trip;
+      Map<String, dynamic>? completedTripToRate;
+      String? completedTripId;
+      if (activeTripId != null) {
+        try {
+          trip = await TripService.getTrip(activeTripId);
+          if (trip?['status'] == 'completed') {
+            completedTripToRate = trip;
+            completedTripId = activeTripId;
+            await TripService.clearActiveTrip();
+            trip = null;
+            activeTripId = null;
+          } else if (trip == null || trip['status'] == 'cancelled') {
+            await TripService.clearActiveTrip();
+            trip = null;
+            activeTripId = null;
+          }
+        } catch (_) {
+          trip = await TripService.getCachedTrip(activeTripId!);
         }
-        if (scheduledTrip == null && recovered.scheduled != null) {
-          scheduledTripId = recovered.scheduled!.key;
-          scheduledTrip = recovered.scheduled!.value;
-        }
-      } catch (_) {
-        // Sin red se conservan los IDs locales para reintentar al reiniciar.
       }
-    }
 
-    // Si el viaje terminó mientras la app estaba minimizada/cerrada, ya no
-    // existe un active_trip_id que recuperar. Busca el último completado sin
-    // feedback para abrir la calificación automáticamente al volver.
-    if (completedTripToRate == null && trip == null) {
-      try {
-        final pendingFeedback = await TripService.recoverPendingFeedback();
-        if (pendingFeedback != null) {
-          completedTripId = pendingFeedback.key;
-          completedTripToRate = pendingFeedback.value;
+      var scheduledTripId = await TripService.getScheduledTripId();
+      Map<String, dynamic>? scheduledTrip;
+      if (scheduledTripId != null) {
+        try {
+          scheduledTrip = await TripService.getTrip(scheduledTripId);
+          if (scheduledTrip == null ||
+              scheduledTrip['status'] == 'completed' ||
+              scheduledTrip['status'] == 'cancelled') {
+            await TripService.clearScheduledTrip();
+            scheduledTrip = null;
+            scheduledTripId = null;
+          } else if (scheduledTrip['status'] != 'scheduled') {
+            // Ya se habia despachado (dejo de estar 'scheduled') mientras la
+            // app estaba cerrada -- se trata directo como viaje activo, si no
+            // hay ya otro viaje inmediato ocupando ese lugar.
+            await TripService.promoteScheduledTrip(scheduledTripId);
+            if (trip == null) {
+              trip = scheduledTrip;
+              activeTripId = scheduledTripId;
+            }
+            scheduledTrip = null;
+          }
+        } catch (_) {
+          scheduledTrip = await TripService.getCachedTrip(scheduledTripId!);
         }
-      } catch (_) {
-        // El historial se reintentará al abrir Actividad; no bloquea el inicio.
       }
-    }
 
-    accessGranted =
-        accessGranted || activeTripId != null || scheduledTripId != null;
+      // SharedPreferences es solo una caché. Si la app se cerró después de que
+      // el servidor creó el viaje pero antes de guardar el ID local, recupera
+      // los viajes abiertos desde Firebase y reconstruye ambos estados.
+      if (trip == null || scheduledTrip == null) {
+        try {
+          final recovered = await TripService.recoverOpenTrips();
+          if (trip == null && recovered.active != null) {
+            activeTripId = recovered.active!.key;
+            trip = recovered.active!.value;
+          }
+          if (scheduledTrip == null && recovered.scheduled != null) {
+            scheduledTripId = recovered.scheduled!.key;
+            scheduledTrip = recovered.scheduled!.value;
+          }
+        } catch (_) {
+          // Sin red se conservan los IDs locales para reintentar al reiniciar.
+        }
+      }
 
-    setState(() {
-      _registered = registered;
-      _accessGranted = accessGranted;
-      _activeTripId = activeTripId;
-      _activeTrip = trip;
-      _scheduledTripId = scheduledTripId;
-      _scheduledTrip = scheduledTrip;
-      _loading = false;
-    });
-    if (completedTripToRate != null && completedTripId != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        if (!mounted) return;
-        await _activityKey.currentState?.openFeedbackForTrip(
-          completedTripId!,
-          completedTripToRate!,
-        );
+      // Si el viaje terminó mientras la app estaba minimizada/cerrada, ya no
+      // existe un active_trip_id que recuperar. Busca el último completado sin
+      // feedback para abrir la calificación automáticamente al volver.
+      if (completedTripToRate == null && trip == null) {
+        try {
+          final pendingFeedback = await TripService.recoverPendingFeedback();
+          if (pendingFeedback != null) {
+            completedTripId = pendingFeedback.key;
+            completedTripToRate = pendingFeedback.value;
+          }
+        } catch (_) {
+          // El historial se reintentará al abrir Actividad; no bloquea el inicio.
+        }
+      }
+
+      accessGranted =
+          accessGranted || activeTripId != null || scheduledTripId != null;
+
+      if (!mounted) return;
+      setState(() {
+        _registered = registered;
+        _accessGranted = accessGranted;
+        _activeTripId = activeTripId;
+        _activeTrip = trip;
+        _scheduledTripId = scheduledTripId;
+        _scheduledTrip = scheduledTrip;
+        _loading = false;
       });
+      if (completedTripToRate != null && completedTripId != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) async {
+          if (!mounted) return;
+          await _activityKey.currentState?.openFeedbackForTrip(
+            completedTripId!,
+            completedTripToRate!,
+          );
+        });
+      }
+    } finally {
+      _bootstrapInFlight = false;
     }
   }
 
   void _onRegistered() {
     PushService.registerToken();
-    setState(() => _registered = true);
+    if (mounted) setState(() => _registered = true);
   }
 
   void _onAccessAuthorized(Map<String, dynamic> _) {
-    setState(() => _accessGranted = true);
+    if (mounted) setState(() => _accessGranted = true);
   }
 
   Future<void> _onEmailAuthenticated(Map<String, dynamic> _) async {
@@ -452,6 +494,7 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
   }
 
   void _onLoggedOut() {
+    if (!mounted) return;
     setState(() {
       _registered = false;
       _accessGranted = false;
@@ -469,6 +512,7 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
   // servidor, sin bloquear las pestañas si fue programado.
   void _onRideRequested(String tripId) async {
     final trip = await TripService.getTrip(tripId);
+    if (!mounted) return;
     if (trip != null && trip['status'] == 'scheduled') {
       setState(() {
         _scheduledTripId = tripId;

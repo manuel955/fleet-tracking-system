@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:fleet_passenger_app/services/trip_service.dart';
 
 void main() {
   test('completed trip without rating is eligible for automatic feedback', () {
@@ -7,9 +8,7 @@ void main() {
       'rating': null,
       'feedbackComment': null,
     };
-    expect(trip['status'], 'completed');
-    expect(trip['rating'], isNull);
-    expect((trip['feedbackComment']?.toString().trim() ?? ''), isEmpty);
+    expect(TripService.needsFeedback(trip), isTrue);
   });
 
   test('completed trip with rating is not pending feedback', () {
@@ -18,7 +17,19 @@ void main() {
       'rating': 5,
       'feedbackComment': '',
     };
-    expect(trip['status'], 'completed');
-    expect(trip['rating'], isNotNull);
+    expect(TripService.needsFeedback(trip), isFalse);
+  });
+
+  test('nested incident is treated as submitted feedback', () {
+    final trip = <String, dynamic>{
+      'status': 'completed',
+      'feedback': <String, dynamic>{
+        'rating': null,
+        'comment': '',
+        'incidentCategory': 'lost_item',
+        'incidentDetails': 'Olvide una mochila en el vehiculo.',
+      },
+    };
+    expect(TripService.needsFeedback(trip), isFalse);
   });
 }

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { buildAvailableDriverQuery, createApp, driverAccountDeletionBlocked, isDashboardCoordinator, staleDriverOutcome, validateVehicleCapacity } from '../src/app.js';
+import { buildAvailableDriverQuery, consumeRateLimit, createApp, driverAccountDeletionBlocked, hasAuthorizedPassengerAccess, isDashboardCoordinator, staleDriverOutcome, validateVehicleCapacity } from '../src/app.js';
 
 async function request(server, path) {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -72,6 +72,7 @@ test('matching orders approved drivers by pickup proximity and keeps seat capaci
   const query = buildAvailableDriverQuery('trip-id', 3);
   assert.deepEqual(query.values, ['trip-id', 3]);
   assert.match(query.text, /d\.vehicle_seats\s*>=\s*\$2/);
+  assert.match(query.text, /d\.suspended\s*=\s*FALSE/);
   assert.match(query.text, /ORDER BY\s+d\.vehicle_seats\s+ASC/);
   assert.match(query.text, /driver_locations l\s+ON l\.driver_id = d\.id/);
   assert.match(query.text, /6371000 \* acos/);
@@ -102,6 +103,40 @@ test('a stale heartbeat alerts without ending the active shift', () => {
     alertReason: 'HEARTBEAT',
   });
   assert.equal(staleDriverOutcome('offline'), null);
+});
+
+test('passenger access requires an authorized, non-expired QR grant', () => {
+  const now = Date.parse('2026-08-12T12:00:00Z');
+  assert.equal(hasAuthorizedPassengerAccess({
+    role: 'passenger', passenger_access_status: 'authorized',
+    passenger_access_expires_at: new Date(now + 60_000),
+  }, now), true);
+  assert.equal(hasAuthorizedPassengerAccess({
+    role: 'passenger', passenger_access_status: null,
+  }, now), false);
+  assert.equal(hasAuthorizedPassengerAccess({
+    role: 'passenger', passenger_access_status: 'authorized',
+    passenger_access_expires_at: new Date(now - 1),
+  }, now), false);
+});
+
+test('authentication rate limits repeated attempts without growing unbounded', () => {
+  const options = { limit: 2, windowMs: 60_000, now: 1000 };
+  assert.equal(consumeRateLimit('test-login', 'unique@example.com', options).allowed, true);
+  assert.equal(consumeRateLimit('test-login', 'unique@example.com', options).allowed, true);
+  assert.equal(consumeRateLimit('test-login', 'unique@example.com', options).allowed, false);
+  assert.equal(consumeRateLimit('test-login', 'unique@example.com', { ...options, now: 61_001 }).allowed, true);
+});
+
+test('production cannot start with the public development JWT secret', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', "import('./src/config.js')"], {
+    cwd: new URL('..', import.meta.url),
+    env: { ...process.env, NODE_ENV: 'production', JWT_SECRET: '' },
+    encoding: 'utf8',
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stderr}${result.stdout}`, /JWT_SECRET/);
 });
 
 test('heartbeat endpoint is part of the driver contract', async () => {

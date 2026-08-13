@@ -8,6 +8,7 @@ import '../services/driver_profile_service.dart';
 /// vive en el formulario padre para que el check y la vista previa no se
 /// pierdan cuando Flutter reconstruye la pantalla.
 class DocumentUploadTile extends StatelessWidget {
+  static const int _maxDocumentBytes = 8 * 1024 * 1024;
   final String label;
   final bool allowPdf;
   final bool dniMode;
@@ -32,6 +33,13 @@ class DocumentUploadTile extends StatelessWidget {
       maxWidth: 1600,
     );
     if (picked == null) return;
+    final size = await File(picked.path).length();
+    if (size > _maxDocumentBytes) {
+      if (context.mounted) {
+        _showMessage(context, 'El archivo no debe superar 8 MB.');
+      }
+      return;
+    }
     final bytes = await File(picked.path).readAsBytes();
     if (!context.mounted) return;
     final file = PickedDocument(
@@ -51,6 +59,13 @@ class DocumentUploadTile extends StatelessWidget {
     );
     final file = result?.files.single;
     if (file == null || file.path == null) return;
+    final size = file.size;
+    if (size > _maxDocumentBytes) {
+      if (context.mounted) {
+        _showMessage(context, 'El archivo no debe superar 8 MB.');
+      }
+      return;
+    }
     final bytes = await File(file.path!).readAsBytes();
     if (!context.mounted) return;
     _addFile(

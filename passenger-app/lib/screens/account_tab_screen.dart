@@ -72,9 +72,8 @@ class _AccountTabScreenState extends State<AccountTabScreen> {
   Future<void> _loginExistingEmail() async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
-        builder: (_) => EmailAuthScreen(
-          onAuthenticated: widget.onEmailAuthenticated,
-        ),
+        builder: (_) =>
+            EmailAuthScreen(onAuthenticated: widget.onEmailAuthenticated),
       ),
     );
     if (mounted) {

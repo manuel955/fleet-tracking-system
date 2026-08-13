@@ -6,10 +6,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test('no intenta interpretar una respuesta HTML como JSON', () {
-    expect(
-      PassengerService.decodeResponseBody('<html><head>'),
-      isNull,
-    );
+    expect(PassengerService.decodeResponseBody('<html><head>'), isNull);
     expect(
       PassengerService.decodeResponseBody('{"access":{"status":"authorized"}}'),
       isA<Map<String, dynamic>>(),

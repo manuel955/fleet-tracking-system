@@ -66,7 +66,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       imageQuality: 80,
       maxWidth: 1024,
     );
-    if (picked != null) setState(() => _photo = picked);
+    if (picked != null && mounted) setState(() => _photo = picked);
   }
 
   Future<void> _submit() async {
@@ -93,13 +93,16 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
     try {
       final bytes = await File(_photo!.path).readAsBytes();
+      if (!mounted) return;
       await PassengerService.registerPassenger(
         name: _nameCtrl.text.trim(),
         phone: phone,
         photoBytes: bytes,
       );
+      if (!mounted) return;
       widget.onDone();
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _busy = false;
         _error = 'Error al registrar: $e';

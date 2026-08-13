@@ -15,7 +15,12 @@ export async function verifyPassword(password, passwordHash) {
 
 export function signUser(user) {
   return jwt.sign(
-    { sub: user.id, role: user.role, email: user.email ?? null },
+    {
+      sub: user.id,
+      role: user.role,
+      email: user.email ?? null,
+      sv: Number(user.session_version ?? 0),
+    },
     config.jwtSecret,
     { expiresIn: TOKEN_TTL },
   );
@@ -33,7 +38,10 @@ async function getFirebaseCertificates() {
   if (firebaseCertificates.values && firebaseCertificates.expiresAt > Date.now()) {
     return firebaseCertificates.values;
   }
-  const response = await fetch('https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com');
+  const response = await fetch(
+    'https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com',
+    { signal: AbortSignal.timeout(10_000) },
+  );
   if (!response.ok) throw new Error(`Firebase certificate request failed: ${response.status}`);
   const values = await response.json();
   const maxAge = Number((response.headers.get('cache-control') || '').match(/max-age=(\d+)/i)?.[1] || 3600);
@@ -84,7 +92,7 @@ export async function authenticate(request) {
     const claims = jwt.verify(token, config.jwtSecret);
     if (typeof claims !== 'object' || typeof claims.sub !== 'string') return null;
     const result = await pool.query(
-      `SELECT u.id, u.role, u.email, u.display_name, u.status,
+      `SELECT u.id, u.role, u.email, u.display_name, u.status, u.session_version,
           u.passenger_access_invite_id, u.passenger_access_status, u.passenger_access_expires_at,
           u.dashboard_role, u.dashboard_sede_type, u.dashboard_sede_id,
           p.name AS sede_name, p.address AS sede_address,
@@ -95,6 +103,7 @@ export async function authenticate(request) {
     );
     const user = result.rows[0];
     if (!user || user.status !== 'active') return null;
+    if (Number(claims.sv ?? 0) !== Number(user.session_version ?? 0)) return null;
     return user;
   } catch (_) {
     try {
@@ -112,6 +121,10 @@ export function publicUser(user) {
     email: user.email,
     displayName: user.display_name,
     status: user.status,
+    passengerAccessStatus: user.passenger_access_status ?? null,
+    passengerAccessExpiresAt: user.passenger_access_expires_at
+      ? new Date(user.passenger_access_expires_at).getTime()
+      : null,
     dashboardRole: user.dashboard_role ?? null,
     sedeType: user.dashboard_sede_type ?? null,
     sedeId: user.dashboard_sede_id ?? null,
