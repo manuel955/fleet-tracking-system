@@ -2059,10 +2059,21 @@ async function downloadDriverPdf(button) {
       doc.roundedRect(x, y, width, 62, 9, 9, 'FD');
       doc.setFillColor(...accent);
       doc.circle(x + 28, y + 31, 14, 'F');
-      doc.setTextColor(255, 255, 255);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(13);
-      doc.text(symbol, x + 28, y + 35, { align: 'center' });
+      const isApproved = label === 'ESTADO' && status === 'approved';
+      const icon = isApproved ? 'check' : (label.startsWith('VEH') ? 'N' : symbol);
+      if (icon === 'check') {
+        // Trazos vectoriales: el check no depende de glifos Unicode del PDF.
+        doc.setDrawColor(255, 255, 255);
+        doc.setLineWidth(2.2);
+        doc.line(x + 20, y + 31, x + 26, y + 37);
+        doc.line(x + 26, y + 37, x + 37, y + 24);
+        doc.setLineWidth(0.8);
+      } else {
+        doc.setTextColor(255, 255, 255);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(13);
+        doc.text(icon, x + 28, y + 35, { align: 'center' });
+      }
       doc.setTextColor(...navy);
       doc.setFontSize(8);
       doc.text(label, x + 51, y + 21);
@@ -2107,8 +2118,8 @@ async function downloadDriverPdf(button) {
     const cardWidth = (contentWidth - gap * 2) / 3;
     const summaryY = 137;
     const vehicleSummary = [displayValue(d.vehicleType), d.vehicleSeats ? `${d.vehicleSeats} pax` : ''].filter(Boolean).join(' · ');
-    drawSummaryCard(margin, summaryY, cardWidth, 'ESTADO', statusLabel, status === 'approved' ? [235, 249, 239] : [254, 239, 239], status === 'approved' ? green : red, status === 'approved' ? '✓' : '!');
-    drawSummaryCard(margin + cardWidth + gap, summaryY, cardWidth, 'VEHÍCULO', vehicleSummary || '-', [235, 245, 253], [39, 111, 190], '▣');
+    drawSummaryCard(margin, summaryY, cardWidth, 'ESTADO', statusLabel, status === 'approved' ? [235, 249, 239] : [254, 239, 239], status === 'approved' ? green : red, status === 'approved' ? 'check' : '!');
+    drawSummaryCard(margin + cardWidth + gap, summaryY, cardWidth, 'VEHICULO', vehicleSummary || '-', [235, 245, 253], [39, 111, 190], 'N');
     drawSummaryCard(margin + (cardWidth + gap) * 2, summaryY, cardWidth, 'DOCUMENTOS', String(uploadedDocFields.length), [237, 247, 247], [33, 143, 143], '#');
 
     const sectionTop = drawSectionBar('Datos del conductor', 214);
