@@ -38,6 +38,12 @@
           }
           return;
         }
+        if (event.status === 'offline' && event.reason === 'HEARTBEAT') {
+          // Una pérdida temporal de GPS no termina el turno. La alerta de
+          // operación se muestra por separado; aquí esperamos el siguiente
+          // cierre manual para mantener una sola sesión de asistencia.
+          return;
+        }
         if (event.status === 'offline' && open) {
           open.endAt = at;
           open.active = false;

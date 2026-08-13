@@ -29,6 +29,20 @@ test('cierra un turno sin evento offline usando el último GPS', () => {
   assert.equal(sessions[0].active, false);
 });
 
+test('una pérdida HEARTBEAT no cierra el turno y luego se consolida con el cierre manual', () => {
+  const sessions = buildSessions({
+    driver1: {
+      online: { status: 'online', at: 100, driverName: 'Ever' },
+      signalLost: { status: 'offline', reason: 'HEARTBEAT', at: 150, driverName: 'Ever' },
+      signalRestored: { status: 'online', at: 180, driverName: 'Ever' },
+      manualEnd: { status: 'offline', reason: 'MANUAL', at: 300, driverName: 'Ever' },
+    },
+  }, { driver1: { name: 'Ever', status: 'offline' } });
+  assert.deepEqual(sessions, [{
+    driverId: 'driver1', driverName: 'Ever', startAt: 100, endAt: 300, active: false,
+  }]);
+});
+
 test('un conductor VPS actualmente online conserva un turno aunque falte el evento de inicio', () => {
   const sessions = buildSessions({}, {
     'driver-1': { name: 'Irma ballardo', status: 'online', shiftStartedAt: 1_000, lastUpdate: 2_000 },
