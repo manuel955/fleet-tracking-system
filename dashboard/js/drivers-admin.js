@@ -246,6 +246,11 @@ function safeDriverStorageUrl(rawValue, driverId) {
   if (window.dashboardRole !== 'ADMIN') return '';
   try {
     const url = new URL(String(rawValue || '').trim());
+    const vpsBase = String(window.vpsApiBaseUrl || '').replace(/\/$/, '');
+    if (vpsBase && url.origin === new URL(vpsBase).origin
+      && url.pathname.startsWith('/api/v1/storage/token/')) {
+      return url.href;
+    }
     const expectedPrefix = `/v0/b/rastreoflota-53052.firebasestorage.app/o/driver_documents/${driverId}/`;
     if (
       url.protocol !== 'https:' ||
@@ -1671,6 +1676,13 @@ function renderPrematureDisconnectHistory() {
 }
 
 async function manageDriver(payload) {
+  if (DRIVER_ADMIN_VPS_API_BASE_URL) {
+    const token = await auth.currentUser.getIdToken();
+    const driverId = payload.driverId;
+    const result = await window.vpsConfigApi.manageDriver(driverId, payload, token);
+    await refreshDriversAdminFromVps();
+    return result;
+  }
   const token = await auth.currentUser.getIdToken();
   const response = await fetch('https://us-central1-rastreoflota-53052.cloudfunctions.net/manageDrivers', {
     method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: AbortSignal.timeout(15000),
@@ -1684,7 +1696,15 @@ async function assignDriverPlace(driverId) {
   const value = document.querySelector(`[data-place-select="${driverId}"]`).value;
   if (!value) return alert('Selecciona un hotel o sede deportiva.');
   const [type, name] = value.split('|');
-  try { await manageDriver({ action: 'assignPlace', driverId, place: { type, name } }); } catch (error) { alert(error.message); }
+  try {
+    if (DRIVER_ADMIN_VPS_API_BASE_URL) {
+      const token = await auth.currentUser.getIdToken();
+      await window.vpsConfigApi.assignDriverPlace(driverId, { type, name }, token);
+      await refreshDriversAdminFromVps();
+      return;
+    }
+    await manageDriver({ action: 'assignPlace', driverId, place: { type, name } });
+  } catch (error) { alert(error.message); }
 }
 
 async function deleteDriver(driverId) {
@@ -1692,9 +1712,14 @@ async function deleteDriver(driverId) {
   if (!driver || !confirm(`¿Eliminar definitivamente a ${driver.name || 'este conductor'}?`)) return;
   try {
     const result = await manageDriver({ action: 'delete', driverId });
-    if (!result.authDeleted) {
-      alert('Se eliminó el perfil, pero la cuenta de acceso ya no estaba disponible. Verifica Authentication si el correo continúa bloqueado.');
+    // Quitar inmediatamente la tarjeta local; el snapshot VPS también la
+    // excluirá porque la cuenta queda disabled.
+    delete adminDriversCache[driverId];
+    if (typeof window.removeDriverFromDashboard === 'function') {
+      window.removeDriverFromDashboard(driverId);
     }
+    renderDriversAdmin();
+    if (result?.deleted) alert('Cuenta eliminada correctamente. El historial operativo se conservó de forma anonimizada.');
   } catch (error) { alert(error.message); }
 }
 

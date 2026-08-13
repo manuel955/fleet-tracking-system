@@ -1,6 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
+import '../services/vps_api_client.dart';
 import '../theme/app_theme.dart';
 
 class EmailAuthScreen extends StatefulWidget {
@@ -27,6 +28,13 @@ class _EmailAuthScreenState extends State<EmailAuthScreen> {
   }
 
   String _friendlyError(Object error) {
+    if (error is VpsApiException &&
+        (error.statusCode == 401 || error.statusCode == 403)) {
+      return 'Usuario no registrado o pendiente de aprobación.';
+    }
+    if (error is VpsApiException && error.statusCode >= 500) {
+      return 'No se pudo conectar con el servicio. Intenta nuevamente.';
+    }
     if (error is FirebaseAuthException) {
       switch (error.code) {
         case 'invalid-credential':

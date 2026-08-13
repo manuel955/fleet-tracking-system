@@ -18,6 +18,16 @@ ALTER TABLE drivers ADD COLUMN IF NOT EXISTS license_expires_at BIGINT;
 ALTER TABLE drivers ADD COLUMN IF NOT EXISTS soat_expires_at BIGINT;
 ALTER TABLE drivers ADD COLUMN IF NOT EXISTS technical_review_expires_at BIGINT;
 ALTER TABLE drivers ADD COLUMN IF NOT EXISTS application_submitted_at TIMESTAMPTZ;
+-- Dashboard-assigned operating location shared by the VPS dashboard and app.
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS assigned_place JSONB;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS rejection_field_keys TEXT;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS reviewed_at BIGINT;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS reviewed_by TEXT;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS suspended BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS suspension_reason TEXT;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS suspended_at BIGINT;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS suspended_by TEXT;
 
 CREATE TABLE IF NOT EXISTS passenger_profiles (
   user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,

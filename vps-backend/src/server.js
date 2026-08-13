@@ -7,8 +7,8 @@ const dispatchTimer = setInterval(async () => {
   try {
     const dispatched = await dispatchScheduledTrips();
     if (dispatched > 0) console.log(`Scheduled trips dispatched: ${dispatched}`);
-    const disconnected = await detectStaleDrivers();
-    if (disconnected > 0) console.log(`Stale drivers disconnected: ${disconnected}`);
+    const alerted = await detectStaleDrivers();
+    if (alerted > 0) console.log(`Stale driver signals alerted: ${alerted}`);
   } catch (error) {
     console.error('scheduled dispatch failed', error?.message ?? error);
   }

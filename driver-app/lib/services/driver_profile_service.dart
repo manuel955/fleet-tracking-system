@@ -83,7 +83,6 @@ class DriverProfileService {
     required String vehicleColor,
     required int vehicleSeats,
     required Map<String, List<PickedDocument>> documents,
-    required Map<String, int> documentExpiries,
   }) async {
     final dniFiles = documents['dni'] ?? const <PickedDocument>[];
     if (!_isValidDniSelection(dniFiles)) {
@@ -105,12 +104,6 @@ class DriverProfileService {
         .toList();
     if (missingDocuments.isNotEmpty) {
       throw Exception('Todos los documentos son obligatorios.');
-    }
-    for (final key in const ['license', 'soat', 'technicalReview']) {
-      final expiresAt = documentExpiries[key] ?? 0;
-      if (expiresAt <= DateTime.now().millisecondsSinceEpoch) {
-        throw Exception('Selecciona una fecha de vencimiento vigente.');
-      }
     }
 
     final auth = await AuthService.registerOrResumeWithEmail(
@@ -137,9 +130,6 @@ class DriverProfileService {
       'vehicleColor': vehicleColor,
       'vehicleSeats': vehicleSeats,
       ...docUrls,
-      'licenseExpiresAt': documentExpiries['license'],
-      'soatExpiresAt': documentExpiries['soat'],
-      'technicalReviewExpiresAt': documentExpiries['technicalReview'],
     };
     if (AppConfig.useVpsBackend) {
       await VpsApiClient.submitDriverApplication(
@@ -173,7 +163,6 @@ class DriverProfileService {
   /// nombre/telefono/DNI/placa.
   static Future<void> resubmitDocuments(
     Map<String, List<PickedDocument>> documents, {
-    required Map<String, int> documentExpiries,
     Map<String, dynamic> profileChanges = const {},
   }) async {
     if (documents.containsKey('dni') &&
@@ -186,28 +175,12 @@ class DriverProfileService {
     final idToken = auth['idToken'] as String;
 
     final docUrls = await _uploadAll(uid, idToken, documents);
-    final expiryFields = <String, int>{};
-    const expiryFieldByDocument = {
-      'license': 'licenseExpiresAt',
-      'soat': 'soatExpiresAt',
-      'technicalReview': 'technicalReviewExpiresAt',
-    };
-    for (final entry in expiryFieldByDocument.entries) {
-      if (!documents.containsKey(entry.key)) continue;
-      final expiresAt = documentExpiries[entry.key] ?? 0;
-      if (expiresAt <= DateTime.now().millisecondsSinceEpoch) {
-        throw Exception('Selecciona una fecha de vencimiento vigente.');
-      }
-      expiryFields[entry.value] = expiresAt;
-    }
-
     if (AppConfig.useVpsBackend) {
       await VpsApiClient.submitDriverApplication(
         token: idToken,
         body: {
           ...profileChanges,
           ...docUrls,
-          ...expiryFields,
         },
       );
       return;
@@ -223,7 +196,6 @@ class DriverProfileService {
           body: jsonEncode({
             ...profileChanges,
             ...docUrls,
-            ...expiryFields,
           }),
         )
         .timeout(_networkTimeout);

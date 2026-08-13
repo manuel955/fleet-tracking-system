@@ -17,14 +17,13 @@ const REQUIRED_DRIVER_DOCUMENTS = [
     label: 'DNI',
     alternatives: [['dniDocUrl'], ['dniFrontDocUrl', 'dniBackDocUrl']],
   },
-  { key: 'license', label: 'licencia de conducir', fields: ['licenseDocUrl'], expiresField: 'licenseExpiresAt' },
-  { key: 'soat', label: 'SOAT', fields: ['soatDocUrl'], expiresField: 'soatExpiresAt' },
+  { key: 'license', label: 'licencia de conducir', fields: ['licenseDocUrl'] },
+  { key: 'soat', label: 'SOAT', fields: ['soatDocUrl'] },
   { key: 'circulationCard', label: 'tarjeta de circulación', fields: ['circulationCardDocUrl'] },
   {
     key: 'technicalReview',
     label: 'revisión técnica',
     fields: ['technicalReviewDocUrl'],
-    expiresField: 'technicalReviewExpiresAt',
   },
   { key: 'criminalRecord', label: 'récord del conductor', fields: ['criminalRecordDocUrl'] },
   { key: 'workCertificate', label: 'certificado laboral', fields: ['workCertificateDocUrl'] },
@@ -89,12 +88,6 @@ function driverApplicationIssues(application, uid, bucket, now = Date.now()) {
     const alternatives = document.alternatives || [document.fields];
     if (!alternatives.some((fields) => validDocumentAlternative(application, fields, uid, bucket))) {
       issues.push(document.label);
-    }
-    if (document.expiresField) {
-      const expiresAt = Number(application?.[document.expiresField]);
-      if (!Number.isFinite(expiresAt) || expiresAt <= now) {
-        issues.push(`vencimiento vigente de ${document.label}`);
-      }
     }
   }
 

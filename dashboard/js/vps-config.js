@@ -50,5 +50,23 @@
     });
   }
 
-  global.vpsConfigApi = Object.freeze({ publicConfig, request, uploadFile });
+  async function assignDriverPlace(driverId, place, token) {
+    return request(`/api/v1/dashboard/drivers/${encodeURIComponent(driverId)}/place`, {
+      token,
+      method: 'POST',
+      body: { type: place.type, name: place.name },
+    });
+  }
+
+  async function manageDriver(driverId, payload, token) {
+    const body = { ...payload };
+    delete body.driverId;
+    return request(`/api/v1/dashboard/drivers/${encodeURIComponent(driverId)}/manage`, {
+      token,
+      method: 'POST',
+      body,
+    });
+  }
+
+  global.vpsConfigApi = Object.freeze({ publicConfig, request, uploadFile, assignDriverPlace, manageDriver });
 })(typeof globalThis !== 'undefined' ? globalThis : window);

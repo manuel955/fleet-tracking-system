@@ -704,12 +704,9 @@ const DRIVER_APPLICATION_FIELDS = [
   'dniFrontDocUrl',
   'dniBackDocUrl',
   'licenseDocUrl',
-  'licenseExpiresAt',
   'soatDocUrl',
-  'soatExpiresAt',
   'circulationCardDocUrl',
   'technicalReviewDocUrl',
-  'technicalReviewExpiresAt',
   'criminalRecordDocUrl',
   'workCertificateDocUrl',
 ];
@@ -828,7 +825,6 @@ function requestedDocumentUpdate(body, document) {
     for (const field of fields) update[field] = null;
   }
   for (const field of selected) update[field] = body[field];
-  if (document.expiresField) update[document.expiresField] = Number(body?.[document.expiresField]);
   return update;
 }
 
@@ -1017,7 +1013,7 @@ exports.manageDrivers = functions.https.onRequest(async (req, res) => {
       const issues = driverApplicationIssues(driver, driverId, BRANDING_BUCKET);
       if (issues.length) {
         return res.status(409).json({
-          error: `No se puede aprobar. Falta o está vencido: ${issues.join(', ')}.`,
+          error: `No se puede aprobar. Falta: ${issues.join(', ')}.`,
           issues,
         });
       }

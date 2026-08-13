@@ -26,12 +26,9 @@ function validApplication() {
     dniFrontDocUrl: url('dni_front'),
     dniBackDocUrl: url('dni_back'),
     licenseDocUrl: url('license'),
-    licenseExpiresAt: 2_000,
     soatDocUrl: url('soat'),
-    soatExpiresAt: 2_000,
     circulationCardDocUrl: url('circulation'),
     technicalReviewDocUrl: url('technical'),
-    technicalReviewExpiresAt: 2_000,
     criminalRecordDocUrl: url('record'),
     workCertificateDocUrl: url('work'),
   };
@@ -50,16 +47,15 @@ test('acepta un único PDF para el DNI', () => {
   assert.deepEqual(driverApplicationIssues(application, uid, bucket, 1_000), []);
 });
 
-test('rechaza documentos ajenos, faltantes o vencidos', () => {
+test('rechaza documentos ajenos o faltantes sin exigir fechas de caducidad', () => {
   const application = validApplication();
   application.profilePhotoUrl = url('profile').replace('/driver-1/', '/driver-2/');
   delete application.workCertificateDocUrl;
-  application.soatExpiresAt = 999;
 
   const issues = driverApplicationIssues(application, uid, bucket, 1_000);
   assert.ok(issues.includes('foto de perfil'));
   assert.ok(issues.includes('certificado laboral'));
-  assert.ok(issues.includes('vencimiento vigente de SOAT'));
+  assert.deepEqual(issues.sort(), ['certificado laboral', 'foto de perfil'].sort());
 });
 
 test('solo admite URLs HTTPS del prefijo de Storage autenticado', () => {

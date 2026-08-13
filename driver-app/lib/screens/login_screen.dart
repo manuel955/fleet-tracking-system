@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../config.dart';
 import '../services/auth_service.dart';
+import '../services/vps_api_client.dart';
 import '../theme/app_theme.dart';
 import 'notifications_screen.dart';
 
@@ -23,6 +24,24 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _busy = false;
   String? _error;
 
+  String _friendlyError(Object error) {
+    if (error is VpsApiException) {
+      if (error.statusCode == 401 || error.statusCode == 403) {
+        return 'Usuario no registrado o pendiente de aprobación.';
+      }
+      if (error.statusCode >= 500) {
+        return 'No se pudo conectar con el servicio. Intenta nuevamente.';
+      }
+    }
+    final raw = error.toString().replaceFirst('Exception: ', '');
+    if (raw.contains('VpsApiException') ||
+        raw.toLowerCase().contains('credencial') ||
+        raw.toLowerCase().contains('not found')) {
+      return 'Usuario no registrado o pendiente de aprobación.';
+    }
+    return raw;
+  }
+
   @override
   void dispose() {
     _emailCtrl.dispose();
@@ -43,7 +62,7 @@ class _LoginScreenState extends State<LoginScreen> {
     } catch (e) {
       setState(() {
         _busy = false;
-        _error = e.toString().replaceFirst('Exception: ', '');
+        _error = _friendlyError(e);
       });
     }
   }
@@ -73,7 +92,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = e.toString().replaceFirst('Exception: ', '');
+        _error = _friendlyError(e);
       });
     }
   }

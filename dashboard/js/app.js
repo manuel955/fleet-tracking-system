@@ -109,7 +109,7 @@ const AUTH_ERROR_MESSAGES = {
   'auth/network-request-failed': 'No se pudo conectar con Firebase. Revisa tu conexión.',
   'auth/too-many-requests': 'Demasiados intentos. Espera unos minutos y vuelve a probar.',
   'auth/operation-not-allowed': 'El inicio de sesión por correo está deshabilitado.',
-  'auth/password-reset-unavailable': 'En el VPS, un administrador cambia la contraseña desde Configuración > Usuarios del dashboard.',
+  'auth/password-reset-unavailable': 'La recuperación por correo no está configurada en el VPS.',
 };
 
 loginForm.addEventListener('submit', async (e) => {
@@ -338,6 +338,24 @@ async function refreshVpsDashboard() {
     window.vpsDashboardLastError = error?.message || 'VPS unavailable';
   }
 }
+
+// La vista Conductores puede confirmar una eliminación antes del siguiente
+// sondeo de cinco segundos. Retira también el marcador y la tarjeta del mapa
+// de inmediato; el siguiente snapshot VPS vuelve a ser la fuente de verdad.
+window.removeDriverFromDashboard = function removeDriverFromDashboard(driverId) {
+  const id = String(driverId || '');
+  if (!id) return;
+  delete driversCache[id];
+  if (markers[id]) {
+    markers[id].setMap(null);
+    delete markers[id];
+  }
+  if (expandedDriverId === id) {
+    expandedDriverId = null;
+    clearRoute();
+  }
+  scheduleSidebarRender();
+};
 
 // ---------------------------------------------------------------------------
 // Mapa
@@ -1012,7 +1030,15 @@ function renderSidebar() {
       const select = document.querySelector(`[data-map-place-select="${driverId}"]`);
       if (!select.value) return alert('Selecciona un hotel o sede deportiva.');
       const [type, name] = select.value.split('|');
-      try { await manageDriver({ action: 'assignPlace', driverId, place: { type, name } }); } catch (error) { alert(error.message); }
+      try {
+        if (VPS_API_BASE_URL) {
+          const token = await auth.currentUser.getIdToken();
+          await window.vpsConfigApi.assignDriverPlace(driverId, { type, name }, token);
+          await refreshVpsDashboard();
+          return;
+        }
+        await manageDriver({ action: 'assignPlace', driverId, place: { type, name } });
+      } catch (error) { alert(error.message); }
     });
   });
 }

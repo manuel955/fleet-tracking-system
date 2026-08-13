@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { createHash, createHmac } from 'node:crypto';
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { config } from './config.js';
 import { pool } from './db.js';
 
@@ -26,6 +26,34 @@ export function publicStorageUrl(key) {
 
 export function privateStorageUrl(key) {
   return `${config.publicApiBaseUrl}/api/v1/storage/download/${encodeURIComponent(key)}`;
+}
+
+function accessTokenPayload(key, expiresAt) {
+  return Buffer.from(JSON.stringify({ key, exp: expiresAt }), 'utf8').toString('base64url');
+}
+
+function accessTokenSignature(payload) {
+  return createHmac('sha256', config.jwtSecret).update(payload).digest('base64url');
+}
+
+export function createPrivateStorageAccessUrl(key, expiresInSeconds = 300) {
+  const normalized = normalizeStorageKey(key);
+  const exp = Math.floor(Date.now() / 1000) + Math.max(30, Math.min(expiresInSeconds, 3600));
+  const payload = accessTokenPayload(normalized, exp);
+  const token = `${payload}.${accessTokenSignature(payload)}`;
+  return `${config.publicApiBaseUrl}/api/v1/storage/token/${encodeURIComponent(normalized)}?token=${encodeURIComponent(token)}`;
+}
+
+export function verifyPrivateStorageAccessToken(key, token) {
+  const normalized = normalizeStorageKey(key);
+  const [payload, signature] = String(token || '').split('.');
+  if (!payload || !signature || signature !== accessTokenSignature(payload)) return false;
+  try {
+    const value = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    return value.key === normalized && Number(value.exp) > Math.floor(Date.now() / 1000);
+  } catch (_) {
+    return false;
+  }
 }
 
 function storageError(message, statusCode = 400) {
@@ -105,6 +133,21 @@ export async function getStorageObject(key) {
   const normalized = normalizeStorageKey(key);
   const result = await client.send(new GetObjectCommand({ Bucket: config.s3Bucket, Key: normalized }));
   return { ...result, key: normalized };
+}
+
+export async function deletePrivateObjectsForOwner(ownerId) {
+  if (!client || !pool) return 0;
+  const result = await pool.query(
+    `SELECT object_key FROM storage_objects WHERE owner_id=$1 AND object_key LIKE $2`,
+    [ownerId, `passenger_credentials/${ownerId}/%`],
+  );
+  for (const row of result.rows) {
+    await client.send(new DeleteObjectCommand({ Bucket: config.s3Bucket, Key: row.object_key }));
+  }
+  if (result.rowCount) {
+    await pool.query('DELETE FROM storage_objects WHERE owner_id=$1 AND object_key LIKE $2', [ownerId, `passenger_credentials/${ownerId}/%`]);
+  }
+  return result.rowCount || 0;
 }
 
 export function isPublicStorageKey(key) {

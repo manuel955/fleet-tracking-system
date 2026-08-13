@@ -41,7 +41,9 @@ y una prueba de recuperación del POS.
 
 ## Contrato disponible
 
-- `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `GET /api/v1/auth/me`.
+- `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `GET /api/v1/auth/me` y
+  `POST /api/v1/auth/delete-account` (eliminación segura de conductor o pasajero VPS).
+- `POST /api/v1/auth/request-password-reset` y `POST /api/v1/auth/reset-password`. La recuperación usa Resend cuando `.env` contiene `RESEND_API_KEY` y `MAIL_FROM`; sin ellos responde 503 de forma explícita.
 - `GET /api/v1/drivers/me`, `POST /api/v1/drivers/availability` y
   `POST /api/v1/drivers/location` para conductores aprobados.
 - `POST /api/v1/trips`, `GET /api/v1/trips`, `GET /api/v1/trips/:id`,

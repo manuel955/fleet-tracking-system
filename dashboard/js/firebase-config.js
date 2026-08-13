@@ -47,12 +47,16 @@ function createVpsDashboardAuth() {
       sedeId: user.sedeId || '',
       sedeType: user.sedeType || '',
       sedeName: user.sedeName || '',
+      sedeAddress: user.sedeAddress || '',
+      sedeLat: user.sedeLat == null ? null : Number(user.sedeLat),
+      sedeLng: user.sedeLng == null ? null : Number(user.sedeLng),
       email: user.email || '',
       name: user.displayName || '',
     };
   };
   const makeUser = (session) => ({
     uid: session.user.id,
+    isVpsSession: true,
     email: session.user.email || '',
     displayName: session.user.displayName || '',
     getIdToken: async () => session.token,
@@ -66,7 +70,27 @@ function createVpsDashboardAuth() {
     notify();
   };
   const stored = readStored();
-  if (stored) current = makeUser(stored);
+  if (stored) {
+    current = makeUser(stored);
+    // A session created before the coordinator place fields were added can
+    // still be valid but lack sedeName/coordinates in localStorage. Refresh
+    // the public user from the VPS so the coordinator panel can initialize
+    // its origin and map without requiring a new login.
+    queueMicrotask(async () => {
+      try {
+        const response = await fetch(`${window.vpsApiBaseUrl}/api/v1/auth/me`, {
+          headers: { Authorization: `Bearer ${stored.token}`, Accept: 'application/json' },
+          cache: 'no-store',
+          signal: AbortSignal.timeout(10000),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload.user?.id) return;
+        setSession({ ...stored, user: { ...stored.user, ...payload.user } });
+      } catch (_) {
+        // Keep the cached session usable during a brief network interruption.
+      }
+    });
+  }
   firebaseAuth.onAuthStateChanged((user) => {
     if (current || !user) return;
     current = makeLegacyUser(user);
@@ -106,10 +130,18 @@ function createVpsDashboardAuth() {
       setSession(session);
       return { user: current };
     },
-    async sendPasswordResetEmail() {
-      const error = new Error('Solicita al administrador que cambie tu contraseña desde Usuarios del dashboard.');
-      error.code = 'auth/password-reset-unavailable';
-      throw error;
+    async sendPasswordResetEmail(email) {
+      const response = await fetch(`${window.vpsApiBaseUrl}/api/v1/auth/request-password-reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ email: String(email || '').trim().toLowerCase() }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const error = new Error(payload.message || payload.error || 'No se pudo enviar el correo de recuperación.');
+        error.code = response.status >= 500 ? 'auth/network-request-failed' : 'auth/password-reset-unavailable';
+        throw error;
+      }
     },
     async signOut() { setSession(null); await firebaseAuth.signOut(); },
   };

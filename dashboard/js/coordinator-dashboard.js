@@ -88,6 +88,7 @@
   let tripMapFocusKey = '';
   let tripMapRequestToken = 0;
   let tripDetailTimer = null;
+  let coordinatorPollTimer = null;
   let tripDetailInFlight = false;
   let modalTripStatus = null;
   let modalTripDetail = null;
@@ -123,15 +124,33 @@
 
   async function coordinatorRequest(path, payload) {
     const token = await auth.currentUser.getIdToken();
+    const vpsBase = String(window.vpsApiBaseUrl || '').replace(/\/$/, '');
+    const useVpsCoordinator = Boolean(vpsBase && auth.currentUser?.isVpsSession);
+    const detailMatch = path.match(/^getCoordinatorTripDetail\?tripId=(.+)$/);
+    let requestUrl = `${functionsBase}/${path}`;
+    let requestPayload = payload;
+    if (useVpsCoordinator) {
+      if (path === 'listCoordinatorTrips' || path === 'createCoordinatorTrip') {
+        requestUrl = `${vpsBase}/api/v1/dashboard/coordinator/trips`;
+      } else if (path === 'cancelCoordinatorTrip') {
+        requestUrl = `${vpsBase}/api/v1/dashboard/coordinator/trips/${encodeURIComponent(payload?.tripId || '')}/cancel`;
+        requestPayload = payload?.reason ? { reason: payload.reason } : {};
+      } else if (detailMatch) {
+        requestUrl = `${vpsBase}/api/v1/dashboard/coordinator/trips/${decodeURIComponent(detailMatch[1])}`;
+      }
+    }
     const options = {
       method: payload ? 'POST' : 'GET',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     };
-    if (payload) options.body = JSON.stringify(payload);
+    if (requestPayload && (payload || requestUrl.includes('/trips/'))) options.body = JSON.stringify(requestPayload);
     options.signal = AbortSignal.timeout(15000);
-    const response = await fetch(`${functionsBase}/${path}`, options);
+    const response = await fetch(requestUrl, options);
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || 'No se pudo completar la operación.');
+    if (useVpsCoordinator && path === 'createCoordinatorTrip' && result.trip) {
+      return { ok: true, tripId: result.trip.id, trip: result.trip };
+    }
     return result;
   }
 
@@ -708,6 +727,23 @@
 
   function listenTrips() {
     if (tripListenerRef) tripListenerRef.off();
+    if (coordinatorPollTimer) clearInterval(coordinatorPollTimer);
+    tripListenerRef = null;
+    if (window.vpsApiBaseUrl && auth.currentUser?.isVpsSession) {
+      const refresh = async () => {
+        try {
+          const result = await coordinatorRequest('listCoordinatorTrips');
+          trips = Object.fromEntries((result.trips || []).map((trip) => [trip.id, trip]));
+          renderTrips();
+          if (selectedTripId && trips[selectedTripId]) refreshSelectedTripDetail();
+        } catch (_) {
+          // Keep the last successful snapshot visible during a short outage.
+        }
+      };
+      refresh();
+      coordinatorPollTimer = setInterval(refresh, 5000);
+      return;
+    }
     tripListenerRef = db.ref(`coordinatorTrips/${coordinatorUser.uid}`);
     tripListenerRef.on('value', (snapshot) => {
       trips = snapshot.val() || {};
@@ -719,6 +755,8 @@
   function stopCoordinatorDispatch() {
     if (tripListenerRef) tripListenerRef.off();
     tripListenerRef = null;
+    if (coordinatorPollTimer) clearInterval(coordinatorPollTimer);
+    coordinatorPollTimer = null;
     destroyPreviewMap();
     coordinatorUser = null;
     coordinatorPlace = null;
@@ -730,8 +768,78 @@
     closeModal();
   }
 
+  async function hydrateCoordinatorPlace(user, claims) {
+    const token = await user.getIdToken();
+    let sourceUser = null;
+    try {
+      const response = await fetch(`${String(window.vpsApiBaseUrl || '').replace(/\/$/, '')}/api/v1/auth/me`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(10000),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (response.ok) sourceUser = payload.user || null;
+    } catch (_) {
+      // Firebase-only legacy sessions may not be accepted by the VPS during
+      // a brief migration outage; their custom claims remain the fallback.
+    }
+    let next = {
+      ...claims,
+      ...(sourceUser ? {
+        sedeId: sourceUser.sedeId,
+        sedeType: sourceUser.sedeType,
+        sedeName: sourceUser.sedeName,
+        sedeAddress: sourceUser.sedeAddress,
+        sedeLat: sourceUser.sedeLat,
+        sedeLng: sourceUser.sedeLng,
+      } : {}),
+    };
+    if ((!Number.isFinite(Number(next.sedeLat)) || !Number.isFinite(Number(next.sedeLng)))
+      && window.vpsConfigApi && next.sedeId) {
+      try {
+        const config = await window.vpsConfigApi.publicConfig();
+        const lists = config?.places || {};
+        const candidates = [...(lists.hotels || []), ...(lists.sportVenues || [])];
+        const place = candidates.find((entry) => String(entry.id) === String(next.sedeId));
+        if (place) {
+          next = {
+            ...next,
+            sedeName: place.name,
+            sedeAddress: place.address,
+            sedeLat: Number(place.lat),
+            sedeLng: Number(place.lng),
+            sedeType: place.category === 'hotels' ? 'hotel' : 'sportVenue',
+          };
+        }
+      } catch (_) {
+        // Keep the panel usable; the API will still validate the actual sede.
+      }
+    }
+    const hasPlace = Number.isFinite(Number(next.sedeLat)) && Number.isFinite(Number(next.sedeLng));
+    if (!hasPlace || !started || coordinatorUser?.uid !== user.uid) return;
+    coordinatorClaims = next;
+    coordinatorPlace = {
+      id: String(next.sedeId || ''),
+      type: String(next.sedeType || ''),
+      name: String(next.sedeName || 'Sede asignada'),
+      address: String(next.sedeAddress || ''),
+      lat: Number(next.sedeLat),
+      lng: Number(next.sedeLng),
+    };
+    placeNameEl.textContent = coordinatorPlace.name;
+    originInput.value = coordinatorPlace.address
+      ? `${coordinatorPlace.name} · ${coordinatorPlace.address}`
+      : coordinatorPlace.name;
+    originInput.title = coordinatorPlace.address || coordinatorPlace.name;
+    initPreviewMap();
+    updateDestinationPreview();
+  }
+
   function startCoordinatorDispatch(user, claims = {}) {
-    if (started && coordinatorUser?.uid === user.uid) return;
+    if (started && coordinatorUser?.uid === user.uid
+      && String(coordinatorClaims.sedeId || '') === String(claims.sedeId || '')
+      && Number(coordinatorClaims.sedeLat) === Number(claims.sedeLat)
+      && Number(coordinatorClaims.sedeLng) === Number(claims.sedeLng)) return;
     stopCoordinatorDispatch();
     started = true;
     coordinatorUser = user;
@@ -753,6 +861,7 @@
     coordinatorApp.classList.remove('hidden');
     initPreviewMap();
     listenTrips();
+    void hydrateCoordinatorPlace(user, claims);
   }
 
   destinationInput.addEventListener('input', () => {

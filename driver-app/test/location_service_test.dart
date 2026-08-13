@@ -53,6 +53,29 @@ void main() {
         isFalse);
   });
 
+  test('mantiene las coordenadas pero renueva la hora cuando esta detenido', () {
+    final now = DateTime(2026, 8, 10, 22, 0);
+    final stable = point(
+      latitude: -12.10000,
+      longitude: -77.01000,
+      timestamp: now,
+    );
+    final jitter = point(
+      latitude: -12.10008,
+      longitude: -77.01000,
+      timestamp: now.add(const Duration(seconds: 2)),
+    );
+    final published = LocationService.positionForPublish(
+      jitter,
+      stable,
+      now: jitter.timestamp,
+    );
+    expect(published, isNotNull);
+    expect(published!.latitude, stable.latitude);
+    expect(published.longitude, stable.longitude);
+    expect(published.timestamp, jitter.timestamp);
+  });
+
   test('descarta un salto de media cuadra con precisión GPS baja', () {
     final now = DateTime(2026, 8, 10, 22, 0);
     final stable = point(
@@ -124,7 +147,7 @@ void main() {
           latitude: -12.1,
           longitude: -77.01,
           timestamp: now,
-          accuracy: 45,
+          accuracy: 95,
         ),
         null,
         now: now,

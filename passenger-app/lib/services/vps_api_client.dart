@@ -86,6 +86,9 @@ class VpsApiClient {
     body: {'email': email.trim().toLowerCase(), 'password': password},
   );
 
+  static Future<Map<String, dynamic>> requestPasswordReset({required String email}) =>
+      _request('POST', '/api/v1/auth/request-password-reset', body: {'email': email.trim().toLowerCase()});
+
   static Future<Map<String, dynamic>> register({
     required String email,
     required String password,
@@ -160,6 +163,9 @@ class VpsApiClient {
 
   static Future<Map<String, dynamic>> me(String token) =>
       _request('GET', '/api/v1/auth/me', token: token);
+
+  static Future<Map<String, dynamic>> deleteAccount({required String token}) =>
+      _request('POST', '/api/v1/auth/delete-account', token: token);
 
   static Future<Map<String, dynamic>> registerDeviceToken({
     required String token,
@@ -353,6 +359,26 @@ class VpsApiClient {
       'POST',
       '/api/v1/trips/$tripId/retry',
       token: token,
+    );
+    return normalizeTrip(_wrappedMap(result, 'trip'));
+  }
+
+  static Future<Map<String, dynamic>> updateDestination({
+    required String token,
+    required String tripId,
+    required double destinationLat,
+    required double destinationLng,
+    required String destinationAddress,
+  }) async {
+    final result = await _request(
+      'POST',
+      '/api/v1/trips/$tripId/destination',
+      token: token,
+      body: {
+        'destinationLat': destinationLat,
+        'destinationLng': destinationLng,
+        'destinationAddress': destinationAddress,
+      },
     );
     return normalizeTrip(_wrappedMap(result, 'trip'));
   }

@@ -422,7 +422,6 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
     if (completedTripToRate != null && completedTripId != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted) return;
-        setState(() => _tabIndex = 1);
         await _activityKey.currentState?.openFeedbackForTrip(
           completedTripId!,
           completedTripToRate!,
@@ -509,7 +508,6 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
     setState(() {
       _activeTripId = null;
       _activeTrip = null;
-      if (showActivity) _tabIndex = 1;
     });
     unawaited(_validatePassengerAccess());
     if (completed && tripId != null && trip != null) {

@@ -10,11 +10,11 @@ class AppConfig {
   static const String cloudFunctionsBaseUrl =
       'https://us-central1-rastreoflota-53052.cloudfunctions.net';
 
-  // Migracion gradual al API del VPS. Vacio mantiene Firebase sin cambios.
-  // Para una build de prueba: --dart-define=VPS_API_BASE_URL=https://api.tu-dominio
+  // El entorno operativo usa el API del VPS. Se puede reemplazar en una
+  // compilación concreta con --dart-define=VPS_API_BASE_URL=...
   static const String vpsApiBaseUrl = String.fromEnvironment(
     'VPS_API_BASE_URL',
-    defaultValue: '',
+    defaultValue: 'https://api.tucomprass.com',
   );
   static bool get useVpsBackend => vpsApiBaseUrl.trim().isNotEmpty;
 

@@ -25,6 +25,7 @@ import 'services/push_service.dart';
 import 'services/session_service.dart';
 import 'services/trip_service.dart';
 import 'services/update_service.dart';
+import 'services/vps_api_client.dart';
 import 'widgets/support_button.dart';
 import 'theme/app_theme.dart';
 
@@ -237,13 +238,14 @@ class _DriverHomePageState extends State<DriverHomePage>
     if (!_supportsMobileServices) return;
 
     if (state == AppLifecycleState.resumed) {
-      // Reconoce avisos antiguos al volver a la app. El servicio GPS tiene
-      // otra notificacion y no se cancela aqui.
-      unawaited(NotificationService.acknowledgeAllAssigned());
       if (_tracking) {
         unawaited(_setScreenAwake(true));
         unawaited(_resumeTrackingAfterLifecycle());
       }
+      // Volver desde un video no es un acuse. Consultamos el viaje y el
+      // callback posterior solo lo reconoce cuando el panel del viaje ya se
+      // dibujo en pantalla.
+      unawaited(_pollForTrip());
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
       // La pantalla solo debe permanecer encendida mientras el conductor
@@ -645,6 +647,19 @@ class _DriverHomePageState extends State<DriverHomePage>
               'Tu sesión se cerró porque iniciaste sesión en otro dispositivo.',
         );
       }
+    } on VpsApiException catch (error) {
+      // Un borrado desde el dashboard revoca el JWT en el backend. No dejar
+      // la pantalla operativa abierta ni permitir que el siguiente intento de
+      // disponibilidad/GPS siga usando la cuenta deshabilitada.
+      if (AppConfig.useVpsBackend &&
+          (error.statusCode == 401 ||
+              error.statusCode == 403 ||
+              error.statusCode == 404)) {
+        await _clearSessionAndReturnToLogin(
+          message:
+              'Tu cuenta fue eliminada o deshabilitada por el administrador.',
+        );
+      }
     } catch (_) {
       // Fallo de red puntual: se reintenta en el siguiente tick.
     }
@@ -809,9 +824,24 @@ class _DriverHomePageState extends State<DriverHomePage>
           _tripId = tripId;
           _tripData = trip;
         });
-        // Showing the active-trip screen acknowledges the repeating alert;
-        // until this point the foreground service keeps reminding the driver.
-        await NotificationService.acknowledgeTripAssigned(tripId);
+      }
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed &&
+          _tripId == tripId &&
+          !_showingMainScreen) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted ||
+              WidgetsBinding.instance.lifecycleState !=
+                  AppLifecycleState.resumed ||
+              _tripId != tripId ||
+              _showingMainScreen) {
+            return;
+          }
+          // The active-trip screen is now visible: stop the repeating alert.
+          unawaited(() async {
+            await NotificationService.acknowledgeTripAssigned(tripId);
+            await NotificationService.stopSpeech();
+          }());
+        });
       }
     } catch (_) {
       // Fallo de red puntual: se reintenta en el siguiente tick del timer.
@@ -940,7 +970,40 @@ class _DriverHomePageState extends State<DriverHomePage>
           'Permiso "todo el tiempo" no otorgado. El rastreo en segundo plano puede detenerse al minimizar la app.');
     }
 
-    return true;
+    final finalWhenInUse = await Permission.locationWhenInUse.status;
+    final finalAlways = await Permission.locationAlways.status;
+    final finalNotification = await Permission.notification.status;
+    final allRequired = finalWhenInUse.isGranted &&
+        finalAlways.isGranted &&
+        finalNotification.isGranted;
+    if (!allRequired) {
+      _addLog('Revisión final: todavía falta un permiso obligatorio.');
+      if (mounted) {
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Permisos pendientes'),
+            content: const Text(
+              'Activa ubicación todo el tiempo y notificaciones. Después vuelve a pulsar Iniciar turno para verificar nuevamente.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Entendido'),
+              ),
+              FilledButton(
+                onPressed: () async {
+                  await openAppSettings();
+                  if (dialogContext.mounted) Navigator.pop(dialogContext);
+                },
+                child: const Text('Abrir ajustes'),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+    return allRequired;
   }
 
   // Arranca el rastreo automaticamente (sin que el conductor tenga que
@@ -971,10 +1034,25 @@ class _DriverHomePageState extends State<DriverHomePage>
       }
 
       // Huawei/EMUI, MIUI, ColorOS y One UI aplican reglas adicionales que
-      // Android no expone por permisos. Se muestran una vez por fabricante
-      // para que el foreground service sobreviva con la pantalla apagada.
+      // Android no expone por permisos. El checklist detecta el fabricante,
+      // abre cada ajuste directamente y vuelve a comprobarlo al regresar.
       if (defaultTargetPlatform == TargetPlatform.android && mounted) {
-        await ManufacturerProtectionService.showIfNeeded(context);
+        final protectionReady =
+            await ManufacturerProtectionService.showIfNeeded(context);
+        if (!protectionReady) {
+          if (mounted) {
+            setState(() {
+              _tracking = false;
+              _startingShift = false;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                  content: Text(
+                      'Completa la configuración del teléfono y vuelve a verificar antes de iniciar el turno.')),
+            );
+          }
+          return;
+        }
       }
 
       await TripService.setAvailability(_driverId!, online: true);
@@ -1155,7 +1233,10 @@ class _DriverHomePageState extends State<DriverHomePage>
     if (confirmed != true || !mounted) return;
 
     try {
-      if (_driverId != null) {
+      // El endpoint VPS revoca la cuenta, tokens push y GPS en una sola
+      // transacción. No hagas una llamada previa que pueda fallar con 401
+      // después de que el administrador ya la haya deshabilitado.
+      if (!AppConfig.useVpsBackend && _driverId != null) {
         await TripService.setAvailability(_driverId!, online: false);
       }
       if (_supportsMobileServices) {

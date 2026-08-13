@@ -33,7 +33,6 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
   bool _deleting = false;
   String? _error;
   final Map<String, List<PickedDocument>> _documents = {};
-  final Map<String, DateTime> _documentExpiries = {};
   final _nameCtrl = TextEditingController();
   final _ageCtrl = TextEditingController();
   final _phoneCtrl = TextEditingController();
@@ -43,12 +42,6 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
   final _vehicleSeatsCtrl = TextEditingController();
   String? _vehicleType;
   String? _vehicleColor;
-
-  static const _expiryLabels = {
-    'license': 'Vencimiento de la licencia',
-    'soat': 'Vencimiento del SOAT',
-    'technicalReview': 'Vencimiento de la revisión técnica',
-  };
 
   static const _vehicleTypes = [
     'Auto',
@@ -182,16 +175,6 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
       setState(() => _error = 'El DNI requiere 2 fotos o 1 solo PDF.');
       return;
     }
-    final missingExpiry = _documents.keys
-        .where(_expiryLabels.containsKey)
-        .where((key) => !_documentExpiries.containsKey(key))
-        .map((key) => _expiryLabels[key])
-        .whereType<String>()
-        .toList();
-    if (missingExpiry.isNotEmpty) {
-      setState(() => _error = 'Selecciona: ${missingExpiry.join(', ')}.');
-      return;
-    }
     final profileChanges = <String, dynamic>{};
     if (_personalDataRejected) {
       final name = _nameCtrl.text.trim();
@@ -244,10 +227,6 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
     try {
       await DriverProfileService.resubmitDocuments(
         _documents,
-        documentExpiries: {
-          for (final entry in _documentExpiries.entries)
-            entry.key: entry.value.millisecondsSinceEpoch,
-        },
         profileChanges: profileChanges,
       );
       widget.onResubmitted();
@@ -257,48 +236,6 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
         _error = e.toString().replaceFirst('Exception: ', '');
       });
     }
-  }
-
-  Future<void> _pickExpiry(String key) async {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final selected = await showDatePicker(
-      context: context,
-      initialDate: _documentExpiries[key] ?? today.add(const Duration(days: 1)),
-      firstDate: today.add(const Duration(days: 1)),
-      lastDate: DateTime(now.year + 15, 12, 31),
-      helpText: _expiryLabels[key],
-    );
-    if (selected == null || !mounted) return;
-    setState(() {
-      _documentExpiries[key] = DateTime(
-        selected.year,
-        selected.month,
-        selected.day,
-        23,
-        59,
-        59,
-      );
-    });
-  }
-
-  Widget _expiryPicker(String key) {
-    final selected = _documentExpiries[key];
-    final value = selected == null
-        ? 'Seleccionar fecha'
-        : '${selected.day.toString().padLeft(2, '0')}/'
-            '${selected.month.toString().padLeft(2, '0')}/${selected.year}';
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: OutlinedButton.icon(
-        onPressed: _busy ? null : () => _pickExpiry(key),
-        icon: const Icon(Icons.event_outlined),
-        label: Align(
-          alignment: Alignment.centerLeft,
-          child: Text('${_expiryLabels[key]}: $value'),
-        ),
-      ),
-    );
   }
 
   Widget _correctionField(
@@ -542,14 +479,10 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
                               _documents[d.$1] = files;
                             } else {
                               _documents.remove(d.$1);
-                              _documentExpiries.remove(d.$1);
                             }
                           });
                         },
                       ),
-                      if (_documents.containsKey(d.$1) &&
-                          _expiryLabels.containsKey(d.$1))
-                        _expiryPicker(d.$1),
                     ]),
                 if (_error != null) ...[
                   const SizedBox(height: 12),

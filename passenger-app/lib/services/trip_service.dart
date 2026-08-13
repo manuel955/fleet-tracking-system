@@ -303,7 +303,17 @@ class TripService {
     required String destinationAddress,
   }) async {
     if (AppConfig.useVpsBackend) {
-      throw UnsupportedError('Cambiar destino aun no esta disponible en VPS.');
+      final auth = await AuthService.currentSession();
+      final updated = await VpsApiClient.updateDestination(
+        token: auth['idToken'].toString(),
+        tripId: tripId,
+        destinationLat: destinationLat,
+        destinationLng: destinationLng,
+        destinationAddress: destinationAddress,
+      );
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('$_tripCachePrefix$tripId', jsonEncode(updated));
+      return;
     }
     final auth = await AuthService.signInAnonymously();
     final uri = Uri.parse(

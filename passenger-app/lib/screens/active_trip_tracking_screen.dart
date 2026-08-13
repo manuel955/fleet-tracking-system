@@ -12,6 +12,10 @@ import '../theme/app_theme.dart';
 import '../widgets/support_button.dart';
 import 'destination_picker_screen.dart';
 
+String normalizePhoneForDialer(Object? raw) {
+  return (raw?.toString() ?? '').replaceAll(RegExp(r'[^0-9+]'), '');
+}
+
 /// Viaje ya aceptado por un conductor, estilo Uber: mapa a pantalla
 /// completa con un panel inferior fijo mostrando el estado y los datos del
 /// conductor (nombre, placa, telefono) y su ubicacion en vivo (reusando el
@@ -356,9 +360,25 @@ class _ActiveTripTrackingScreenState extends State<ActiveTripTrackingScreen> {
   }
 
   Future<void> _callDriver() async {
-    final phone = _trip['driverPhone'] as String?;
-    if (phone == null || phone.isEmpty) return;
-    final ok = await launchUrl(Uri(scheme: 'tel', path: phone));
+    final rawPhone = _firstPopulatedValue('driverPhone')?.toString() ?? '';
+    // Keep only characters accepted by Android's dialer. The backend stores
+    // Peruvian numbers as +51XXXXXXXXX, but this also handles spaces, dashes
+    // and a numeric JSON value without throwing a cast exception.
+    final phone = normalizePhoneForDialer(rawPhone);
+    if (phone.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('El teléfono del conductor aún no está disponible.'),
+          ),
+        );
+      }
+      return;
+    }
+    final ok = await launchUrl(
+      Uri(scheme: 'tel', path: phone),
+      mode: LaunchMode.externalApplication,
+    );
     if (!ok && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No se pudo iniciar la llamada.')),

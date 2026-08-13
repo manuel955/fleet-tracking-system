@@ -3,7 +3,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { config } from './config.js';
 import { databaseHealth, pool, withTransaction } from './db.js';
 import { authenticate, hashPassword, publicUser, signUser, verifyPassword } from './auth.js';
-import { authorizePrivateDownload, getStorageObject, isPublicStorageKey, normalizeStorageKey, publicStorageUrl, storageConfigured, uploadStorageObject } from './storage.js';
+import { authorizePrivateDownload, createPrivateStorageAccessUrl, deletePrivateObjectsForOwner, getStorageObject, isPublicStorageKey, normalizeStorageKey, publicStorageUrl, storageConfigured, uploadStorageObject, verifyPrivateStorageAccessToken } from './storage.js';
 
 function json(res, status, body) {
   const payload = JSON.stringify(body);
@@ -187,6 +187,348 @@ async function savePlace(user, body) {
     [id, category, name, address, latitude, longitude],
   );
   return { id, category, name, address, lat: latitude, lng: longitude };
+}
+
+export function normalizeDriverPlaceInput(body = {}) {
+  const rawType = requiredString(body.type, 'place.type', { max: 20 });
+  const type = rawType === 'hotel' || rawType === 'hotels'
+    ? 'hotel'
+    : rawType === 'sportVenue' || rawType === 'sportVenues'
+      ? 'sportVenue'
+      : null;
+  if (!type) {
+    const error = new Error('Tipo de lugar inválido.');
+    error.statusCode = 400;
+    throw error;
+  }
+  return {
+    type,
+    name: requiredString(body.name, 'place.name', { max: 160 }),
+  };
+}
+
+async function assignDriverPlace(user, driverIdValue, body) {
+  requireDashboardAdmin(user);
+  const driverId = postgresUuidOrNull(driverIdValue);
+  if (!driverId) {
+    const error = new Error('Conductor inválido.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const input = normalizeDriverPlaceInput(body);
+  const category = input.type === 'hotel' ? 'hotels' : 'sportVenues';
+  const placeResult = await pool.query(
+    `SELECT id, name, address, latitude, longitude
+       FROM places WHERE category = $1 AND name = $2 LIMIT 1`,
+    [category, input.name],
+  );
+  const place = placeResult.rows[0];
+  if (!place) {
+    const error = new Error('El lugar seleccionado no existe en el VPS.');
+    error.statusCode = 404;
+    throw error;
+  }
+  const assignedPlace = {
+    id: place.id,
+    type: input.type,
+    name: place.name,
+    address: place.address,
+    lat: Number(place.latitude),
+    lng: Number(place.longitude),
+    assignedAt: Date.now(),
+  };
+  const result = await pool.query(
+    `UPDATE drivers SET assigned_place = $1::jsonb, updated_at = now()
+       WHERE id = $2 RETURNING id`,
+    [JSON.stringify(assignedPlace), driverId],
+  );
+  if (!result.rowCount) {
+    const error = new Error('Conductor no encontrado.');
+    error.statusCode = 404;
+    throw error;
+  }
+  await notifyVpsDevices([driverId], 'place_assigned', {
+    placeName: assignedPlace.name,
+    placeType: assignedPlace.type,
+    route: 'home',
+    deepLink: 'driver://home',
+  });
+  return { ok: true, driverId, assignedPlace };
+}
+
+const DRIVER_REVIEW_FIELDS = new Set([
+  'profile', 'dni', 'license', 'soat', 'circulationCard',
+  'technicalReview', 'criminalRecord', 'workCertificate',
+]);
+
+function hasOwnedDriverDocument(value, driverId) {
+  return ownedPrivateStorageUrl(value, `driver_documents/${driverId}/`);
+}
+
+function vpsDriverApplicationIssues(row) {
+  const issues = [];
+  const driverId = row.id;
+  if (!String(row.display_name || '').trim()) issues.push('nombre completo');
+  if (!String(row.email || '').includes('@')) issues.push('correo válido');
+  if (!String(row.phone || '').trim()) issues.push('teléfono');
+  if (!String(row.dni || '').trim()) issues.push('DNI');
+  if (!String(row.plate || '').trim()) issues.push('placa');
+  if (!String(row.vehicle_brand || '').trim()) issues.push('marca del vehículo');
+  if (!String(row.vehicle_color || '').trim()) issues.push('color del vehículo');
+  if (!Number.isInteger(Number(row.age)) || Number(row.age) < 18) issues.push('edad válida');
+  if (!hasOwnedDriverDocument(row.profile_photo_url, driverId)) issues.push('foto de perfil');
+  if (!(hasOwnedDriverDocument(row.dni_doc_url, driverId)
+    || (hasOwnedDriverDocument(row.dni_front_doc_url, driverId)
+      && hasOwnedDriverDocument(row.dni_back_doc_url, driverId)))) issues.push('DNI adjunto');
+  const requiredDocs = [
+    ['license_doc_url', 'licencia'],
+    ['soat_doc_url', 'SOAT'],
+    ['circulation_card_doc_url', 'tarjeta de circulación'],
+    ['technical_review_doc_url', 'revisión técnica'],
+    ['criminal_record_doc_url', 'récord del conductor'],
+    ['work_certificate_doc_url', 'certificado laboral'],
+  ];
+  for (const [field, label] of requiredDocs) {
+    if (!hasOwnedDriverDocument(row[field], driverId)) issues.push(label);
+  }
+  return [...new Set(issues)];
+}
+
+function publicDashboardDriver(row) {
+  return {
+    id: row.id,
+    name: row.display_name || '',
+    email: row.email || '',
+    userStatus: row.user_status || row.status || 'active',
+    approvalStatus: row.approval_status || 'pending_review',
+    phone: row.phone || '',
+    plate: row.plate || '',
+    age: row.age == null ? null : Number(row.age),
+    vehicleBrand: row.vehicle_brand || '',
+    vehicleType: row.vehicle_type || '',
+    vehicleColor: row.vehicle_color || '',
+    vehicleSeats: row.vehicle_seats == null ? null : Number(row.vehicle_seats),
+    profilePhotoUrl: dashboardDocumentUrl(row.profile_photo_url),
+    dniDocUrl: dashboardDocumentUrl(row.dni_doc_url),
+    dniFrontDocUrl: dashboardDocumentUrl(row.dni_front_doc_url),
+    dniBackDocUrl: dashboardDocumentUrl(row.dni_back_doc_url),
+    licenseDocUrl: dashboardDocumentUrl(row.license_doc_url),
+    soatDocUrl: dashboardDocumentUrl(row.soat_doc_url),
+    circulationCardDocUrl: dashboardDocumentUrl(row.circulation_card_doc_url),
+    technicalReviewDocUrl: dashboardDocumentUrl(row.technical_review_doc_url),
+    criminalRecordDocUrl: dashboardDocumentUrl(row.criminal_record_doc_url),
+    workCertificateDocUrl: dashboardDocumentUrl(row.work_certificate_doc_url),
+    licenseExpiresAt: row.license_expires_at == null ? null : Number(row.license_expires_at),
+    soatExpiresAt: row.soat_expires_at == null ? null : Number(row.soat_expires_at),
+    technicalReviewExpiresAt: row.technical_review_expires_at == null ? null : Number(row.technical_review_expires_at),
+    documentsSubmittedAt: row.application_submitted_at ? new Date(row.application_submitted_at).getTime() : null,
+    reviewedAt: row.reviewed_at == null ? null : Number(row.reviewed_at),
+    reviewedBy: row.reviewed_by || '',
+    rejectionReason: row.rejection_reason || '',
+    rejectionFieldKeys: row.rejection_field_keys || '',
+    suspended: row.suspended === true,
+    suspensionReason: row.suspension_reason || '',
+    suspendedAt: row.suspended_at == null ? null : Number(row.suspended_at),
+    suspendedBy: row.suspended_by || '',
+    availabilityStatus: row.availability_status || 'offline',
+    currentTripId: row.current_trip_id || null,
+    assignedPlace: row.assigned_place || null,
+    lat: row.latitude == null ? null : Number(row.latitude),
+    lng: row.longitude == null ? null : Number(row.longitude),
+    lastUpdate: row.recorded_at ? new Date(row.recorded_at).getTime() : null,
+  };
+}
+
+async function manageVpsDriver(user, driverIdValue, body) {
+  requireDashboardAdmin(user);
+  const driverId = postgresUuidOrNull(driverIdValue);
+  if (!driverId) throw Object.assign(new Error('Conductor inválido.'), { statusCode: 400 });
+  const result = await pool.query(
+    `SELECT d.*, u.display_name, u.email, u.status AS user_status,
+            l.latitude, l.longitude, l.recorded_at
+       FROM drivers d JOIN users u ON u.id=d.id
+       LEFT JOIN driver_locations l ON l.driver_id=d.id
+      WHERE d.id=$1`,
+    [driverId],
+  );
+  const row = result.rows[0];
+  if (!row) throw Object.assign(new Error('Conductor no encontrado.'), { statusCode: 404 });
+  const action = requiredString(body.action, 'action', { max: 20 });
+  if (action === 'approve') {
+    if (row.approval_status !== 'pending_review') {
+      throw Object.assign(new Error('Solo se puede aprobar un registro pendiente.'), { statusCode: 409 });
+    }
+    const issues = vpsDriverApplicationIssues(row);
+    if (issues.length) {
+      throw Object.assign(new Error(`No se puede aprobar. Falta o está vencido: ${issues.join(', ')}.`), { statusCode: 409, issues });
+    }
+    await pool.query(
+      `UPDATE drivers SET approval_status='approved', rejection_reason=NULL,
+          rejection_field_keys=NULL, reviewed_at=$1, reviewed_by=$2,
+          updated_at=now() WHERE id=$3`,
+      [Date.now(), user.email || '', driverId],
+    );
+    await notifyVpsDevices([driverId], 'driver_approved', { route: 'home', deepLink: 'driver://home' });
+  } else if (action === 'reject') {
+    const reason = String(body.reason || '').trim();
+    const fields = Array.isArray(body.rejectionFields) ? [...new Set(body.rejectionFields.map((value) => String(value)))] : [];
+    if (!reason) throw Object.assign(new Error('Escribe el motivo del rechazo.'), { statusCode: 400 });
+    if (!fields.length || fields.some((field) => !DRIVER_REVIEW_FIELDS.has(field))) {
+      throw Object.assign(new Error('Selecciona al menos un dato o documento que deba corregirse.'), { statusCode: 400 });
+    }
+    await pool.query(
+      `UPDATE drivers SET approval_status='rejected', rejection_reason=$1,
+          rejection_field_keys=$2, reviewed_at=$3, reviewed_by=$4,
+          availability_status='offline', updated_at=now() WHERE id=$5`,
+      [reason, fields.join(','), Date.now(), user.email || '', driverId],
+    );
+  } else if (action === 'suspend' || action === 'reinstate') {
+    if (action === 'suspend') {
+      const reason = String(body.reason || '').trim();
+      if (reason.length < 5 || reason.length > 300) throw Object.assign(new Error('Escribe un motivo entre 5 y 300 caracteres.'), { statusCode: 400 });
+      if (row.current_trip_id) throw Object.assign(new Error('No puedes suspender a un conductor con un viaje activo.'), { statusCode: 409 });
+      await pool.query(
+        `UPDATE drivers SET suspended=TRUE, suspension_reason=$1, suspended_at=$2,
+            suspended_by=$3, availability_status='offline', updated_at=now() WHERE id=$4`,
+        [reason, Date.now(), user.email || '', driverId],
+      );
+    } else {
+      await pool.query(
+        `UPDATE drivers SET suspended=FALSE, suspension_reason=NULL, suspended_at=NULL,
+            suspended_by=NULL, updated_at=now() WHERE id=$1`,
+        [driverId],
+      );
+    }
+  } else if (action === 'delete') {
+    await deleteVpsDriverAccount(driverId, user.email || 'dashboard');
+    return { ok: true, deleted: true, authDeleted: true, driver: null };
+  } else {
+    throw Object.assign(new Error('Acción de conductor inválida.'), { statusCode: 400 });
+  }
+  const fresh = await pool.query(
+    `SELECT d.*, u.display_name, u.email, u.status AS user_status,
+            l.latitude, l.longitude, l.recorded_at
+       FROM drivers d JOIN users u ON u.id=d.id
+       LEFT JOIN driver_locations l ON l.driver_id=d.id WHERE d.id=$1`,
+    [driverId],
+  );
+  return { ok: true, driver: fresh.rows[0] ? publicDashboardDriver(fresh.rows[0]) : null };
+}
+
+// El mismo borrado seguro se usa desde el dashboard y desde la propia app.
+// Se conserva la relación histórica de los viajes como dato operativo
+// anonimizado, pero se revocan inmediatamente los tokens push y la última
+// ubicación para que una cuenta eliminada no pueda recibir alertas ni aparecer
+// en la flota.
+export function driverAccountDeletionBlocked(currentTripId, activeTripId) {
+  return Boolean(currentTripId || activeTripId);
+}
+
+async function deleteVpsDriverAccount(driverId, actorLabel) {
+  return withTransaction(async (client) => {
+    const driverResult = await client.query(
+      `SELECT current_trip_id FROM drivers WHERE id=$1 FOR UPDATE`,
+      [driverId],
+    );
+    const driver = driverResult.rows[0];
+    if (!driver) {
+      throw Object.assign(new Error('Conductor no encontrado.'), { statusCode: 404 });
+    }
+    const activeTrips = await client.query(
+      `SELECT id FROM trips
+        WHERE driver_id=$1 AND status NOT IN ('completed', 'cancelled', 'no_drivers_available')
+        LIMIT 1`,
+      [driverId],
+    );
+    if (driverAccountDeletionBlocked(driver.current_trip_id, activeTrips.rows[0]?.id)) {
+      throw Object.assign(new Error('No puedes eliminar a un conductor con un viaje activo.'), { statusCode: 409 });
+    }
+
+    const now = Date.now();
+    await client.query(
+      `UPDATE trips SET driver_id=NULL, updated_at=now() WHERE driver_id=$1`,
+      [driverId],
+    );
+    const tokenResult = await client.query(
+      `DELETE FROM device_tokens WHERE user_id=$1`,
+      [driverId],
+    );
+    const locationResult = await client.query(
+      `DELETE FROM driver_locations WHERE driver_id=$1`,
+      [driverId],
+    );
+    await client.query(
+      `UPDATE drivers SET approval_status='rejected', phone='',
+          plate=$1, age=NULL, dni='', vehicle_brand='', vehicle_color='',
+          profile_photo_url=NULL, dni_doc_url=NULL, dni_front_doc_url=NULL,
+          dni_back_doc_url=NULL, license_doc_url=NULL, soat_doc_url=NULL,
+          circulation_card_doc_url=NULL, technical_review_doc_url=NULL,
+          criminal_record_doc_url=NULL, work_certificate_doc_url=NULL,
+          license_expires_at=NULL, soat_expires_at=NULL,
+          technical_review_expires_at=NULL, application_submitted_at=NULL,
+          assigned_place=NULL, availability_status='offline',
+          current_trip_id=NULL, suspended=TRUE,
+          suspension_reason=$2, suspended_at=$3, suspended_by=$4,
+          reviewed_at=$3, reviewed_by=$4, rejection_reason='Cuenta eliminada',
+          rejection_field_keys=NULL, updated_at=now()
+        WHERE id=$5`,
+      [
+        `DELETED-${driverId.slice(0, 12)}`,
+        `Cuenta eliminada por ${actorLabel}`,
+        now,
+        actorLabel,
+        driverId,
+      ],
+    );
+    await client.query(
+      `UPDATE users SET email=NULL, password_hash=NULL,
+          display_name='Cuenta eliminada', status='disabled', updated_at=now()
+        WHERE id=$1`,
+      [driverId],
+    );
+    return {
+      tokenCount: tokenResult.rowCount || 0,
+      locationRemoved: (locationResult.rowCount || 0) > 0,
+    };
+  });
+}
+
+async function deleteCurrentVpsDriverAccount(user) {
+  requireRole(user, ['driver']);
+  const result = await deleteVpsDriverAccount(user.id, user.email || 'el conductor');
+  return { ok: true, deleted: true, authDeleted: true, ...result };
+}
+
+async function deleteCurrentVpsAccount(user) {
+  if (user?.role === 'driver') return deleteCurrentVpsDriverAccount(user);
+  requireRole(user, ['passenger']);
+  const result = await withTransaction(async (client) => {
+    const activeTrip = await client.query(
+      `SELECT id FROM trips
+        WHERE passenger_id = $1
+          AND status NOT IN ('completed', 'cancelled', 'no_drivers_available')
+        LIMIT 1 FOR UPDATE`,
+      [user.id],
+    );
+    if (activeTrip.rowCount) {
+      throw Object.assign(new Error('Cancela o finaliza tu viaje antes de eliminar la cuenta.'), { statusCode: 409 });
+    }
+    const tokenResult = await client.query('DELETE FROM device_tokens WHERE user_id=$1', [user.id]);
+    await client.query(
+      `UPDATE passenger_profiles SET phone='', credential_photo_url=NULL, updated_at=now()
+        WHERE user_id=$1`,
+      [user.id],
+    );
+    await deletePrivateObjectsForOwner(user.id);
+    await client.query(
+      `UPDATE users SET email=NULL, password_hash=NULL, display_name='Cuenta eliminada',
+          status='disabled', passenger_access_status='revoked', updated_at=now()
+        WHERE id=$1 AND role='passenger'`,
+      [user.id],
+    );
+    return { tokenCount: tokenResult.rowCount || 0 };
+  });
+  return { ok: true, deleted: true, authDeleted: true, ...result };
 }
 
 async function removePlace(user, id) {
@@ -510,6 +852,8 @@ async function register(body) {
     const created = inserted.rows[0];
     if (role === 'driver') {
       const plate = requiredString(body.plate, 'plate', { max: 20 }).toUpperCase();
+      const vehicleType = requiredString(body.vehicleType ?? 'Auto', 'vehicleType', { max: 40 });
+      const vehicleSeats = validateVehicleCapacity(vehicleType, body.vehicleSeats ?? 4);
       await client.query(
         `INSERT INTO drivers (id, phone, plate, vehicle_type, vehicle_seats)
          VALUES ($1, $2, $3, $4, $5)`,
@@ -517,8 +861,8 @@ async function register(body) {
           created.id,
           requiredString(body.phone ?? '', 'phone', { max: 30 }),
           plate,
-          body.vehicleType ?? 'Auto',
-          Number(body.vehicleSeats ?? 4),
+          vehicleType,
+          vehicleSeats,
         ],
       );
     }
@@ -542,7 +886,9 @@ async function login(body) {
   if (!pool) throw new Error('Database is not configured');
   const result = await pool.query(
     `SELECT u.id, u.role, u.email, u.password_hash, u.display_name, u.status,
-        u.dashboard_role, u.dashboard_sede_type, u.dashboard_sede_id, p.name AS sede_name
+        u.dashboard_role, u.dashboard_sede_type, u.dashboard_sede_id,
+        p.name AS sede_name, p.address AS sede_address,
+        p.latitude AS sede_lat, p.longitude AS sede_lng
      FROM users u LEFT JOIN places p ON p.id = u.dashboard_sede_id WHERE u.email = $1`,
     [email],
   );
@@ -553,6 +899,82 @@ async function login(body) {
     throw error;
   }
   return { token: signUser(user), user: publicUser(user) };
+}
+
+async function ensurePasswordResetTable() {
+  await pool.query(`CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id BIGSERIAL PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_hash ON password_reset_tokens(token_hash)');
+}
+
+async function requestPasswordReset(body) {
+  const email = requiredString(body.email, 'email', { max: 254 }).toLowerCase();
+  if (!config.resendApiKey || !config.mailFrom) {
+    throw Object.assign(new Error('La recuperación por correo aún no está configurada en el VPS.'), { statusCode: 503 });
+  }
+  await ensurePasswordResetTable();
+  const userResult = await pool.query(
+    `SELECT id, email FROM users WHERE lower(email)=lower($1) AND status='active'
+       AND role IN ('driver','passenger','dashboard') LIMIT 1`,
+    [email],
+  );
+  // Always return the same success response for unknown addresses.
+  if (!userResult.rowCount) return { ok: true };
+  const rawToken = randomBytes(32).toString('hex');
+  const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+  await pool.query(
+    `UPDATE password_reset_tokens SET used_at=now() WHERE user_id=$1 AND used_at IS NULL`,
+    [userResult.rows[0].id],
+  );
+  await pool.query(
+    `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+       VALUES ($1, $2, now() + interval '30 minutes')`,
+    [userResult.rows[0].id, tokenHash],
+  );
+  const resetUrl = `${config.publicApiBaseUrl}/reset-password?token=${encodeURIComponent(rawToken)}`;
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${config.resendApiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from: config.mailFrom,
+      to: [email],
+      subject: 'Restablece tu contraseña de APL Logistics',
+      html: `<p>Solicitaste cambiar tu contraseña de APL Logistics.</p><p><a href="${resetUrl}">Crear una contraseña nueva</a></p><p>El enlace vence en 30 minutos.</p>`,
+    }),
+  });
+  if (!response.ok) throw Object.assign(new Error('No se pudo enviar el correo de recuperación.'), { statusCode: 502 });
+  return { ok: true };
+}
+
+async function resetPassword(body) {
+  const token = requiredString(body.token, 'token', { min: 32, max: 128 });
+  const password = requiredString(body.password, 'password', { min: 8, max: 128 });
+  await ensurePasswordResetTable();
+  const tokenHash = createHash('sha256').update(token).digest('hex');
+  const passwordHash = await hashPassword(password);
+  const result = await withTransaction(async (client) => {
+    const found = await client.query(
+      `SELECT id, user_id FROM password_reset_tokens
+        WHERE token_hash=$1 AND used_at IS NULL AND expires_at > now() FOR UPDATE`,
+      [tokenHash],
+    );
+    if (!found.rowCount) throw Object.assign(new Error('El enlace de recuperación venció o ya fue usado.'), { statusCode: 400 });
+    await client.query(`UPDATE users SET password_hash=$1, updated_at=now() WHERE id=$2 AND status='active'`, [passwordHash, found.rows[0].user_id]);
+    await client.query(`UPDATE password_reset_tokens SET used_at=now() WHERE id=$1`, [found.rows[0].id]);
+    return { ok: true };
+  });
+  return result;
+}
+
+function resetPasswordPage(token = '') {
+  const safeToken = String(token).replace(/[^a-f0-9]/gi, '');
+  return `<!doctype html><meta charset="utf-8"><title>Restablecer contraseña</title><style>body{font:16px system-ui;max-width:420px;margin:48px auto;padding:0 20px}input,button{width:100%;padding:12px;margin:8px 0}button{cursor:pointer}</style><h1>Restablecer contraseña</h1><form id="f"><input id="p" type="password" minlength="8" placeholder="Nueva contraseña" required><button>Guardar</button></form><p id="m"></p><script>const t=${JSON.stringify(safeToken)};f.onsubmit=async e=>{e.preventDefault();const r=await fetch('/api/v1/auth/reset-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:t,password:p.value})});m.textContent=r.ok?'Contraseña actualizada. Ya puedes iniciar sesión.':((await r.json()).message||'No se pudo actualizar.');}</script>`;
 }
 
 function parseCoordinate(value, field, min, max) {
@@ -575,9 +997,41 @@ function parsePassengerCount(value) {
   return count;
 }
 
+const VEHICLE_PASSENGER_RANGES = Object.freeze({
+  Auto: [1, 4],
+  SUV: [5, 7],
+  'Mini van': [8, 17],
+  Van: [18, 20],
+  'Mini bus': [21, 38],
+  Bus: [39, 45],
+});
+
+export function validateVehicleCapacity(vehicleType, vehicleSeats) {
+  const range = VEHICLE_PASSENGER_RANGES[String(vehicleType || '').trim()];
+  const seats = Number(vehicleSeats);
+  if (!range || !Number.isInteger(seats) || seats < range[0] || seats > range[1]) {
+    const error = new Error('Tipo y capacidad del vehÃ­culo no son compatibles.');
+    error.statusCode = 400;
+    throw error;
+  }
+  return seats;
+}
+
 function ownedPrivateStorageUrl(value, prefix) {
   const raw = String(value ?? '').trim();
   return raw.startsWith(`${config.publicApiBaseUrl}/api/v1/storage/download/${encodeURIComponent(prefix)}`);
+}
+
+function dashboardDocumentUrl(value) {
+  const raw = String(value ?? '').trim();
+  const prefix = `${config.publicApiBaseUrl}/api/v1/storage/download/`;
+  if (!raw.startsWith(prefix)) return raw;
+  try {
+    const key = normalizeStorageKey(decodeURIComponent(raw.slice(prefix.length)));
+    return createPrivateStorageAccessUrl(key);
+  } catch (_) {
+    return '';
+  }
 }
 
 async function savePassengerProfile(user, body) {
@@ -627,8 +1081,7 @@ async function submitDriverApplication(user, body) {
   const vehicleBrand = requiredString(valueOrCurrent(body.vehicleBrand, 'vehicle_brand') ?? '', 'vehicleBrand', { max: 80 });
   const vehicleType = requiredString(valueOrCurrent(body.vehicleType, 'vehicle_type') ?? 'Auto', 'vehicleType', { max: 40 });
   const vehicleColor = requiredString(valueOrCurrent(body.vehicleColor, 'vehicle_color') ?? '', 'vehicleColor', { max: 60 });
-  const vehicleSeats = Number(valueOrCurrent(body.vehicleSeats, 'vehicle_seats') ?? 4);
-  if (!Number.isInteger(vehicleSeats) || vehicleSeats < 1 || vehicleSeats > 45) throw Object.assign(new Error('vehicleSeats invÃ¡lido.'), { statusCode: 400 });
+  const vehicleSeats = validateVehicleCapacity(vehicleType, valueOrCurrent(body.vehicleSeats, 'vehicle_seats') ?? 4);
   const docFields = ['profilePhotoUrl', 'dniDocUrl', 'dniFrontDocUrl', 'dniBackDocUrl', 'licenseDocUrl', 'soatDocUrl', 'circulationCardDocUrl', 'technicalReviewDocUrl', 'criminalRecordDocUrl', 'workCertificateDocUrl'];
   const docColumns = Object.fromEntries(docFields.map((field) => [field, field.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)]));
   const docs = {};
@@ -641,17 +1094,11 @@ async function submitDriverApplication(user, body) {
   if (!docs.dni_doc_url && !(docs.dni_front_doc_url && docs.dni_back_doc_url)) {
     throw Object.assign(new Error('Falta el DNI (PDF o anverso y reverso).'), { statusCode: 400 });
   }
-  const expiry = {
-    license_expires_at: Number(valueOrCurrent(body.licenseExpiresAt, 'license_expires_at') ?? 0),
-    soat_expires_at: Number(valueOrCurrent(body.soatExpiresAt, 'soat_expires_at') ?? 0),
-    technical_review_expires_at: Number(valueOrCurrent(body.technicalReviewExpiresAt, 'technical_review_expires_at') ?? 0),
-  };
-  for (const value of Object.values(expiry)) if (!Number.isFinite(value) || value <= Date.now()) throw Object.assign(new Error('Hay documentos vencidos o sin fecha.'), { statusCode: 400 });
   const age = body.age === undefined ? (current.age == null ? null : Number(current.age)) : Number(body.age);
   await withTransaction(async (client) => {
     await client.query('UPDATE users SET display_name=$1, updated_at=now() WHERE id=$2', [name, user.id]);
-    const columns = ['phone', 'plate', 'vehicle_brand', 'vehicle_type', 'vehicle_color', 'vehicle_seats', 'dni', 'age', ...Object.keys(docs), ...Object.keys(expiry)];
-    const values = [phone, plate, vehicleBrand, vehicleType, vehicleColor, vehicleSeats, dni, age, ...Object.values(docs), ...Object.values(expiry), user.id];
+    const columns = ['phone', 'plate', 'vehicle_brand', 'vehicle_type', 'vehicle_color', 'vehicle_seats', 'dni', 'age', ...Object.keys(docs)];
+    const values = [phone, plate, vehicleBrand, vehicleType, vehicleColor, vehicleSeats, dni, age, ...Object.values(docs), user.id];
     const assignments = columns.map((column, index) => `${column}=$${index + 1}`).join(', ');
     await client.query(`UPDATE drivers SET ${assignments}, approval_status='pending_review', application_submitted_at=now(), updated_at=now() WHERE id=$${values.length}`, values);
   });
@@ -675,6 +1122,15 @@ function publicTrip(row) {
     id: row.id,
     passengerId: row.passenger_id,
     driverId: row.driver_id,
+    // The passenger's trip screen needs the assigned driver's contact and
+    // vehicle details immediately, before its separate location poll runs.
+    driverName: row.driver_name || '',
+    driverPhone: row.driver_phone || '',
+    driverPlate: row.driver_plate || '',
+    vehicleBrand: row.driver_vehicle_brand || '',
+    vehicleType: row.driver_vehicle_type || '',
+    vehicleColor: row.driver_vehicle_color || '',
+    vehicleSeats: row.driver_vehicle_seats ?? null,
     status: row.status,
     pickupAddress: row.origin_address,
     pickupLat: Number(row.origin_lat),
@@ -683,6 +1139,8 @@ function publicTrip(row) {
     destinationLat: Number(row.destination_lat),
     destinationLng: Number(row.destination_lng),
     passengerCount: row.passenger_count ?? 1,
+    passengerName: row.passenger_name || '',
+    passengerPhone: row.passenger_phone || '',
     scheduledPickupAt: millis(row.scheduled_pickup_at),
     requestedAt: millis(row.created_at),
     updatedAt: millis(row.updated_at),
@@ -702,7 +1160,16 @@ const tripSelect = `
     destination_address, destination_lat, destination_lng,
     passenger_count, scheduled_pickup_at, created_at, updated_at,
     completed_at, accepted_at, in_progress_at,
-    cancelled_by, cancel_reason, rating, feedback_comment
+    cancelled_by, cancel_reason, rating, feedback_comment,
+    (SELECT u.display_name FROM users u WHERE u.id = trips.driver_id) AS driver_name,
+    (SELECT d.phone FROM drivers d WHERE d.id = trips.driver_id) AS driver_phone,
+    (SELECT d.plate FROM drivers d WHERE d.id = trips.driver_id) AS driver_plate,
+    (SELECT d.vehicle_brand FROM drivers d WHERE d.id = trips.driver_id) AS driver_vehicle_brand,
+    (SELECT d.vehicle_type FROM drivers d WHERE d.id = trips.driver_id) AS driver_vehicle_type,
+    (SELECT d.vehicle_color FROM drivers d WHERE d.id = trips.driver_id) AS driver_vehicle_color,
+    (SELECT d.vehicle_seats FROM drivers d WHERE d.id = trips.driver_id) AS driver_vehicle_seats,
+    (SELECT u.display_name FROM users u WHERE u.id = trips.passenger_id) AS passenger_name,
+    (SELECT pp.phone FROM passenger_profiles pp WHERE pp.user_id = trips.passenger_id) AS passenger_phone
   FROM trips`;
 
 async function findTrip(tripId) {
@@ -711,19 +1178,47 @@ async function findTrip(tripId) {
   return result.rows[0] ?? null;
 }
 
+export function buildAvailableDriverQuery(tripId, passengerCount, preferredDriverId = null) {
+  const preferredClause = preferredDriverId ? 'AND d.id = $3::uuid' : '';
+  return {
+    text: `WITH requested_trip AS (
+             SELECT origin_lat, origin_lng
+               FROM trips
+              WHERE id = $1
+           )
+           SELECT d.id
+             FROM drivers d
+             CROSS JOIN requested_trip t
+             LEFT JOIN driver_locations l
+               ON l.driver_id = d.id
+              AND l.recorded_at >= now() - interval '2 minutes'
+            WHERE d.approval_status = 'approved'
+              AND d.availability_status = 'online'
+              AND d.current_trip_id IS NULL
+              AND d.vehicle_seats >= $2
+              ${preferredClause}
+            ORDER BY
+              d.vehicle_seats ASC,
+              CASE WHEN l.latitude IS NULL OR l.longitude IS NULL THEN 1 ELSE 0 END,
+              CASE WHEN l.latitude IS NULL OR l.longitude IS NULL THEN NULL ELSE
+                6371000 * acos(LEAST(1, GREATEST(-1,
+                  cos(radians(t.origin_lat)) * cos(radians(l.latitude)) *
+                    cos(radians(l.longitude) - radians(t.origin_lng)) +
+                  sin(radians(t.origin_lat)) * sin(radians(l.latitude))
+                )))
+              END ASC,
+              d.updated_at ASC
+            FOR UPDATE OF d SKIP LOCKED
+            LIMIT 1`,
+    values: preferredDriverId
+      ? [tripId, passengerCount, preferredDriverId]
+      : [tripId, passengerCount],
+  };
+}
+
 async function assignAvailableDriver(client, tripId, passengerCount) {
-  const driverResult = await client.query(
-    `SELECT d.id
-       FROM drivers d
-      WHERE d.approval_status = 'approved'
-        AND d.availability_status = 'online'
-        AND d.current_trip_id IS NULL
-        AND d.vehicle_seats >= $1
-      ORDER BY d.updated_at ASC
-      FOR UPDATE SKIP LOCKED
-      LIMIT 1`,
-    [passengerCount],
-  );
+  const assignmentQuery = buildAvailableDriverQuery(tripId, passengerCount);
+  const driverResult = await client.query(assignmentQuery.text, assignmentQuery.values);
   const driver = driverResult.rows[0];
   if (!driver) {
     await client.query(
@@ -759,18 +1254,12 @@ async function assignPendingTripForDriver(client, preferredDriverId = null) {
   );
   const trip = pending.rows[0];
   if (!trip) return null;
-  const driverResult = await client.query(
-    `SELECT d.id
-       FROM drivers d
-      WHERE d.id = COALESCE($1::uuid, d.id)
-        AND d.approval_status = 'approved'
-        AND d.availability_status = 'online'
-        AND d.current_trip_id IS NULL
-        AND d.vehicle_seats >= $2
-      FOR UPDATE SKIP LOCKED
-      LIMIT 1`,
-    [preferredDriverId, trip.passenger_count ?? 1],
+  const assignmentQuery = buildAvailableDriverQuery(
+    trip.id,
+    trip.passenger_count ?? 1,
+    preferredDriverId,
   );
+  const driverResult = await client.query(assignmentQuery.text, assignmentQuery.values);
   const driverId = driverResult.rows[0]?.id;
   if (!driverId) return null;
   await client.query(
@@ -833,6 +1322,94 @@ async function createTrip(user, body) {
   return trip;
 }
 
+async function createCoordinatorTrip(user, body) {
+  requireDashboardCoordinator(user);
+  const place = await getCoordinatorPlace(user);
+  const destinationAddress = requiredString(body.destinationAddress, 'destinationAddress', { max: 255 });
+  const destinationLat = parseCoordinate(body.destinationLat, 'destinationLat', -90, 90);
+  const destinationLng = parseCoordinate(body.destinationLng, 'destinationLng', -180, 180);
+  const passengerCount = parsePassengerCount(body.passengerCount);
+  const trip = await withTransaction(async (client) => {
+    const inserted = await client.query(
+      `INSERT INTO trips (
+        passenger_id, status, origin_address, origin_lat, origin_lng,
+        destination_address, destination_lat, destination_lng, passenger_count
+      ) VALUES ($1, 'searching', $2, $3, $4, $5, $6, $7, $8)
+      RETURNING id`,
+      [user.id, place.address, place.lat, place.lng, destinationAddress,
+        destinationLat, destinationLng, passengerCount],
+    );
+    const tripId = inserted.rows[0].id;
+    await assignAvailableDriver(client, tripId, passengerCount);
+    const result = await client.query(`${tripSelect} WHERE id = $1`, [tripId]);
+    const value = publicTrip(result.rows[0]);
+    // These values are display-only for a coordinator request. The source of
+    // truth remains the coordinator account and the trip's passenger count.
+    value.passengerName = String(body.passengerName || '').trim().slice(0, 120) || user.display_name || 'Pasajero de sede';
+    value.passengerPhone = String(body.passengerPhone || '').trim().slice(0, 40);
+    return value;
+  });
+  if (trip.driverId) {
+    await notifyVpsDevices([trip.driverId], 'trip_assigned', {
+      tripId: trip.id,
+      status: trip.status,
+      pickupAddress: trip.pickupAddress,
+      destinationAddress: trip.destinationAddress,
+      route: 'active-trip',
+      deepLink: `driver://trip/${trip.id}`,
+    });
+  }
+  return trip;
+}
+
+async function listCoordinatorTrips(user) {
+  requireDashboardCoordinator(user);
+  const result = await pool.query(
+    `${tripSelect} WHERE passenger_id = $1 ORDER BY created_at DESC LIMIT 200`,
+    [user.id],
+  );
+  return result.rows.map(publicTrip);
+}
+
+async function getCoordinatorTripDetail(user, tripId) {
+  requireDashboardCoordinator(user);
+  const trip = await findTrip(tripId);
+  if (!trip || trip.passenger_id !== user.id) {
+    const error = new Error('Viaje no encontrado.');
+    error.statusCode = 404;
+    throw error;
+  }
+  let driverLocation = null;
+  if (trip.driver_id) {
+    const result = await pool.query(
+      `SELECT latitude, longitude, accuracy_m, recorded_at
+         FROM driver_locations WHERE driver_id = $1`,
+      [trip.driver_id],
+    );
+    const row = result.rows[0];
+    if (row && row.latitude !== null && row.longitude !== null) {
+      driverLocation = {
+        lat: Number(row.latitude),
+        lng: Number(row.longitude),
+        accuracyM: row.accuracy_m === null ? null : Number(row.accuracy_m),
+        lastUpdate: new Date(row.recorded_at).getTime(),
+      };
+    }
+  }
+  return { trip: publicTrip(trip), driverLocation };
+}
+
+async function cancelCoordinatorTrip(user, tripId, body) {
+  requireDashboardCoordinator(user);
+  const trip = await findTrip(tripId);
+  if (!trip || trip.passenger_id !== user.id) {
+    const error = new Error('Viaje no encontrado.');
+    error.statusCode = 404;
+    throw error;
+  }
+  return cancelTrip(user, tripId, body || {});
+}
+
 function canReadTrip(user, trip) {
   return user.role === 'dashboard' || trip.passenger_id === user.id || trip.driver_id === user.id;
 }
@@ -860,6 +1437,50 @@ function isDashboardAdmin(user) {
   return String(user?.dashboard_role || '').toUpperCase() === 'ADMIN';
 }
 
+export function isDashboardCoordinator(user) {
+  return user?.role === 'dashboard'
+    && String(user?.dashboard_role || '').toUpperCase() === 'COORDINATOR';
+}
+
+function requireDashboardCoordinator(user) {
+  requireRole(user, ['dashboard']);
+  if (!isDashboardCoordinator(user)) {
+    const error = new Error('Solo un coordinador puede gestionar solicitudes de sede.');
+    error.statusCode = 403;
+    throw error;
+  }
+}
+
+async function getCoordinatorPlace(user) {
+  const type = String(user.dashboard_sede_type || '').trim();
+  const category = ['hotel', 'hotels'].includes(type) ? 'hotels'
+    : ['sportVenue', 'sportVenues'].includes(type) ? 'sportVenues' : '';
+  if (!user.dashboard_sede_id || !category) {
+    const error = new Error('La cuenta de coordinador no tiene una sede válida.');
+    error.statusCode = 403;
+    throw error;
+  }
+  const result = await pool.query(
+    `SELECT id, category, name, address, latitude, longitude
+       FROM places WHERE id = $1 AND category = $2`,
+    [user.dashboard_sede_id, category],
+  );
+  const place = result.rows[0];
+  if (!place || !Number.isFinite(Number(place.latitude)) || !Number.isFinite(Number(place.longitude))) {
+    const error = new Error('La sede del coordinador no tiene ubicación configurada.');
+    error.statusCode = 400;
+    throw error;
+  }
+  return {
+    id: place.id,
+    type: place.category === 'hotels' ? 'hotel' : 'sportVenue',
+    name: place.name,
+    address: place.address || place.name,
+    lat: Number(place.latitude),
+    lng: Number(place.longitude),
+  };
+}
+
 // Firebase UIDs are not UUIDs, while VPS users use UUID primary keys. Keep
 // legacy Firebase dashboard accounts fully usable for alert/incident actions
 // without attempting to cast their UID into a PostgreSQL UUID foreign key.
@@ -877,6 +1498,13 @@ function requireDashboardAdmin(user) {
     error.statusCode = 403;
     throw error;
   }
+}
+
+// A stale GPS sample is a signal problem, not a shift transition. Keeping
+// this decision pure makes the invariant explicit and testable.
+export function staleDriverOutcome(availabilityStatus) {
+  if (availabilityStatus !== 'online') return null;
+  return { availabilityStatus: 'online', alertReason: 'HEARTBEAT' };
 }
 
 async function recordDriverConnectionEvent(driverId, status, reason = null, at = new Date()) {
@@ -929,18 +1557,24 @@ export async function detectStaleDrivers({ now = new Date(), timeoutMs = 90_000 
       ORDER BY d.id`,
     [cutoff],
   );
-  let disconnected = 0;
+  let alerted = 0;
   for (const row of result.rows) {
-    const updated = await pool.query(
-      `UPDATE drivers SET availability_status='offline', updated_at=now()
-        WHERE id=$1 AND availability_status='online' RETURNING id`,
+    // Una falta temporal de GPS no es una decisión del conductor. Mantener
+    // availability_status='online' conserva el turno activo; el dashboard
+    // lo pinta como señal suspendida y muestra la alerta HEARTBEAT. Solo el
+    // endpoint de disponibilidad con online=false puede terminar el turno.
+    if (!staleDriverOutcome('online')) continue;
+    const openAlert = await pool.query(
+      `SELECT 1 FROM operation_alerts
+        WHERE driver_id=$1 AND status='OPEN' AND reason='HEARTBEAT'
+        LIMIT 1`,
       [row.id],
     );
-    if (!updated.rowCount) continue;
-    await recordDriverConnectionEvent(row.id, 'offline', 'HEARTBEAT', now);
-    disconnected += 1;
+    if (openAlert.rowCount) continue;
+    const alert = await recordDriverConnectionEvent(row.id, 'offline', 'HEARTBEAT', now);
+    if (alert) alerted += 1;
   }
-  return disconnected;
+  return alerted;
 }
 
 function publicConnectionEvent(row) {
@@ -998,12 +1632,21 @@ async function dashboardOverview(user) {
   const [driversResult, tripsResult] = await Promise.all([
     pool.query(`
       SELECT d.id, u.display_name, u.email, u.status AS user_status,
-        d.approval_status, d.phone, d.plate, d.vehicle_type, d.vehicle_seats,
-        d.availability_status, d.current_trip_id,
+        d.approval_status, d.phone, d.plate, d.age, d.vehicle_brand,
+        d.vehicle_type, d.vehicle_color, d.vehicle_seats,
+        d.profile_photo_url, d.dni_doc_url, d.dni_front_doc_url, d.dni_back_doc_url,
+        d.license_doc_url, d.soat_doc_url, d.circulation_card_doc_url,
+        d.technical_review_doc_url, d.criminal_record_doc_url, d.work_certificate_doc_url,
+        d.license_expires_at, d.soat_expires_at, d.technical_review_expires_at,
+        d.application_submitted_at, d.reviewed_at, d.reviewed_by,
+        d.rejection_reason, d.rejection_field_keys, d.suspended,
+        d.suspension_reason, d.suspended_at, d.suspended_by,
+        d.availability_status, d.current_trip_id, d.assigned_place,
         l.latitude, l.longitude, l.accuracy_m, l.recorded_at
       FROM drivers d
       JOIN users u ON u.id = d.id
       LEFT JOIN driver_locations l ON l.driver_id = d.id
+      WHERE u.status = 'active'
       ORDER BY u.display_name ASC, d.id ASC`),
     pool.query(`${tripSelect} ORDER BY created_at DESC LIMIT 200`),
   ]);
@@ -1018,10 +1661,36 @@ async function dashboardOverview(user) {
     approvalStatus: row.approval_status,
     phone: row.phone,
     plate: row.plate,
+    age: row.age == null ? null : Number(row.age),
+    vehicleBrand: row.vehicle_brand || '',
     vehicleType: row.vehicle_type,
+    vehicleColor: row.vehicle_color || '',
     vehicleSeats: row.vehicle_seats,
+    profilePhotoUrl: dashboardDocumentUrl(row.profile_photo_url),
+    dniDocUrl: dashboardDocumentUrl(row.dni_doc_url),
+    dniFrontDocUrl: dashboardDocumentUrl(row.dni_front_doc_url),
+    dniBackDocUrl: dashboardDocumentUrl(row.dni_back_doc_url),
+    licenseDocUrl: dashboardDocumentUrl(row.license_doc_url),
+    soatDocUrl: dashboardDocumentUrl(row.soat_doc_url),
+    circulationCardDocUrl: dashboardDocumentUrl(row.circulation_card_doc_url),
+    technicalReviewDocUrl: dashboardDocumentUrl(row.technical_review_doc_url),
+    criminalRecordDocUrl: dashboardDocumentUrl(row.criminal_record_doc_url),
+    workCertificateDocUrl: dashboardDocumentUrl(row.work_certificate_doc_url),
+    licenseExpiresAt: row.license_expires_at == null ? null : Number(row.license_expires_at),
+    soatExpiresAt: row.soat_expires_at == null ? null : Number(row.soat_expires_at),
+    technicalReviewExpiresAt: row.technical_review_expires_at == null ? null : Number(row.technical_review_expires_at),
+    documentsSubmittedAt: row.application_submitted_at ? new Date(row.application_submitted_at).getTime() : null,
+    reviewedAt: row.reviewed_at == null ? null : Number(row.reviewed_at),
+    reviewedBy: row.reviewed_by || '',
+    rejectionReason: row.rejection_reason || '',
+    rejectionFieldKeys: row.rejection_field_keys || '',
+    suspended: row.suspended === true,
+    suspensionReason: row.suspension_reason || '',
+    suspendedAt: row.suspended_at == null ? null : Number(row.suspended_at),
+    suspendedBy: row.suspended_by || '',
     availabilityStatus: row.availability_status,
     currentTripId: row.current_trip_id,
+    assignedPlace: row.assigned_place || null,
     currentTrip: row.current_trip_id ? tripById.get(row.current_trip_id) ?? null : null,
     lat: row.latitude === null ? null : Number(row.latitude),
     lng: row.longitude === null ? null : Number(row.longitude),
@@ -1126,7 +1795,7 @@ async function setDriverAvailability(user, body) {
     ? await withTransaction((client) => assignPendingTripForDriver(client, user.id))
     : null;
   if (assignment) {
-    await notifyVpsDevices([user.id], 'trip_assigned', {
+    await notifyVpsDevices([assignment.driverId], 'trip_assigned', {
       tripId: assignment.id,
       status: assignment.status,
       pickupAddress: assignment.pickupAddress,
@@ -1157,7 +1826,25 @@ async function updateDriverLocation(user, body) {
        recorded_at = now()`,
     [user.id, latitude, longitude, accuracyM],
   );
+  // El siguiente heartbeat recupera la señal sin tocar el turno. Cerrar la
+  // alerta solo cuando llega una ubicación nueva evita falsos cierres y
+  // deja intacta la desconexión manual.
+  await pool.query(
+    `UPDATE operation_alerts
+        SET status='CLOSED', acknowledged_at=now()
+      WHERE driver_id=$1 AND status='OPEN' AND reason='HEARTBEAT'`,
+    [user.id],
+  );
   return { driverId: user.id, latitude, longitude, accuracyM, recordedAt: Date.now() };
+}
+
+async function driverHeartbeat(user, body) {
+  requireRole(user, ['driver']);
+  // Este endpoint confirma que la app sigue viva, pero nunca escribe una
+  // coordenada antigua en driver_locations. Solo updateDriverLocation puede
+  // renovar el GPS y cerrar una alerta de señal perdida.
+  await pool.query('UPDATE drivers SET updated_at=now() WHERE id=$1', [user.id]);
+  return { driverId: user.id, heartbeatAt: Date.now() };
 }
 
 async function getDriverMe(user) {
@@ -1165,6 +1852,7 @@ async function getDriverMe(user) {
   const result = await pool.query(
     `SELECT d.id, d.approval_status, d.phone, d.plate, d.vehicle_type,
        d.vehicle_seats, d.availability_status, d.current_trip_id,
+       d.assigned_place,
        l.latitude, l.longitude, l.accuracy_m, l.recorded_at
        FROM drivers d LEFT JOIN driver_locations l ON l.driver_id = d.id
       WHERE d.id = $1`,
@@ -1185,6 +1873,7 @@ async function getDriverMe(user) {
     vehicleSeats: row.vehicle_seats,
     availabilityStatus: row.availability_status,
     currentTripId: row.current_trip_id,
+    assignedPlace: row.assigned_place || null,
     location: row.latitude === null ? null : {
       latitude: Number(row.latitude), longitude: Number(row.longitude),
       accuracyM: row.accuracy_m === null ? null : Number(row.accuracy_m),
@@ -1286,6 +1975,55 @@ async function advanceDriverTrip(user, tripId, body) {
     deepLink: trip.status === 'completed' ? `passenger://rate-trip/${trip.id}` : `passenger://trip/${trip.id}`,
     },
   );
+  return trip;
+}
+
+export function validateDestinationUpdate(body) {
+  const destinationAddress = requiredString(body.destinationAddress, 'destinationAddress', { max: 255 });
+  const destinationLat = parseCoordinate(body.destinationLat, 'destinationLat', -90, 90);
+  const destinationLng = parseCoordinate(body.destinationLng, 'destinationLng', -180, 180);
+  return { destinationAddress, destinationLat, destinationLng };
+}
+
+export function canUpdateDestination(status) {
+  return ['scheduled', 'searching', 'accepted', 'arrived_at_pickup', 'in_progress'].includes(status);
+}
+
+async function updateTripDestination(user, tripId, body) {
+  assertPassengerAccess(user);
+  const destination = validateDestinationUpdate(body);
+  const trip = await withTransaction(async (client) => {
+    const result = await client.query(`${tripSelect} WHERE id = $1 FOR UPDATE`, [tripId]);
+    const current = result.rows[0];
+    if (!current || current.passenger_id !== user.id) {
+      const error = new Error('Viaje no encontrado.');
+      error.statusCode = 404;
+      throw error;
+    }
+    if (!canUpdateDestination(current.status)) {
+      const error = new Error('El destino ya no se puede modificar porque el viaje terminó.');
+      error.statusCode = 409;
+      throw error;
+    }
+    await client.query(
+      `UPDATE trips SET destination_address=$1, destination_lat=$2, destination_lng=$3, updated_at=now()
+         WHERE id=$4`,
+      [destination.destinationAddress, destination.destinationLat, destination.destinationLng, tripId],
+    );
+    const updated = await client.query(`${tripSelect} WHERE id = $1`, [tripId]);
+    return publicTrip(updated.rows[0]);
+  });
+  if (trip.driverId) {
+    await notifyVpsDevices([trip.driverId], 'trip_updated', {
+      tripId: trip.id,
+      status: trip.status,
+      destinationAddress: trip.destinationAddress,
+      destinationLat: trip.destinationLat,
+      destinationLng: trip.destinationLng,
+      route: 'active-trip',
+      deepLink: `driver://trip/${trip.id}`,
+    });
+  }
   return trip;
 }
 
@@ -1650,6 +2388,24 @@ export function createApp({ health = databaseHealth } = {}) {
         return;
       }
 
+      const storageTokenMatch = url.pathname.match(/^\/api\/v1\/storage\/token\/(.+)$/);
+      if (req.method === 'GET' && storageTokenMatch) {
+        const key = normalizeStorageKey(decodeURIComponent(storageTokenMatch[1]));
+        if (!verifyPrivateStorageAccessToken(key, url.searchParams.get('token'))) {
+          return json(res, 401, { error: 'Enlace de archivo vencido o inválido.' });
+        }
+        const object = await getStorageObject(key);
+        res.writeHead(200, {
+          'content-type': object.ContentType || 'application/octet-stream',
+          'content-length': object.ContentLength,
+          'cache-control': 'private, max-age=60',
+          'access-control-allow-origin': 'https://apl.tucomprass.com',
+          'etag': object.ETag || '',
+        });
+        object.Body.pipe(res);
+        return;
+      }
+
       // Public, cache-free configuration for the mobile apps. Operational
       // data (trips/GPS) never comes from this endpoint; it is only the small
       // set of places, support and update values formerly kept in RTDB.
@@ -1690,6 +2446,26 @@ export function createApp({ health = databaseHealth } = {}) {
         return json(res, 200, { place: await savePlace(user, await readJson(req)) });
       }
 
+      const driverManageMatch = url.pathname.match(/^\/api\/v1\/dashboard\/drivers\/([^/]+)\/manage$/);
+      if (req.method === 'POST' && driverManageMatch) {
+        const user = await authenticate(req);
+        return json(res, 200, await manageVpsDriver(
+          user,
+          decodeURIComponent(driverManageMatch[1]),
+          await readJson(req),
+        ));
+      }
+
+      const driverPlaceMatch = url.pathname.match(/^\/api\/v1\/dashboard\/drivers\/([^/]+)\/place$/);
+      if (req.method === 'POST' && driverPlaceMatch) {
+        const user = await authenticate(req);
+        return json(res, 200, await assignDriverPlace(
+          user,
+          decodeURIComponent(driverPlaceMatch[1]),
+          await readJson(req),
+        ));
+      }
+
       const placeDeleteMatch = url.pathname.match(/^\/api\/v1\/dashboard\/places\/([^/]+)$/);
       if (req.method === 'DELETE' && placeDeleteMatch) {
         const user = await authenticate(req);
@@ -1718,10 +2494,29 @@ export function createApp({ health = databaseHealth } = {}) {
         return json(res, 200, await login(await readJson(req)));
       }
 
+      if (req.method === 'POST' && url.pathname === '/api/v1/auth/request-password-reset') {
+        return json(res, 200, await requestPasswordReset(await readJson(req)));
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/v1/auth/reset-password') {
+        return json(res, 200, await resetPassword(await readJson(req)));
+      }
+
+      if (req.method === 'GET' && url.pathname === '/reset-password') {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(resetPasswordPage(url.searchParams.get('token')));
+        return;
+      }
+
       if (req.method === 'GET' && url.pathname === '/api/v1/auth/me') {
         const user = await authenticate(req);
         requireRole(user, ['passenger', 'driver', 'dashboard']);
         return json(res, 200, { user: publicUser(user) });
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/v1/auth/delete-account') {
+        const user = await authenticate(req);
+        return json(res, 200, await deleteCurrentVpsAccount(user));
       }
 
       if (req.method === 'GET' && url.pathname === '/api/v1/drivers/me') {
@@ -1739,6 +2534,11 @@ export function createApp({ health = databaseHealth } = {}) {
         return json(res, 200, await updateDriverLocation(user, await readJson(req)));
       }
 
+      if (req.method === 'POST' && url.pathname === '/api/v1/drivers/heartbeat') {
+        const user = await authenticate(req);
+        return json(res, 200, await driverHeartbeat(user, await readJson(req)));
+      }
+
       if (req.method === 'POST' && url.pathname === '/api/v1/device-tokens') {
         const user = await authenticate(req);
         return json(res, 200, await registerDeviceToken(user, await readJson(req)));
@@ -1747,6 +2547,28 @@ export function createApp({ health = databaseHealth } = {}) {
       if (req.method === 'GET' && url.pathname === '/api/v1/dashboard/overview') {
         const user = await authenticate(req);
         return json(res, 200, await dashboardOverview(user));
+      }
+
+      if (req.method === 'GET' && url.pathname === '/api/v1/dashboard/coordinator/trips') {
+        const user = await authenticate(req);
+        return json(res, 200, { trips: await listCoordinatorTrips(user) });
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/v1/dashboard/coordinator/trips') {
+        const user = await authenticate(req);
+        return json(res, 201, { trip: await createCoordinatorTrip(user, await readJson(req)) });
+      }
+
+      const coordinatorTripMatch = url.pathname.match(/^\/api\/v1\/dashboard\/coordinator\/trips\/([^/]+)(?:\/(cancel))?$/);
+      if (coordinatorTripMatch) {
+        const user = await authenticate(req);
+        const tripId = decodeURIComponent(coordinatorTripMatch[1]);
+        if (req.method === 'GET' && !coordinatorTripMatch[2]) {
+          return json(res, 200, await getCoordinatorTripDetail(user, tripId));
+        }
+        if (req.method === 'POST' && coordinatorTripMatch[2] === 'cancel') {
+          return json(res, 200, { trip: await cancelCoordinatorTrip(user, tripId, await readJson(req)) });
+        }
       }
 
       const alertMatch = url.pathname.match(/^\/api\/v1\/dashboard\/alerts\/([^/]+)$/);
@@ -1778,7 +2600,7 @@ export function createApp({ health = databaseHealth } = {}) {
         return json(res, 201, { trip: await createTrip(user, await readJson(req)) });
       }
 
-      const tripMatch = url.pathname.match(/^\/api\/v1\/trips\/([^/]+)(?:\/(cancel|retry|action|feedback))?$/);
+      const tripMatch = url.pathname.match(/^\/api\/v1\/trips\/([^/]+)(?:\/(cancel|retry|action|feedback|destination))?$/);
       if (tripMatch) {
         const tripId = decodeURIComponent(tripMatch[1]);
         const operation = tripMatch[2];
@@ -1798,6 +2620,9 @@ export function createApp({ health = databaseHealth } = {}) {
         }
         if (req.method === 'POST' && operation === 'retry') {
           return json(res, 200, { trip: await retryTrip(user, tripId) });
+        }
+        if (req.method === 'POST' && operation === 'destination') {
+          return json(res, 200, { trip: await updateTripDestination(user, tripId, await readJson(req)) });
         }
         if (req.method === 'POST' && operation === 'action') {
           return json(res, 200, { trip: await advanceDriverTrip(user, tripId, await readJson(req)) });

@@ -123,9 +123,8 @@ class AuthService {
 
   static Future<void> sendPasswordResetEmail(String email) async {
     if (AppConfig.useVpsBackend) {
-      throw Exception(
-        'El recupero de contrasena del VPS aun no esta habilitado; usa Firebase en esta version.',
-      );
+      await VpsApiClient.requestPasswordReset(email: email);
+      return;
     }
     final normalizedEmail = email.trim();
     if (normalizedEmail.isEmpty || !normalizedEmail.contains('@')) {
@@ -178,7 +177,10 @@ class AuthService {
 
   static Future<void> deleteCurrentAccount() async {
     if (AppConfig.useVpsBackend) {
-      throw Exception('La eliminacion de cuentas VPS aun no esta habilitada.');
+      final session = await currentSession();
+      await VpsApiClient.deleteAccount(token: session['idToken'].toString());
+      await logout();
+      return;
     }
     final session = await currentSession();
     final response = await http.post(

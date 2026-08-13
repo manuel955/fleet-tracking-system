@@ -84,10 +84,13 @@ export async function authenticate(request) {
     const claims = jwt.verify(token, config.jwtSecret);
     if (typeof claims !== 'object' || typeof claims.sub !== 'string') return null;
     const result = await pool.query(
-      `SELECT id, role, email, display_name, status,
-          passenger_access_invite_id, passenger_access_status, passenger_access_expires_at,
-          dashboard_role, dashboard_sede_type, dashboard_sede_id
-       FROM users WHERE id = $1`,
+      `SELECT u.id, u.role, u.email, u.display_name, u.status,
+          u.passenger_access_invite_id, u.passenger_access_status, u.passenger_access_expires_at,
+          u.dashboard_role, u.dashboard_sede_type, u.dashboard_sede_id,
+          p.name AS sede_name, p.address AS sede_address,
+          p.latitude AS sede_lat, p.longitude AS sede_lng
+       FROM users u LEFT JOIN places p ON p.id = u.dashboard_sede_id
+      WHERE u.id = $1`,
       [claims.sub],
     );
     const user = result.rows[0];
@@ -113,5 +116,8 @@ export function publicUser(user) {
     sedeType: user.dashboard_sede_type ?? null,
     sedeId: user.dashboard_sede_id ?? null,
     sedeName: user.sede_name ?? null,
+    sedeAddress: user.sede_address ?? null,
+    sedeLat: user.sede_lat == null ? null : Number(user.sede_lat),
+    sedeLng: user.sede_lng == null ? null : Number(user.sede_lng),
   };
 }

@@ -38,7 +38,6 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
   String _phonePrefix = AppConfig.defaultPhoneCountryCode;
 
   final Map<String, List<PickedDocument>> _documents = {};
-  final Map<String, DateTime> _documentExpiries = {};
   bool _busy = false;
   bool _acceptedPrivacy = false;
   String? _error;
@@ -106,12 +105,6 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
     ('workCertificate', 'Certificado único laboral', true),
   ];
 
-  static const _expiryLabels = {
-    'license': 'Vencimiento de la licencia',
-    'soat': 'Vencimiento del SOAT',
-    'technicalReview': 'Vencimiento de la revisión técnica',
-  };
-
   @override
   void dispose() {
     _emailCtrl.dispose();
@@ -145,14 +138,6 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
           'Todos los documentos son obligatorios. Falta: ${missingDocuments.join(', ')}.');
       return;
     }
-    final missingExpiries = _expiryLabels.entries
-        .where((entry) => !_documentExpiries.containsKey(entry.key))
-        .map((entry) => entry.value)
-        .toList();
-    if (missingExpiries.isNotEmpty) {
-      setState(() => _error = 'Selecciona: ${missingExpiries.join(', ')}.');
-      return;
-    }
     if (!_isDniSelectionValid) {
       setState(() => _error = 'El DNI requiere 2 fotos o 1 solo PDF.');
       return;
@@ -182,10 +167,6 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
         vehicleColor: _vehicleColorCtrl.text.trim(),
         vehicleSeats: int.parse(_vehicleSeatsCtrl.text.trim()),
         documents: _documents,
-        documentExpiries: {
-          for (final entry in _documentExpiries.entries)
-            entry.key: entry.value.millisecondsSinceEpoch,
-        },
       );
       widget.onDone();
     } catch (e) {
@@ -209,48 +190,6 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
     return dni.length == 2 && dni.every((file) => file.extension != 'pdf');
   }
 
-  Future<void> _pickExpiry(String key) async {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final selected = await showDatePicker(
-      context: context,
-      initialDate: _documentExpiries[key] ?? today.add(const Duration(days: 1)),
-      firstDate: today.add(const Duration(days: 1)),
-      lastDate: DateTime(now.year + 15, 12, 31),
-      helpText: _expiryLabels[key],
-    );
-    if (selected == null || !mounted) return;
-    setState(() {
-      _documentExpiries[key] = DateTime(
-        selected.year,
-        selected.month,
-        selected.day,
-        23,
-        59,
-        59,
-      );
-    });
-  }
-
-  Widget _expiryPicker(String key) {
-    final selected = _documentExpiries[key];
-    final value = selected == null
-        ? 'Seleccionar fecha'
-        : '${selected.day.toString().padLeft(2, '0')}/'
-            '${selected.month.toString().padLeft(2, '0')}/${selected.year}';
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: OutlinedButton.icon(
-        onPressed: _busy ? null : () => _pickExpiry(key),
-        icon: const Icon(Icons.event_outlined),
-        label: Align(
-          alignment: Alignment.centerLeft,
-          child: Text('${_expiryLabels[key]}: $value'),
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -270,7 +209,7 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
               ),
               const SizedBox(height: 6),
               const Text(
-                'Completa tus datos y todos los documentos. Para el DNI sube 2 fotos o 1 solo PDF. La licencia, el SOAT y la revisión técnica deben estar vigentes.',
+                'Completa tus datos y todos los documentos. Para el DNI sube 2 fotos o 1 solo PDF.',
                 style: TextStyle(color: Colors.black54, fontSize: 14.5),
               ),
               const SizedBox(height: 28),
@@ -462,7 +401,6 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
                         });
                       },
                     ),
-                    if (_expiryLabels.containsKey(d.$1)) _expiryPicker(d.$1),
                   ]),
               CheckboxListTile(
                 contentPadding: EdgeInsets.zero,

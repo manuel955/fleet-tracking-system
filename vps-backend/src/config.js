@@ -27,6 +27,8 @@ export const config = Object.freeze({
   firebaseDashboardAuth: process.env.FIREBASE_DASHBOARD_AUTH !== 'false',
   fcmWebhookUrl: process.env.FCM_WEBHOOK_URL ?? '',
   fcmWebhookSecret: process.env.FCM_WEBHOOK_SECRET ?? '',
+  resendApiKey: process.env.RESEND_API_KEY ?? '',
+  mailFrom: process.env.MAIL_FROM ?? '',
 });
 
 export { required };

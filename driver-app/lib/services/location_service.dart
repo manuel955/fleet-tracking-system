@@ -17,9 +17,11 @@ const int _notificationId = 888;
 const Duration _uiGpsFixTimeout = Duration(seconds: 12);
 const Duration _networkTimeout = Duration(seconds: 8);
 const Duration _maxStreamPositionAge = Duration(seconds: 15);
-// No mostramos una coordenada con un radio de error de una cuadra como si
-// fuera exacta. El servicio sigue intentando hasta obtener una fijacion mejor.
-const double _maxAcceptedAccuracyMeters = 35;
+// La precisión de Samsung/Google puede superar 35 m durante varios minutos
+// aun con el GPS funcionando. No descartamos todo el stream por eso: el
+// filtro de deriva estacionaria evita que una coordenada imprecisa mueva el
+// auto mientras está detenido.
+const double _maxAcceptedAccuracyMeters = 80;
 const double _stationarySpeedMetersPerSecond = 1.5;
 // A phone reporting ~50-60m horizontal accuracy can drift a whole block
 // while parked. A slow vehicle (speed <=1.5m/s) is still allowed to move
@@ -213,6 +215,49 @@ class LocationService {
     return true;
   }
 
+  /// Returns a fresh sample that is safe to send to the server. When the
+  /// phone is parked, Android often reports a new fix that is a few metres
+  /// away from the previous one. We keep the previous coordinates in that
+  /// case, but use the new sample's timestamp to prove that the GPS provider
+  /// is still delivering fixes. This keeps the dashboard fresh without
+  /// making the vehicle marker wander around the block.
+  static Position? positionForPublish(Position position, Position? previous,
+      {DateTime? now}) {
+    if (!isUsableCoordinates(position.latitude, position.longitude) ||
+        !position.accuracy.isFinite ||
+        position.accuracy > _maxAcceptedAccuracyMeters ||
+        !_isRecentPosition(position, now: now)) {
+      return null;
+    }
+    if (previous == null) return position;
+
+    final distance = Geolocator.distanceBetween(
+      previous.latitude,
+      previous.longitude,
+      position.latitude,
+      position.longitude,
+    );
+    final speed = position.speed.isFinite ? position.speed : 0.0;
+    if (speed <= _stationarySpeedMetersPerSecond &&
+        distance < _stationaryJitterMeters) {
+      return Position(
+        latitude: previous.latitude,
+        longitude: previous.longitude,
+        timestamp: position.timestamp,
+        accuracy: position.accuracy,
+        altitude: previous.altitude,
+        altitudeAccuracy: position.altitudeAccuracy,
+        heading: previous.heading,
+        headingAccuracy: position.headingAccuracy,
+        speed: 0,
+        speedAccuracy: position.speedAccuracy,
+        floor: position.floor ?? previous.floor,
+        isMocked: position.isMocked,
+      );
+    }
+    return position;
+  }
+
   static bool isUsableCoordinates(double latitude, double longitude) {
     return latitude.isFinite &&
         longitude.isFinite &&
@@ -257,6 +302,8 @@ void onServiceStart(ServiceInstance service) async {
   Position? pendingPosition;
   Position? lastAcceptedPosition;
   var alertCheckInFlight = false;
+  Timer? heartbeatTimer;
+  Timer? fallbackLocationTimer;
 
   Future<void> checkTripAlerts() async {
     if (alertCheckInFlight) return;
@@ -270,6 +317,8 @@ void onServiceStart(ServiceInstance service) async {
 
   service.on('stopService').listen((event) {
     alertTimer?.cancel();
+    heartbeatTimer?.cancel();
+    fallbackLocationTimer?.cancel();
     positionSubscription?.cancel();
     service.stopSelf();
   });
@@ -298,15 +347,18 @@ void onServiceStart(ServiceInstance service) async {
   }
 
   void onPosition(Position position) {
-    if (!LocationService.shouldPublishPosition(
-        position, lastAcceptedPosition)) {
+    final publishable = LocationService.positionForPublish(
+      position,
+      lastAcceptedPosition,
+    );
+    if (publishable == null) {
       _log(service, 'GPS descartado: precisión/deriva insuficiente.');
       return;
     }
-    lastAcceptedPosition = position;
+    lastAcceptedPosition = publishable;
     // Keep only the newest sample while the network request is in flight;
     // never replay an old coordinate after connectivity returns.
-    pendingPosition = position;
+    pendingPosition = publishable;
     unawaited(drainLocationQueue());
   }
 
@@ -315,7 +367,6 @@ void onServiceStart(ServiceInstance service) async {
           accuracy: LocationAccuracy.bestForNavigation,
           distanceFilter: _locationDistanceFilterMeters,
           intervalDuration: _locationUpdateInterval,
-          forceLocationManager: true,
         )
       : const LocationSettings(
           accuracy: LocationAccuracy.high,
@@ -331,13 +382,54 @@ void onServiceStart(ServiceInstance service) async {
     cancelOnError: false,
   );
 
+  // Algunos firmwares dejan vivo el foreground service pero congelan el
+  // callback del stream. Esta lectura puntual es un segundo canal: no usa
+  // la última coordenada guardada y por eso puede recuperar el GPS real.
+  fallbackLocationTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+    unawaited(() async {
+      try {
+        final position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.bestForNavigation,
+          timeLimit: const Duration(seconds: 10),
+        );
+        onPosition(position);
+      } catch (error) {
+        _log(service, 'Lectura GPS de respaldo no disponible: $error');
+      }
+    }());
+  });
+
   // El GPS ya no depende de este timer. El chequeo de asignaciones sigue
   // teniendo polling para complementar FCM cuando Android/Huawei retrasan el
   // isolate de notificaciones.
   alertTimer = Timer.periodic(AppConfig.locationInterval, (_) {
     unawaited(checkTripAlerts());
   });
+  // Mantiene vivo el turno aun cuando el proveedor GPS no entrega una nueva
+  // coordenada por unos segundos (interior, ahorro de energía o cambio de
+  // red). No inventa una posición: solo refresca el heartbeat del VPS y la
+  // hora de la última ubicación válida.
+  heartbeatTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+    unawaited(_sendHeartbeat(lastAcceptedPosition));
+  });
   unawaited(checkTripAlerts());
+}
+
+Future<void> _sendHeartbeat(Position? lastPosition) async {
+  if (!AppConfig.useVpsBackend) return;
+  try {
+    final auth = await AuthService.currentSession();
+    final token = auth['idToken'];
+    if (token is! String || token.isEmpty) return;
+    await VpsApiClient.heartbeat(
+        token: token,
+        latitude: lastPosition?.latitude,
+        longitude: lastPosition?.longitude,
+        accuracyM: lastPosition?.accuracy);
+  } catch (_) {
+    // El siguiente heartbeat o una coordenada nueva reintenta sin cerrar
+    // nunca el turno local.
+  }
 }
 
 Future<void> _checkTripAlerts() async {
@@ -405,7 +497,7 @@ Future<void> _checkTripAlerts() async {
     trip['destinationAddress'],
   ].map((value) => value?.toString() ?? '').join('|');
 
-  // The notification service throttles this to once every 30s until the
+  // The notification service throttles this to once every 10s until the
   // driver taps it or the active-trip screen acknowledges it. Calling it on
   // every poll is therefore intentional: it keeps the alert alive when FCM
   // was delayed or lost while the foreground service is running.
