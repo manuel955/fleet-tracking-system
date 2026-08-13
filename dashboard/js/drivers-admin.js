@@ -1812,7 +1812,7 @@ async function documentAsDataUrl(url) {
   return isPdfUrl(url) ? renderPdfFirstPageAsDataUrl(url) : fetchAsDataUrl(url);
 }
 
-async function downloadDriverPdf(button) {
+async function downloadDriverPdfLegacy(button) {
   const driverId = button.getAttribute('data-id');
   const d = adminDriversCache[driverId];
   if (!d) return;
@@ -1930,6 +1930,243 @@ async function downloadDriverPdf(button) {
         doc.text(`(no se pudo cargar: ${e.message || e})`, margin, y);
         doc.setTextColor(0);
       }
+    }
+
+    const slug = (s) => (s || '').trim().replace(/\s+/g, '_').replace(/[\\/:*?"<>|]/g, '');
+    const fileName = `${[slug(d.plate), slug(d.name)].filter(Boolean).join('_') || driverId}.pdf`;
+    doc.save(fileName);
+  } catch (e) {
+    alert(`No se pudo generar el PDF: ${e.message || e}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+}
+
+// PDF de expediente con la misma identidad visual que el reporte de viajes.
+async function downloadDriverPdf(button) {
+  const driverId = button.getAttribute('data-id');
+  const d = adminDriversCache[driverId];
+  if (!d) return;
+
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Generando PDF...';
+
+  try {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 36;
+    const contentWidth = pageWidth - margin * 2;
+    const navy = [10, 38, 73];
+    const dark = [14, 29, 50];
+    const muted = [82, 101, 121];
+    const border = [214, 223, 231];
+    const green = [51, 157, 81];
+    const red = [210, 57, 57];
+    const status = d.suspended === true
+      ? 'suspended'
+      : (d.approvalStatus || 'pending_review');
+    const statusLabel = APPROVAL_LABELS[status] || status;
+    const displayValue = (value) => value == null || value === '' ? '-' : String(value);
+    const dateTime = (value) => value ? new Date(value).toLocaleString('es-PE') : '-';
+    const dateOnly = (value) => value ? new Date(value).toLocaleDateString('es-PE') : '-';
+    const safeProfilePhotoUrl = safeDriverStorageUrl(d.profilePhotoUrl, driverId);
+    const uploadedDocFields = DOC_FIELDS.filter((field) => safeDriverStorageUrl(d[field.key], driverId));
+    let logoDataUrl = null;
+    let profilePhotoDataUrl = null;
+
+    try { logoDataUrl = await fetchAsDataUrl('assets/apl-mark.png'); } catch (_) { /* texto de marca */ }
+    if (safeProfilePhotoUrl) {
+      try { profilePhotoDataUrl = await fetchAsDataUrl(safeProfilePhotoUrl); } catch (_) { /* opcional */ }
+    }
+
+    const drawBrandHeader = () => {
+      doc.setFillColor(255, 255, 255);
+      doc.rect(0, 0, pageWidth, 74, 'F');
+      doc.setDrawColor(222, 229, 235);
+      doc.setLineWidth(0.8);
+      doc.line(margin, 72, pageWidth - margin, 72);
+      if (logoDataUrl) {
+        doc.addImage(logoDataUrl, 'PNG', margin, 16, 42, 42);
+      } else {
+        doc.setFillColor(...navy);
+        doc.roundedRect(margin, 16, 42, 42, 8, 8, 'F');
+      }
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(19);
+      doc.setTextColor(...navy);
+      doc.text('APL', margin + 52, 34);
+      doc.setFontSize(8);
+      doc.setTextColor(33, 143, 143);
+      doc.text('LOGISTICS', margin + 53, 47);
+      doc.setFontSize(21);
+      doc.setTextColor(...navy);
+      doc.text('ARCHIVO DEL CONDUCTOR', pageWidth - margin, 43, { align: 'right' });
+    };
+
+    const drawIdentityStrip = (rightText) => {
+      const y = 86;
+      doc.setFillColor(244, 247, 251);
+      doc.setDrawColor(218, 227, 236);
+      doc.roundedRect(margin, y, contentWidth, 38, 7, 7, 'FD');
+      doc.setFillColor(...navy);
+      doc.circle(margin + 22, y + 19, 10, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.text('i', margin + 22, y + 22, { align: 'center' });
+      doc.setTextColor(...dark);
+      doc.setFontSize(10);
+      doc.text('Conductor:', margin + 39, y + 23);
+      doc.setFont('helvetica', 'normal');
+      doc.text(displayValue(d.name), margin + 98, y + 23);
+      doc.setDrawColor(182, 193, 204);
+      doc.line(pageWidth / 2, y + 8, pageWidth / 2, y + 30);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Estado:', pageWidth / 2 + 18, y + 23);
+      doc.setFont('helvetica', 'normal');
+      doc.text(statusLabel, pageWidth / 2 + 58, y + 23);
+      doc.setTextColor(...muted);
+      doc.setFontSize(8);
+      doc.text(rightText || `Placa ${displayValue(d.plate)}`, pageWidth - margin - 10, y + 11, { align: 'right' });
+    };
+
+    const drawSectionBar = (label, y) => {
+      doc.setFillColor(...navy);
+      doc.roundedRect(margin, y, contentWidth, 27, 6, 6, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text(label, margin + 11, y + 18);
+      return y + 27;
+    };
+
+    const drawSummaryCard = (x, y, width, label, value, fill, accent, symbol) => {
+      doc.setFillColor(...fill);
+      doc.setDrawColor(...border);
+      doc.roundedRect(x, y, width, 62, 9, 9, 'FD');
+      doc.setFillColor(...accent);
+      doc.circle(x + 28, y + 31, 14, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(13);
+      doc.text(symbol, x + 28, y + 35, { align: 'center' });
+      doc.setTextColor(...navy);
+      doc.setFontSize(8);
+      doc.text(label, x + 51, y + 21);
+      doc.setFontSize(value.length > 18 ? 11 : 18);
+      doc.text(value, x + 51, y + 46);
+    };
+
+    const drawFooter = () => {
+      doc.setDrawColor(222, 229, 235);
+      doc.line(margin, pageHeight - 31, pageWidth - margin, pageHeight - 31);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(...muted);
+      doc.text('APL Logistics - Operaciones', margin, pageHeight - 17);
+      doc.text(`Página ${doc.internal.getNumberOfPages()}`, pageWidth - margin, pageHeight - 17, { align: 'right' });
+    };
+
+    const fields = [
+      ['Correo', d.email],
+      ['DNI', d.dni],
+      ['Teléfono', d.phone],
+      ['Placa', d.plate],
+      ['Marca vehículo', d.vehicleBrand],
+      ['Tipo de vehículo', d.vehicleType],
+      ['Color del vehículo', d.vehicleColor],
+      ['Pasajeros', d.vehicleSeats != null ? `${d.vehicleSeats} pasajeros` : null],
+      ['Estado operativo', d.status || 'Desconectado'],
+      ['Registrado', dateTime(d.registeredAt)],
+      ['Documentos enviados', dateTime(d.documentsSubmittedAt)],
+      ['Licencia vence', dateOnly(d.licenseExpiresAt)],
+      ['SOAT vence', dateOnly(d.soatExpiresAt)],
+      ['Revisión técnica vence', dateOnly(d.technicalReviewExpiresAt)],
+      ['Revisado', dateTime(d.reviewedAt)],
+      ['Revisado por', d.reviewedBy],
+    ];
+    if (status === 'rejected' && d.rejectionReason) fields.push(['Motivo de rechazo', d.rejectionReason]);
+
+    // Página resumen con la estructura visual del reporte de viajes.
+    drawBrandHeader();
+    drawIdentityStrip(`Placa ${displayValue(d.plate)}`);
+    const gap = 8;
+    const cardWidth = (contentWidth - gap * 2) / 3;
+    const summaryY = 137;
+    const vehicleSummary = [displayValue(d.vehicleType), d.vehicleSeats ? `${d.vehicleSeats} pax` : ''].filter(Boolean).join(' · ');
+    drawSummaryCard(margin, summaryY, cardWidth, 'ESTADO', statusLabel, status === 'approved' ? [235, 249, 239] : [254, 239, 239], status === 'approved' ? green : red, status === 'approved' ? '✓' : '!');
+    drawSummaryCard(margin + cardWidth + gap, summaryY, cardWidth, 'VEHÍCULO', vehicleSummary || '-', [235, 245, 253], [39, 111, 190], '▣');
+    drawSummaryCard(margin + (cardWidth + gap) * 2, summaryY, cardWidth, 'DOCUMENTOS', String(uploadedDocFields.length), [237, 247, 247], [33, 143, 143], '#');
+
+    const sectionTop = drawSectionBar('Datos del conductor', 214);
+    const photoSize = 94;
+    const photoX = pageWidth - margin - photoSize - 12;
+    const photoY = sectionTop + 14;
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(...border);
+    doc.roundedRect(photoX - 8, photoY - 8, photoSize + 16, photoSize + 16, 7, 7, 'FD');
+    if (profilePhotoDataUrl) {
+      try {
+        const props = doc.getImageProperties(profilePhotoDataUrl);
+        const scale = Math.min(photoSize / props.width, photoSize / props.height);
+        const w = props.width * scale;
+        const h = props.height * scale;
+        doc.addImage(profilePhotoDataUrl, props.fileType || 'JPEG', photoX + (photoSize - w) / 2, photoY + (photoSize - h) / 2, w, h);
+      } catch (_) { /* la ficha sigue siendo válida sin foto */ }
+    }
+    let fieldY = sectionTop + 22;
+    const textWidth = contentWidth - photoSize - 38;
+    doc.setFontSize(9.5);
+    fields.forEach(([label, value]) => {
+      if (fieldY > photoY + photoSize + 8 && fieldY < photoY + photoSize + 14) fieldY = photoY + photoSize + 18;
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(...dark);
+      doc.text(`${label}:`, margin + 10, fieldY);
+      doc.setFont('helvetica', 'normal');
+      const lines = doc.splitTextToSize(displayValue(value), textWidth - 102).slice(0, 2);
+      doc.text(lines, margin + 112, fieldY);
+      fieldY += Math.max(16, lines.length * 11 + 5);
+    });
+    const docsTop = Math.min(Math.max(fieldY + 10, 530), pageHeight - 105);
+    drawSectionBar('Documentos enviados', docsTop);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(...muted);
+    doc.text(uploadedDocFields.length ? `${uploadedDocFields.length} documento(s) adjunto(s). Cada uno se muestra en su propia página.` : 'No hay documentos cargados.', margin + 11, docsTop + 45);
+    drawFooter();
+
+    // Cada documento conserva su resolución y se presenta con el mismo encabezado y pie.
+    for (let i = 0; i < uploadedDocFields.length; i += 1) {
+      const field = uploadedDocFields[i];
+      const url = safeDriverStorageUrl(d[field.key], driverId);
+      doc.addPage();
+      drawBrandHeader();
+      drawIdentityStrip(`Documento ${i + 1} de ${uploadedDocFields.length}`);
+      const imageTop = drawSectionBar(field.label, 145) + 18;
+      const boxHeight = pageHeight - imageTop - 52;
+      doc.setFillColor(248, 250, 252);
+      doc.setDrawColor(...border);
+      doc.roundedRect(margin, imageTop, contentWidth, boxHeight, 8, 8, 'FD');
+      try {
+        const dataUrl = await documentAsDataUrl(url);
+        const props = doc.getImageProperties(dataUrl);
+        const maxWidth = contentWidth - 24;
+        const maxHeight = boxHeight - 24;
+        const scale = Math.min(maxWidth / props.width, maxHeight / props.height, 1);
+        const w = props.width * scale;
+        const h = props.height * scale;
+        doc.addImage(dataUrl, props.fileType || 'JPEG', margin + 12 + (maxWidth - w) / 2, imageTop + 12 + (maxHeight - h) / 2, w, h);
+      } catch (e) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        doc.setTextColor(182, 72, 66);
+        doc.text(`No se pudo cargar este documento: ${e.message || e}`, margin + 18, imageTop + 30);
+      }
+      drawFooter();
     }
 
     const slug = (s) => (s || '').trim().replace(/\s+/g, '_').replace(/[\\/:*?"<>|]/g, '');
