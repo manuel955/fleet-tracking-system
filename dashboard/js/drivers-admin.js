@@ -183,6 +183,7 @@ function mapVpsDriverForAdmin(driver) {
     lat: driver.lat,
     lng: driver.lng,
     lastUpdate: driver.lastUpdate,
+    shiftStartedAt: driver.shiftStartedAt || null,
     assignedPlace: driver.assignedPlace || null,
   };
 }
@@ -385,7 +386,6 @@ function driverAdminCardHtml(driverId, d) {
       <div class="detail-section">
         <div class="row"><b>Teléfono:</b> ${escapeHtml(d.phone || '-')}</div>
         <div class="row"><b>Placa:</b> ${escapeHtml(d.plate || '-')}</div>
-        <div class="row"><b>Edad:</b> ${escapeHtml(String(d.age ?? '-'))}</div>
         <div class="row"><b>Lugar asignado:</b> ${escapeHtml(d.assignedPlace?.name || '-')}</div>
         <div class="row"><b>Licencia vigente hasta:</b> ${escapeHtml(expiryLabel(d.licenseExpiresAt))}</div>
         <div class="row"><b>SOAT vigente hasta:</b> ${escapeHtml(expiryLabel(d.soatExpiresAt))}</div>
@@ -1871,7 +1871,6 @@ async function downloadDriverPdf(button) {
       ['DNI', d.dni],
       ['Teléfono', d.phone],
       ['Placa', d.plate],
-      ['Edad', d.age != null ? String(d.age) : null],
       ['Marca vehiculo', d.vehicleBrand],
       ['Tipo de vehiculo', d.vehicleType],
       ['Color del vehiculo', d.vehicleColor],

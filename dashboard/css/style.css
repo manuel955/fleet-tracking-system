@@ -1732,7 +1732,7 @@ body {
 .overview-eyebrow { color: #6c7b7a; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; }
 .overview-heading h2 { margin-top: 3px; color: #081618; font-family: 'Instrument Sans', var(--font); font-size: 34px; line-height: 1; letter-spacing: -.06em; }
 #overview-clock { color: #54706b; font: 600 12px 'IBM Plex Mono', monospace; letter-spacing: .04em; text-transform: uppercase; }
-.overview-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.overview-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .stat-card { min-height: 105px; display: flex; flex-direction: column; justify-content: space-between; padding: 17px 18px; border: 1px solid #d5dfd9; border-radius: 18px; background: #fff; }
 .stat-card span { color: #6c7b7a; font-size: 12px; }
 .stat-card strong { color: #081618; font-family: 'Instrument Sans', var(--font); font-size: 29px; line-height: 1; letter-spacing: -.04em; }

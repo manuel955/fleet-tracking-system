@@ -936,7 +936,6 @@ const filterPillsEl = document.getElementById('status-filters');
 const overviewActiveCountEl = document.getElementById('overview-active-count');
 const overviewAvailableCountEl = document.getElementById('overview-available-count');
 const overviewTripsCountEl = document.getElementById('overview-trips-count');
-const overviewEtaCountEl = document.getElementById('overview-eta-count');
 const overviewClockEl = document.getElementById('overview-clock');
 
 if (mapCenterBtn) mapCenterBtn.addEventListener('click', centerMapOnFleet);
@@ -994,17 +993,9 @@ function updateOverviewStats() {
   const completed = Object.values(todayTripsCache).filter((trip) => trip.status === 'completed');
   const cancelled = Object.values(todayTripsCache).filter((trip) => trip.status === 'cancelled');
   const busy = approved.filter((d) => driverState(d) === 'to_pickup' || driverState(d) === 'on_trip');
-  const durations = completed
-    .map((trip) => window.TripDuration?.tripDurationMs(trip) ?? null)
-    .filter((duration) => duration != null);
-  const averageDurationSeconds = durations.length
-    ? Math.round(durations.reduce((total, duration) => total + duration, 0) / durations.length / 1000)
-    : null;
-
   if (overviewActiveCountEl) overviewActiveCountEl.textContent = String(active.length).padStart(2, '0');
   if (overviewAvailableCountEl) overviewAvailableCountEl.textContent = String(available.length).padStart(2, '0');
   if (overviewTripsCountEl) overviewTripsCountEl.textContent = String(trips.length).padStart(2, '0');
-  if (overviewEtaCountEl) overviewEtaCountEl.textContent = averageDurationSeconds == null ? '--:--' : formatEta(averageDurationSeconds);
   const activeDelta = document.getElementById('overview-active-delta');
   const tripsDelta = document.getElementById('overview-trips-delta');
   if (activeDelta) activeDelta.textContent = `${busy.length} en servicio`;
@@ -1159,7 +1150,6 @@ function driverDetailHtml(driverId, d, state) {
 
   return `
     <div class="detail-section">
-      <div class="row"><b>Edad:</b> ${escapeHtml(String(d.age ?? '-'))}</div>
       <div class="row"><b>Lugar asignado:</b> ${escapeHtml(d.assignedPlace?.name || d.hotel || '-')}</div>
       <div class="row"><b>Teléfono:</b> ${escapeHtml(d.phone || '-')}</div>
       <div class="row"><b>Tipo de vehiculo:</b> ${escapeHtml(d.vehicleType || '-')}</div>

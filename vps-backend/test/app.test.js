@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { buildAvailableDriverQuery, consumeRateLimit, createApp, driverAccountDeletionBlocked, hasAuthorizedPassengerAccess, isDashboardCoordinator, staleDriverOutcome, validateVehicleCapacity } from '../src/app.js';
+import { buildAvailableDriverQuery, consumeRateLimit, createApp, driverAccountDeletionBlocked, hasAuthorizedPassengerAccess, isDashboardCoordinator, peruDateKey, staleDriverOutcome, validateVehicleCapacity } from '../src/app.js';
 
 async function request(server, path) {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -103,6 +103,11 @@ test('a stale heartbeat alerts without ending the active shift', () => {
     alertReason: 'HEARTBEAT',
   });
   assert.equal(staleDriverOutcome('offline'), null);
+});
+
+test('place assignment date uses Peru calendar time', () => {
+  assert.equal(peruDateKey(Date.parse('2026-08-13T04:59:59Z')), '2026-08-12');
+  assert.equal(peruDateKey(Date.parse('2026-08-13T05:00:00Z')), '2026-08-13');
 });
 
 test('passenger access requires an authorized, non-expired QR grant', () => {

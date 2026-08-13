@@ -28,3 +28,12 @@ test('cierra un turno sin evento offline usando el último GPS', () => {
   assert.equal(sessions[0].endAt, 180);
   assert.equal(sessions[0].active, false);
 });
+
+test('un conductor VPS actualmente online conserva un turno aunque falte el evento de inicio', () => {
+  const sessions = buildSessions({}, {
+    'driver-1': { name: 'Irma ballardo', status: 'online', shiftStartedAt: 1_000, lastUpdate: 2_000 },
+  });
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].active, true);
+  assert.equal(sessions[0].startAt, 1_000);
+});

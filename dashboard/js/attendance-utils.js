@@ -10,7 +10,12 @@
   }
 
   function buildSessions(history = {}, drivers = {}) {
-    return Object.entries(history || {}).flatMap(([driverId, events]) => {
+    const driverIds = new Set([
+      ...Object.keys(history || {}),
+      ...Object.keys(drivers || {}),
+    ]);
+    return [...driverIds].flatMap((driverId) => {
+      const events = history?.[driverId];
       const driver = drivers[driverId] || {};
       const sorted = Object.values(events || {})
         .filter((event) => event && Number.isFinite(Number(event.at)))
@@ -46,6 +51,17 @@
         if (!driverOnline && driver.lastUpdate) open.endAt = Number(driver.lastUpdate);
         open.active = !open.endAt && driverOnline;
         sessions.push(open);
+      } else if (driver.status === 'online' || driver.status === 'busy') {
+        // El estado actual del VPS es la fuente de verdad. Si el evento de
+        // inicio se perdió durante una reconexión, no mostrar al conductor
+        // activo como si hubiera terminado turno.
+        sessions.push({
+          driverId,
+          driverName: driver.name || driverId,
+          startAt: Number(driver.shiftStartedAt || driver.lastUpdate || Date.now()),
+          endAt: null,
+          active: true,
+        });
       }
 
       return sessions.filter((session) => !isQaRecord(session.driverId, session.driverName));

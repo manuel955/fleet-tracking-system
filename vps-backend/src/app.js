@@ -261,6 +261,31 @@ export function normalizeDriverPlaceInput(body = {}) {
   };
 }
 
+export function peruDateKey(value = Date.now()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Lima', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date(value));
+}
+
+async function clearExpiredDriverPlaces() {
+  // Las asignaciones son válidas solo durante el día calendario de Perú.
+  // Se admite el formato antiguo assignedAt para limpiar datos previos.
+  await pool.query(`
+    UPDATE drivers
+       SET assigned_place = NULL, updated_at = now()
+     WHERE assigned_place IS NOT NULL
+       AND (
+         ((assigned_place ? 'assignedDate')
+           AND assigned_place->>'assignedDate' <> to_char(now() AT TIME ZONE 'America/Lima', 'YYYY-MM-DD'))
+         OR
+         ((NOT (assigned_place ? 'assignedDate')) AND (assigned_place ? 'assignedAt')
+           AND (assigned_place->>'assignedAt') ~ '^[0-9]+$'
+           AND to_char(to_timestamp((assigned_place->>'assignedAt')::double precision / 1000)
+                       AT TIME ZONE 'America/Lima', 'YYYY-MM-DD')
+               <> to_char(now() AT TIME ZONE 'America/Lima', 'YYYY-MM-DD'))
+       )`);
+}
+
 async function assignDriverPlace(user, driverIdValue, body) {
   requireDashboardAdmin(user);
   const driverId = postgresUuidOrNull(driverIdValue);
@@ -290,6 +315,7 @@ async function assignDriverPlace(user, driverIdValue, body) {
     lat: Number(place.latitude),
     lng: Number(place.longitude),
     assignedAt: Date.now(),
+    assignedDate: peruDateKey(),
   };
   const result = await pool.query(
     `UPDATE drivers SET assigned_place = $1::jsonb, updated_at = now()
@@ -1733,6 +1759,7 @@ async function recordDriverConnectionEvent(driverId, status, reason = null, at =
 // timeout below the dashboard's three-minute offline window, but allow a
 // short connectivity gap before closing the shift.
 export async function detectStaleDrivers({ now = new Date(), timeoutMs = 90_000 } = {}) {
+  await clearExpiredDriverPlaces();
   const cutoff = new Date(now.getTime() - timeoutMs);
   const result = await pool.query(
     `SELECT d.id
@@ -1814,6 +1841,7 @@ function publicFeedback(row) {
  */
 async function dashboardOverview(user) {
   requireRole(user, ['dashboard']);
+  await clearExpiredDriverPlaces();
   const includePrivateDocuments = isDashboardAdmin(user);
   const [driversResult, tripsResult] = await Promise.all([
     pool.query(`
@@ -1828,7 +1856,13 @@ async function dashboardOverview(user) {
         d.rejection_reason, d.rejection_field_keys, d.suspended,
         d.suspension_reason, d.suspended_at, d.suspended_by,
         d.availability_status, d.current_trip_id, d.assigned_place,
-        l.latitude, l.longitude, l.accuracy_m, l.recorded_at
+        l.latitude, l.longitude, l.accuracy_m, l.recorded_at,
+        (SELECT h.event_at FROM driver_connection_history h
+          WHERE h.driver_id = d.id AND h.status = 'online'
+            AND h.event_at > COALESCE((SELECT max(o.event_at)
+              FROM driver_connection_history o
+              WHERE o.driver_id = d.id AND o.status = 'offline'), '-infinity'::timestamptz)
+          ORDER BY h.event_at DESC LIMIT 1) AS shift_started_at
       FROM drivers d
       JOIN users u ON u.id = d.id
       LEFT JOIN driver_locations l ON l.driver_id = d.id
@@ -1880,6 +1914,7 @@ async function dashboardOverview(user) {
     availabilityStatus: row.availability_status,
     currentTripId: row.current_trip_id,
     assignedPlace: row.assigned_place || null,
+    shiftStartedAt: row.shift_started_at ? new Date(row.shift_started_at).getTime() : null,
     currentTrip: row.current_trip_id ? tripById.get(row.current_trip_id) ?? null : null,
     lat: row.latitude === null ? null : Number(row.latitude),
     lng: row.longitude === null ? null : Number(row.longitude),
@@ -2055,6 +2090,7 @@ async function driverHeartbeat(user, body) {
 
 async function getDriverMe(user) {
   requireRole(user, ['driver']);
+  await clearExpiredDriverPlaces();
   const result = await pool.query(
     `SELECT d.id, d.approval_status, d.phone, d.plate, d.age,
        d.vehicle_brand, d.vehicle_type, d.vehicle_color,
