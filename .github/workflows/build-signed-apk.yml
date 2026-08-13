@@ -110,7 +110,9 @@ jobs:
       - name: Build signed release APK
         working-directory: ${{ inputs.app == 'driver' && 'driver-app' || 'passenger-app' }}
         env:
-          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false
+          GRADLE_OPTS: >-
+            -Dorg.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1G
+            -Dorg.gradle.daemon=false -Dorg.gradle.vfs.watch=false
         shell: bash
         run: |
           set -euo pipefail
