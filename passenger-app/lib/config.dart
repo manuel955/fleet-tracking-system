@@ -57,7 +57,10 @@ class AppConfig {
   // --dart-define=MAPBOX_ACCESS_TOKEN=pk....
   static const String mapboxAccessToken = String.fromEnvironment(
     'MAPBOX_ACCESS_TOKEN',
-    defaultValue: '',
+    // Token público de Mapbox: el --dart-define puede reemplazarlo en builds
+    // de otro entorno, pero una build local no debe quedar sin mapa.
+    defaultValue:
+        'pk.eyJ1IjoiYW5mdXJleCIsImEiOiJjbXNlMHFxamgwNGlvMndweXo2aGFtbGlpIn0.bxWU-uN8FFTm0u7HZai9oQ',
   );
   static const String mapboxStyleUri = String.fromEnvironment(
     'MAPBOX_STYLE_URI',
