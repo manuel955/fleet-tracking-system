@@ -1228,10 +1228,19 @@ async function downloadTripHistoryPdfV2(button) {
       doc.roundedRect(x, y, width, 62, 9, 9, 'FD');
       doc.setFillColor(...accent);
       doc.circle(x + 28, y + 31, 14, 'F');
-      doc.setTextColor(255, 255, 255);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(symbol === 'km' ? 10 : 14);
-      doc.text(symbol === 'km' ? 'km' : symbol, x + 28, y + 35, { align: 'center' });
+      if (symbol === 'check') {
+        // Dibujarlo como trazos evita que el glifo Unicode quede recortado.
+        doc.setDrawColor(255, 255, 255);
+        doc.setLineWidth(2.2);
+        doc.line(x + 20, y + 31, x + 26, y + 37);
+        doc.line(x + 26, y + 37, x + 37, y + 24);
+        doc.setLineWidth(0.8);
+      } else {
+        doc.setTextColor(255, 255, 255);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(symbol === 'km' ? 10 : 14);
+        doc.text(symbol === 'km' ? 'km' : symbol, x + 28, y + 35, { align: 'center' });
+      }
       doc.setTextColor(...navy);
       doc.setFontSize(8);
       doc.text(label, x + 51, y + 21);
@@ -1255,8 +1264,8 @@ async function downloadTripHistoryPdfV2(button) {
       const gap = 8;
       const cardWidth = (contentWidth - gap * 3) / 4;
       const summaryY = 137;
-      drawSummaryCard(margin, summaryY, cardWidth, 'VIAJES', String(entries.length), [235, 245, 253], [39, 111, 190], '\u25A0');
-      drawSummaryCard(margin + cardWidth + gap, summaryY, cardWidth, 'COMPLETADOS', String(completed), [235, 249, 239], [51, 157, 81], '\u2713');
+      drawSummaryCard(margin, summaryY, cardWidth, 'VIAJES', String(entries.length), [235, 245, 253], [39, 111, 190], 'N');
+      drawSummaryCard(margin + cardWidth + gap, summaryY, cardWidth, 'COMPLETADOS', String(completed), [235, 249, 239], [51, 157, 81], 'check');
       drawSummaryCard(margin + (cardWidth + gap) * 2, summaryY, cardWidth, 'CANCELADOS', String(cancelled), [254, 239, 239], [210, 57, 57], '\u00D7');
       drawSummaryCard(margin + (cardWidth + gap) * 3, summaryY, cardWidth, 'KM TOTALES', totalKm ? totalKm.toFixed(1) : '\u2014', [235, 249, 249], [35, 145, 145], 'km');
 
