@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fleet_passenger_app/services/passenger_service.dart';
+import 'package:fleet_passenger_app/services/auth_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -47,5 +48,14 @@ void main() {
     });
 
     expect(await PassengerService.hasAccess(), isTrue);
+  });
+
+  test('una cuenta invitada temporal no se considera recuperable por correo', () {
+    expect(
+      AuthService.isGuestEmail('guest-abc@guest.apl.invalid'),
+      isTrue,
+    );
+    expect(AuthService.isGuestEmail('persona@example.com'), isFalse);
+    expect(AuthService.isGuestEmail(null), isFalse);
   });
 }

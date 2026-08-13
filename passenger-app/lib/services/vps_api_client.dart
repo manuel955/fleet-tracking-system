@@ -83,7 +83,11 @@ class VpsApiClient {
   }) => _request(
     'POST',
     '/api/v1/auth/login',
-    body: {'email': email.trim().toLowerCase(), 'password': password},
+    body: {
+      'email': email.trim().toLowerCase(),
+      'password': password,
+      'role': 'passenger',
+    },
   );
 
   static Future<Map<String, dynamic>> requestPasswordReset({

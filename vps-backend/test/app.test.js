@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { buildAvailableDriverQuery, consumeRateLimit, createApp, driverAccountDeletionBlocked, hasAuthorizedPassengerAccess, isDashboardCoordinator, peruDateKey, staleDriverOutcome, validateVehicleCapacity } from '../src/app.js';
+import { buildAvailableDriverQuery, consumeRateLimit, createApp, driverAccountDeletionBlocked, hasAuthorizedPassengerAccess, isDashboardCoordinator, loginRoleMismatch, peruDateKey, staleDriverOutcome, validateVehicleCapacity } from '../src/app.js';
 
 async function request(server, path) {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -131,6 +131,13 @@ test('authentication rate limits repeated attempts without growing unbounded', (
   assert.equal(consumeRateLimit('test-login', 'unique@example.com', options).allowed, true);
   assert.equal(consumeRateLimit('test-login', 'unique@example.com', options).allowed, false);
   assert.equal(consumeRateLimit('test-login', 'unique@example.com', { ...options, now: 61_001 }).allowed, true);
+});
+
+test('driver login rejects non-driver account roles before profile loading', () => {
+  assert.equal(loginRoleMismatch('dashboard', 'driver'), true);
+  assert.equal(loginRoleMismatch('passenger', 'driver'), true);
+  assert.equal(loginRoleMismatch('driver', 'driver'), false);
+  assert.equal(loginRoleMismatch('driver', ''), false);
 });
 
 test('production cannot start with the public development JWT secret', async () => {

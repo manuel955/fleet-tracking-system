@@ -9,9 +9,13 @@ import 'notifications_screen.dart';
 class LoginScreen extends StatefulWidget {
   final VoidCallback onLoggedIn;
   final VoidCallback onGoToRegister;
+  final String? initialError;
 
   const LoginScreen(
-      {super.key, required this.onLoggedIn, required this.onGoToRegister});
+      {super.key,
+      required this.onLoggedIn,
+      required this.onGoToRegister,
+      this.initialError});
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -24,8 +28,18 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _busy = false;
   String? _error;
 
+  @override
+  void initState() {
+    super.initState();
+    _error = widget.initialError;
+  }
+
   String _friendlyError(Object error) {
     if (error is VpsApiException) {
+      if (error.message.toLowerCase().contains('pertenece') ||
+          error.message.toLowerCase().contains('conductor')) {
+        return 'Esta cuenta no pertenece a un conductor.';
+      }
       if (error.statusCode == 401 || error.statusCode == 403) {
         return 'Usuario no registrado o pendiente de aprobación.';
       }

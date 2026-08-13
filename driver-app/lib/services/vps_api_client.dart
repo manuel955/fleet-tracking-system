@@ -78,6 +78,7 @@ class VpsApiClient {
       _request('POST', '/api/v1/auth/login', body: {
         'email': email.trim().toLowerCase(),
         'password': password,
+        'role': 'driver',
       });
 
   static Future<Map<String, dynamic>> register({

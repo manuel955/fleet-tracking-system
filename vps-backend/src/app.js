@@ -109,6 +109,13 @@ function requireRole(user, roles) {
   }
 }
 
+export function loginRoleMismatch(userRole, requestedRole) {
+  const requested = typeof requestedRole === 'string'
+    ? requestedRole.trim().toLowerCase()
+    : '';
+  return Boolean(requested && requested !== String(userRole || '').toLowerCase());
+}
+
 async function readPublicConfig() {
   if (!pool) throw new Error('Database is not configured');
   const [configResult, placesResult] = await Promise.all([
@@ -1020,6 +1027,16 @@ async function login(body) {
   if (!user || !(await verifyPassword(password, user.password_hash)) || user.status !== 'active') {
     const error = new Error('Credenciales inválidas.');
     error.statusCode = 401;
+    throw error;
+  }
+  const requestedRole = typeof body.role === 'string' ? body.role : '';
+  if (loginRoleMismatch(user.role, requestedRole)) {
+    const error = new Error(
+      requestedRole.trim().toLowerCase() === 'driver'
+        ? 'Esta cuenta no pertenece a un conductor.'
+        : 'El tipo de cuenta no coincide con la aplicación.',
+    );
+    error.statusCode = 403;
     throw error;
   }
   return { token: signUser(user), user: publicUser(user) };

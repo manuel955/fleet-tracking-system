@@ -175,6 +175,7 @@ class _DriverHomePageState extends State<DriverHomePage>
   // diferencia del DNI+rostro anterior que se re-pedia siempre).
   bool _loggedIn = false;
   bool _showRegister = false;
+  String? _loginError;
   Map<String, dynamic>? _driverProfile;
 
   bool _editingProfile = false;
@@ -492,6 +493,7 @@ class _DriverHomePageState extends State<DriverHomePage>
         setState(() {
           _loggedIn = false;
           _showRegister = true;
+          _loginError = null;
           _loading = false;
         });
         return;
@@ -574,9 +576,20 @@ class _DriverHomePageState extends State<DriverHomePage>
       }
     } catch (e) {
       if (!mounted || flowVersion != _authFlowVersion) return;
+      final message = e is VpsApiException && e.statusCode == 403
+          ? (e.message.toLowerCase().contains('conductor')
+              ? 'Esta cuenta no pertenece a un conductor.'
+              : 'Esta cuenta no tiene permisos de conductor.')
+          : e is VpsApiException && e.statusCode == 401
+              ? 'La sesiÃ³n expirÃ³. Inicia sesiÃ³n nuevamente.'
+              : 'No se pudo cargar el perfil del conductor. Revisa la conexiÃ³n e intenta nuevamente.';
+      if (e is VpsApiException && (e.statusCode == 401 || e.statusCode == 403)) {
+        await AuthService.logout();
+      }
       setState(() {
         _loggedIn = false;
         _loading = false;
+        _loginError = message;
       });
     }
   }
@@ -1387,12 +1400,19 @@ class _DriverHomePageState extends State<DriverHomePage>
       if (_showRegister) {
         return DriverRegistrationScreen(
           onDone: () => _afterAuthResolved(claimSession: true),
-          onGoToLogin: () => setState(() => _showRegister = false),
+          onGoToLogin: () => setState(() {
+            _showRegister = false;
+            _loginError = null;
+          }),
         );
       }
       return LoginScreen(
         onLoggedIn: () => _afterAuthResolved(claimSession: true),
-        onGoToRegister: () => setState(() => _showRegister = true),
+        initialError: _loginError,
+        onGoToRegister: () => setState(() {
+          _showRegister = true;
+          _loginError = null;
+        }),
       );
     }
 

@@ -14,6 +14,9 @@ class AuthService {
   static String? _vpsEmail;
   static String? _vpsDisplayName;
 
+  static bool isGuestEmail(String? email) =>
+      email?.trim().toLowerCase().endsWith('@guest.apl.invalid') == true;
+
   static Future<void> initialize() async {
     if (!AppConfig.useVpsBackend) return;
     final prefs = await SharedPreferences.getInstance();
@@ -82,7 +85,10 @@ class AuthService {
   }
 
   static bool get hasEmailSession {
-    if (AppConfig.useVpsBackend) return _vpsEmail?.isNotEmpty == true;
+    if (AppConfig.useVpsBackend) {
+      return _vpsEmail?.isNotEmpty == true &&
+          !isGuestEmail(_vpsEmail);
+    }
     try {
       final user = _firebaseAuth.currentUser;
       return user != null && (user.email?.trim().isNotEmpty ?? false);
@@ -92,7 +98,9 @@ class AuthService {
   }
 
   static String? get currentEmail {
-    if (AppConfig.useVpsBackend) return _vpsEmail;
+    if (AppConfig.useVpsBackend) {
+      return isGuestEmail(_vpsEmail) ? null : _vpsEmail;
+    }
     try {
       final email = _firebaseAuth.currentUser?.email?.trim();
       return email == null || email.isEmpty ? null : email;
