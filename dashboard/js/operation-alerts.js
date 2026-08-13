@@ -65,9 +65,11 @@
         <article class="operation-alert-card">
           <div class="operation-alert-card-title"><span>⚠️</span><strong>Desconexión de conductor</strong><time>${escape(formatDate(alert.disconnectedAt))}</time></div>
           <p>Chofer <b>${escape(alert.driverName || alert.driverId)}</b> (${escape(alert.driverPlate || '-')}) se desconectó a las ${escape(formatDate(alert.disconnectedAt).slice(-5))}.</p>
+          <small class="operation-alert-source">Apartado: Conductores → Alertas de desconexión</small>
           <small>Motivo: ${escape(reasonLabel(alert))}</small>
           <div class="operation-alert-actions">
             ${alert.driverPhone ? `<button type="button" data-operation-action="call" data-phone="${escape(alert.driverPhone)}">Llamar</button><button type="button" data-operation-action="notify" data-phone="${escape(alert.driverPhone)}">Notificar</button>` : ''}
+            <button type="button" data-operation-action="alerts">Ver en alertas</button>
             <button type="button" data-operation-action="location" data-alert-id="${escape(alert.id)}">Ver ubicación final</button>
             <button type="button" data-operation-action="acknowledge" data-alert-id="${escape(alert.id)}">Reconocer</button>
           </div>
@@ -102,7 +104,7 @@
     if (!region) return;
     const toast = document.createElement('article');
     toast.className = 'operation-alert-toast';
-    toast.innerHTML = `<div><strong>⚠️ Desconexión de conductor</strong><button type="button" aria-label="Cerrar">×</button></div><p>Chofer <b>${escape(alert.driverName || alert.driverId)}</b> (${escape(alert.driverPlate || '-')}) se desconectó a las ${escape(formatDate(alert.disconnectedAt).slice(-5))}. Motivo: ${escape(reasonLabel(alert))}.</p>`;
+    toast.innerHTML = `<div><strong>⚠️ Desconexión de conductor</strong><button type="button" aria-label="Cerrar">×</button></div><p>Chofer <b>${escape(alert.driverName || alert.driverId)}</b> (${escape(alert.driverPlate || '-')}) se desconectó a las ${escape(formatDate(alert.disconnectedAt).slice(-5))}. Motivo: ${escape(reasonLabel(alert))}.</p><small class="operation-alert-source">Apartado: Conductores → Alertas de desconexión</small>`;
     toast.querySelector('button').addEventListener('click', () => toast.remove());
     toast.addEventListener('click', (event) => {
       if (event.target.closest('button')) return;
@@ -206,6 +208,10 @@
     if (action === 'notify') {
       const phone = (button.getAttribute('data-phone') || '').replace(/\D/g, '');
       if (phone) window.open(`https://wa.me/${phone}`, '_blank', 'noopener');
+      return;
+    }
+    if (action === 'alerts') {
+      if (typeof window.openDriversAdminFilter === 'function') window.openDriversAdminFilter('alerts');
       return;
     }
     if (action === 'location') {

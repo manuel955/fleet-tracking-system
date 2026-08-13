@@ -108,6 +108,8 @@ button, input { font-family: inherit; }
 .operation-alert-card-title time { margin-left: auto; color: #788783; font-size: 10px; font-weight: 500; }
 .operation-alert-card p { margin-top: 8px; color: #253a37; font-size: 13px; line-height: 1.45; }
 .operation-alert-card small { display: block; margin-top: 7px; color: #7b8985; font-size: 11px; }
+.operation-alert-card .operation-alert-source,
+.operation-alert-toast .operation-alert-source { color: #174b68; font-weight: 700; }
 .operation-alert-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 11px; }
 .operation-alert-actions button { border: 1px solid #e5b4af; border-radius: 7px; padding: 7px 9px; background: #fff7f6; color: #9b1c13; font-size: 11px; font-weight: 700; cursor: pointer; }
 .operation-alert-actions button:hover { background: #fee5e2; }
@@ -343,6 +345,16 @@ button, input { font-family: inherit; }
   border-radius: var(--radius-full);
   min-width: 18px;
   text-align: center;
+}
+
+.drivers-admin-context {
+  margin: 0 0 14px;
+  padding: 10px 13px;
+  border-left: 4px solid #d93a3a;
+  border-radius: 8px;
+  background: #fff5f4;
+  color: #5f2521;
+  font-size: 12px;
 }
 
 .topbar-right { display: flex; align-items: center; gap: 16px; }

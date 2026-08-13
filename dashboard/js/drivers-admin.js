@@ -104,7 +104,21 @@ function openDashboardView(view) {
   if (view === 'map' && map) map.resize();
 }
 
-navTabs.forEach((tab) => tab.addEventListener('click', () => openDashboardView(tab.getAttribute('data-view'))));
+window.openDriversAdminFilter = function openDriversAdminFilter(filter = 'approved') {
+  if (!driverAdminFilters().includes(filter)) filter = 'all';
+  adminActiveFilter = filter;
+  openDashboardView('drivers-admin');
+};
+
+navTabs.forEach((tab) => tab.addEventListener('click', () => {
+  const view = tab.getAttribute('data-view');
+  // El contador de Conductores representa registros pendientes de aprobación.
+  // Al entrar desde ese aviso se muestra directamente el filtro que lo origina.
+  if (view === 'drivers-admin' && Object.values(adminDriversCache).some((d) => d.approvalStatus === 'pending_review')) {
+    adminActiveFilter = 'pending_review';
+  }
+  openDashboardView(view);
+}));
 document.getElementById('dashboard-home-link').addEventListener('click', () => openDashboardView('map'));
 
 function subscribeAdminValue(path, handler) {
@@ -242,6 +256,14 @@ function updatePendingBadge() {
   ).length;
   pendingBadgeEl.textContent = String(pendingCount);
   pendingBadgeEl.classList.toggle('hidden', window.dashboardRole !== 'ADMIN' || pendingCount === 0);
+  const nav = pendingBadgeEl.closest('[data-view="drivers-admin"]');
+  if (nav) {
+    const label = pendingCount
+      ? `Conductores: ${pendingCount} pendiente${pendingCount === 1 ? '' : 's'} de aprobación`
+      : 'Conductores';
+    nav.title = label;
+    nav.setAttribute('aria-label', label);
+  }
 }
 
 function isPdfUrl(url) {
@@ -463,6 +485,7 @@ function renderDriversAdmin() {
         .join('')}
       <label class="drivers-admin-search">Buscar conductor<input type="search" id="admin-driver-search" value="${escapeHtml(adminDriverSearch)}" placeholder="Nombre o placa..." /></label>
     </div>
+    ${adminActiveFilter === 'pending_review' ? '<div class="drivers-admin-context" role="status"><strong>Origen de la alerta:</strong> Conductores → Pendientes de aprobación. Revisa los documentos y usa Aprobar o Rechazar.</div>' : ''}
   `;
 
   const gridHtml = entries.length
