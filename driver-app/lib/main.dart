@@ -209,6 +209,7 @@ class _DriverHomePageState extends State<DriverHomePage>
   bool _sessionCheckInFlight = false;
   bool _locationReadInFlight = false;
   bool _shiftReconcileInFlight = false;
+  int _authFlowVersion = 0;
 
   @override
   void initState() {
@@ -326,6 +327,7 @@ class _DriverHomePageState extends State<DriverHomePage>
   }
 
   Future<void> _bootstrap() async {
+    final bootstrapVersion = _authFlowVersion;
     // Cada apertura en frio de la app empieza limpia: si Android habia
     // reiniciado el servicio solo, se detiene aqui. El turno arranca de
     // nuevo automaticamente si la sesion sigue activa y el conductor ya
@@ -435,6 +437,10 @@ class _DriverHomePageState extends State<DriverHomePage>
 
     final loggedIn = await AuthService.isLoggedIn();
     if (!loggedIn) {
+      // El usuario puede haber terminado el login mientras el bootstrap
+      // esperaba permisos/servicios. No permitas que la respuesta antigua
+      // vuelva a pintar la pantalla de login encima de la sesión nueva.
+      if (bootstrapVersion != _authFlowVersion || !mounted) return;
       setState(() {
         _loggedIn = false;
         _loading = false;
@@ -442,6 +448,7 @@ class _DriverHomePageState extends State<DriverHomePage>
       return;
     }
 
+    if (!mounted || bootstrapVersion != _authFlowVersion) return;
     await _afterAuthResolved();
   }
 
@@ -459,6 +466,8 @@ class _DriverHomePageState extends State<DriverHomePage>
   // reclama de nuevo (seria robarle la sesion a otro telefono que la haya
   // tomado despues), solo se seguira verificando que siga siendo la activa.
   Future<void> _afterAuthResolved({bool claimSession = false}) async {
+    final flowVersion = ++_authFlowVersion;
+    if (!mounted) return;
     setState(() => _loading = true);
     try {
       final auth = await AuthService.currentSession();
@@ -473,6 +482,7 @@ class _DriverHomePageState extends State<DriverHomePage>
       }
 
       final profile = await DriverProfileService.fetchProfile(uid);
+      if (!mounted || flowVersion != _authFlowVersion) return;
 
       if (profile == null) {
         // Cuenta creada pero sin perfil final (por ejemplo, la app se cerró
@@ -563,6 +573,7 @@ class _DriverHomePageState extends State<DriverHomePage>
         await _lockUnapprovedDriver(uid);
       }
     } catch (e) {
+      if (!mounted || flowVersion != _authFlowVersion) return;
       setState(() {
         _loggedIn = false;
         _loading = false;

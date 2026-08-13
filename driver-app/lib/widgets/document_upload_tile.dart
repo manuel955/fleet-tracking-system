@@ -46,8 +46,9 @@ class DocumentUploadTile extends StatelessWidget {
       bytes: bytes,
       extension: 'jpg',
       contentType: 'image/jpeg',
-      displayName:
-          source == ImageSource.camera ? 'Foto tomada' : 'Foto de galería',
+      displayName: dniMode
+          ? (_imageCount == 0 ? 'Frente del DNI' : 'Dorso del DNI')
+          : (source == ImageSource.camera ? 'Foto tomada' : 'Foto de galería'),
     );
     _addFile(context, file);
   }
@@ -155,7 +156,9 @@ class DocumentUploadTile extends StatelessWidget {
               Text(
                 _hasPdf
                     ? '1 PDF seleccionado'
-                    : '$_imageCount de 2 fotos seleccionadas',
+                    : _imageCount == 1
+                        ? 'Frente cargado. Ahora sube el dorso.'
+                        : 'Frente y dorso seleccionados',
                 style: TextStyle(
                   color: _hasPdf || _imageCount == 2
                       ? Colors.green.shade700
@@ -202,14 +205,18 @@ class DocumentUploadTile extends StatelessWidget {
                       ? () => _pickImage(context, ImageSource.camera)
                       : null,
                   icon: const Icon(Icons.camera_alt, size: 18),
-                  label: const Text('Tomar foto'),
+                  label: Text(dniMode
+                      ? (_imageCount == 0 ? 'Tomar frente' : 'Tomar dorso')
+                      : 'Tomar foto'),
                 ),
                 OutlinedButton.icon(
                   onPressed: canTakePhoto
                       ? () => _pickImage(context, ImageSource.gallery)
                       : null,
                   icon: const Icon(Icons.photo_library, size: 18),
-                  label: const Text('Galería'),
+                  label: Text(dniMode
+                      ? (_imageCount == 0 ? 'Elegir frente' : 'Elegir dorso')
+                      : 'Galería'),
                 ),
                 if (allowPdf)
                   OutlinedButton.icon(
@@ -265,6 +272,30 @@ class DocumentUploadTile extends StatelessWidget {
             ),
           ),
         ),
+        if (dniMode)
+          Positioned(
+            left: 5,
+            right: 5,
+            bottom: 5,
+            child: DecoratedBox(
+              decoration: const BoxDecoration(
+                color: Colors.black54,
+                borderRadius: BorderRadius.all(Radius.circular(5)),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3),
+                child: Text(
+                  index == 0 ? 'Frente del DNI' : 'Dorso del DNI',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }

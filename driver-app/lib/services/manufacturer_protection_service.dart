@@ -345,6 +345,7 @@ class _ProtectionChecklistDialogState extends State<_ProtectionChecklistDialog>
   Map<String, bool> _checks = const {};
   bool _loading = true;
   String? _opening;
+  bool _checking = false;
 
   @override
   void initState() {
@@ -366,13 +367,32 @@ class _ProtectionChecklistDialogState extends State<_ProtectionChecklistDialog>
     }
   }
 
-  Future<void> _refresh() async {
-    final checks = await ManufacturerProtectionService.check(widget.info);
-    if (!mounted) return;
-    setState(() {
-      _checks = checks;
-      _loading = false;
-    });
+  Future<void> _refresh({bool announce = false}) async {
+    if (_checking) return;
+    if (mounted) setState(() => _checking = true);
+    try {
+      final checks = await ManufacturerProtectionService.check(widget.info);
+      if (!mounted) return;
+      setState(() {
+        _checks = checks;
+        _loading = false;
+      });
+      if (announce) {
+        final missing = widget.info.requirements
+            .where((item) => checks[item.id] != true)
+            .map((item) => item.title)
+            .toList();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(missing.isEmpty
+                ? 'Todos los permisos verificables están listos.'
+                : 'Aún falta: ${missing.join(', ')}.'),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _checking = false);
+    }
   }
 
   bool get _complete =>
@@ -437,7 +457,16 @@ class _ProtectionChecklistDialogState extends State<_ProtectionChecklistDialog>
               ),
       ),
       actions: [
-        TextButton(onPressed: _refresh, child: const Text('Verificar todo')),
+        TextButton(
+          onPressed: _checking ? null : () => _refresh(announce: true),
+          child: _checking
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Verificar permisos'),
+        ),
         FilledButton(
           onPressed: _complete ? () => Navigator.of(context).pop(true) : null,
           child: const Text('Continuar turno'),

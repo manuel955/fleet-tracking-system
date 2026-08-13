@@ -65,7 +65,7 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
     ('profile', 'Foto de perfil', false, ['profilePhotoUrl']),
     (
       'dni',
-      'DNI (2 fotos o 1 PDF)',
+      'DNI (frente y luego dorso, o 1 PDF)',
       true,
       ['dniDocUrl', 'dniFrontDocUrl', 'dniBackDocUrl']
     ),

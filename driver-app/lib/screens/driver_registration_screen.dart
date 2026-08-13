@@ -96,7 +96,7 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
 
   static const _documentFields = [
     ('profile', 'Foto de perfil', false),
-    ('dni', 'DNI', true),
+    ('dni', 'DNI (primero frente, luego dorso)', true),
     ('license', 'Licencia de conducir', true),
     ('soat', 'SOAT', true),
     ('circulationCard', 'Tarjeta única de circulación', true),
@@ -209,7 +209,7 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
               ),
               const SizedBox(height: 6),
               const Text(
-                'Completa tus datos y todos los documentos. Para el DNI sube 2 fotos o 1 solo PDF.',
+                'Completa tus datos y todos los documentos. En DNI sube primero el frente y luego el dorso, o elige 1 solo PDF.',
                 style: TextStyle(color: Colors.black54, fontSize: 14.5),
               ),
               const SizedBox(height: 28),
